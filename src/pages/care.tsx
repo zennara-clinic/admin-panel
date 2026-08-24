@@ -1,0 +1,2242 @@
+import { useEffect, useMemo, useState } from "react";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import {
+  Page, Btn, Tag, Card, DataTable, B, Tabs, Note, Hint, In, Sel, Area, Toggle, Switch, Stats,
+  SecH, Modal, Drawer, DeleteModal, Async, Empty, Loading, StaleBanner, exportCsv, UploadField, Menu, FilterDrawer, FSection, Chips, MultiSelect, NumRange, ActiveFilters, ChartCard, GBars, HBars, AreaChart,
+} from "../ui";
+import { useStore } from "../store";
+import api from "../lib/api";
+import { ZenotiList } from "./zenoti";
+import { AssignPackageModal, PatientPickerModal } from "./reception";
+import { useApi, useDebounced } from "../lib/useApi";
+import { useQueryNumber, useQueryPage, useQueryString } from "../lib/useListState";
+import { fmtAgo, fmtCompactINR, fmtDate, fmtINR, fmtWhen, imageUrl, initials, isoDay, nameOf } from "../lib/format";
+import type { Admin, Category, Consultation, Doctor, DoctorFeeRequest, Package, PackageAssignment, PackageSession, ServiceType, User } from "../lib/types";
+import type { AuditAction } from "../store";
+
+/* ================= SERVICES ================= */
+type ServiceFilters = { status: string; popular: string; content: string; priceMin: string; priceMax: string; pricing: string; sort: string };
+const EMPTY_SF: ServiceFilters = { status: "", popular: "", content: "", priceMin: "", priceMax: "", pricing: "", sort: "order" };
+
+export function Services() {
+  const nav = useNavigate();
+  const { canManageCatalogue, toast, audit } = useStore();
+  const [search, setSearch] = useQueryString("q");
+  const [type, setType] = useQueryString("type", "");
+  const [category, setCategory] = useQueryString("category", "");
+  const [grid, setGrid] = useState(false);
+  const [drawer, setDrawer] = useState(false);
+  const [applied, setApplied] = useState<ServiceFilters>(EMPTY_SF);
+  const [draft, setDraft] = useState<ServiceFilters>(EMPTY_SF);
+  const debounced = useDebounced(search);
+
+  const types = useApi(() => api.serviceTypes.list(), []);
+  const cats = useApi(() => api.categories.list(), []);
+  const q = useApi(() => api.services.list({ limit: 500, includeInactive: "true" }), []);
+
+  const services = q.data?.data ?? [];
+  const typeRows = types.data?.data ?? [];
+  const allCategories = cats.data?.data ?? [];
+
+  // Tree: type → categories (from the taxonomy plus anything services reference).
+  const tree = useMemo(() => {
+    const byType = new Map<string, Set<string>>();
+    const order = [...typeRows.map((t) => t.name)];
+    typeRows.forEach((t) => byType.set(t.name, new Set()));
+    allCategories.forEach((c) => { const k = c.type || "Unfiled"; if (!byType.has(k)) { byType.set(k, new Set()); order.push(k); } byType.get(k)!.add(c.name); });
+    services.forEach((s) => { const k = s.type || "Unfiled"; if (!byType.has(k)) { byType.set(k, new Set()); order.push(k); } if (s.category) byType.get(k)!.add(s.category); });
+    return order.map((t) => ({ type: t, categories: [...(byType.get(t) ?? [])].sort((a, b) => a.localeCompare(b)) }));
+  }, [typeRows, allCategories, services]);
+
+  const countType = (t: string) => services.filter((s) => (s.type || "Unfiled") === t).length;
+  const countCat = (t: string, c: string) => services.filter((s) => (s.type || "Unfiled") === t && s.category === c).length;
+
+  const needsContent = (s: Consultation) => !s.image?.trim() || !s.price;
+  const incomplete = services.filter(needsContent).length;
+
+  const list = useMemo(() => {
+    const term = debounced.toLowerCase();
+    let out = services.filter((s) =>
+      (!type || (s.type || "Unfiled") === type) &&
+      (!category || s.category === category) &&
+      (!term || s.name.toLowerCase().includes(term) || (s.summary ?? "").toLowerCase().includes(term) || (s.tags ?? []).some((t) => t.toLowerCase().includes(term)) || (s.category ?? "").toLowerCase().includes(term)) &&
+      (!applied.status || (applied.status === "active" ? s.isActive : !s.isActive)) &&
+      (!applied.popular || !!s.isPopular) &&
+      (!applied.content || (applied.content === "needs" ? needsContent(s) : !needsContent(s))) &&
+      (!applied.pricing || (applied.pricing === "shown" ? !!s.showPriceInApp : applied.pricing === "hidden" ? !s.showPriceInApp : applied.pricing === "online" ? s.chargeOnlineBooking !== false : s.chargeOnlineBooking === false)) &&
+      (!applied.priceMin || s.price >= Number(applied.priceMin)) &&
+      (!applied.priceMax || s.price <= Number(applied.priceMax)));
+    const sorters: Record<string, (a: Consultation, b: Consultation) => number> = {
+      order: () => 0, name: (a, b) => a.name.localeCompare(b.name), priceAsc: (a, b) => a.price - b.price, priceDesc: (a, b) => b.price - a.price,
+      rating: (a, b) => (b.rating ?? 0) - (a.rating ?? 0), newest: (a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime(),
+    };
+    if (applied.sort !== "order") out = [...out].sort(sorters[applied.sort] ?? sorters.order);
+    return out;
+  }, [services, type, category, debounced, applied]);
+
+  const chips: { key: string; label: string; onRemove: () => void }[] = [];
+  const clear = (patch: Partial<ServiceFilters>) => { const next = { ...applied, ...patch }; setApplied(next); setDraft(next); };
+  if (applied.status) chips.push({ key: "st", label: applied.status === "active" ? "Active only" : "Inactive only", onRemove: () => clear({ status: "" }) });
+  if (applied.popular) chips.push({ key: "pop", label: "Popular", onRemove: () => clear({ popular: "" }) });
+  if (applied.content) chips.push({ key: "c", label: applied.content === "needs" ? "Needs photo/price" : "Complete", onRemove: () => clear({ content: "" }) });
+  if (applied.pricing) chips.push({ key: "p", label: { shown: "Price shown", hidden: "Price on consultation", online: "Paid in app", clinic: "Pay at clinic" }[applied.pricing] ?? applied.pricing, onRemove: () => clear({ pricing: "" }) });
+  if (applied.priceMin || applied.priceMax) chips.push({ key: "pr", label: `₹${applied.priceMin || 0}–${applied.priceMax || "∞"}`, onRemove: () => clear({ priceMin: "", priceMax: "" }) });
+
+  // Manual ordering inside one category — the app lists in this order.
+  const canReorder = canManageCatalogue && !!category && !debounced && !grid && applied.sort === "order";
+  const move = async (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= list.length) return;
+    const next = [...list];
+    [next[i], next[j]] = [next[j], next[i]];
+    try {
+      await api.services.reorder(next.map((x, k) => ({ id: x._id, displayOrder: k })));
+      audit("CATALOGUE_UPDATED", `Reordered ${category}`, {});
+      q.reload();
+    } catch (e) { toast((e as Error).message); }
+  };
+
+  // Group the result by category when the whole tree (or a type) is shown.
+  const groups = useMemo(() => {
+    if (category) return [[category, list] as [string, Consultation[]]];
+    const m = new Map<string, Consultation[]>();
+    list.forEach((s) => { const k = `${s.type || "Unfiled"} › ${s.category || "—"}`; m.set(k, [...(m.get(k) ?? []), s]); });
+    return [...m.entries()];
+  }, [list, category]);
+
+  const open = (s: Consultation) => nav("/service-editor", { state: { id: s._id } });
+  const row = (s: Consultation, i: number, withOrder: boolean) => [
+    ...(withOrder ? [
+      <span key={`${s._id}o`} className="flex gap-1" onClick={(e) => e.stopPropagation()}>
+        <button onClick={() => move(i, -1)} disabled={i === 0} className="rounded border border-border px-1.5 text-[11px] disabled:opacity-30">↑</button>
+        <button onClick={() => move(i, 1)} disabled={i === list.length - 1} className="rounded border border-border px-1.5 text-[11px] disabled:opacity-30">↓</button>
+      </span>,
+    ] : []),
+    <span key={s._id} className="flex items-center gap-2.5">
+      {s.image ? <img src={s.image} alt="" className="h-9 w-12 shrink-0 rounded-md object-cover" /> : <span className="h-9 w-12 shrink-0 rounded-md bg-gradient-to-br from-sage to-cream" />}
+      <span>
+        <B>{s.name}</B>
+        {needsContent(s) && <span className="ml-1.5 rounded-full bg-warn-bg px-1.5 py-0.5 text-[9px] font-bold text-warn">needs {!s.image?.trim() ? "photo" : "price"}</span>}
+        <span className="block text-[11px] text-ink3 line-clamp-1">{s.summary}</span>
+      </span>
+    </span>,
+    <span key={`${s._id}p`}>{s.showPriceInApp ? <B>{fmtINR(s.price)}</B> : <span className="text-ink3">On consultation <span className="text-[10.5px]">({fmtINR(s.price)})</span></span>}<span className="block text-[10.5px] text-ink3">{s.chargeOnlineBooking === false ? "pay at clinic" : "paid in app"}</span></span>,
+    s.rating ? <span key={`${s._id}r`}>★ {s.rating.toFixed(1)} <span className="text-[10.5px] text-ink3">({s.reviews ?? 0})</span></span> : <span key={`${s._id}r`} className="text-ink3">—</span>,
+    <span key={`${s._id}f`} className="flex flex-wrap gap-1">
+      {s.isPopular && <Tag kind="gold">★ popular</Tag>}
+      {(s.media?.length ?? 0) > 0 && <Tag kind="info">{s.media!.length} media</Tag>}
+      {(s.faqs?.length ?? 0) > 0 && <Tag kind="mute">{s.faqs!.length} FAQ</Tag>}
+    </span>,
+    s.isActive ? <Tag key={`${s._id}s`} kind="ok">Live in app</Tag> : <Tag key={`${s._id}s`} kind="mute">Hidden</Tag>,
+  ];
+
+  return (
+    <Page title="Services"
+      sub={`${typeRows.length} types · ${allCategories.length} categories · ${services.length} services — exactly what the app sells`}
+      actions={<>
+        <div className="flex overflow-hidden rounded-(--radius-btn) border border-border">
+          <button onClick={() => setGrid(false)} className={`px-3 py-2 text-[12.5px] font-bold ${!grid ? "bg-primary text-white" : "bg-surface text-ink2"}`}>☰ List</button>
+          <button onClick={() => setGrid(true)} className={`px-3 py-2 text-[12.5px] font-bold ${grid ? "bg-primary text-white" : "bg-surface text-ink2"}`}>▦ Grid</button>
+        </div>
+        <Menu align="right" button={<Btn kind="ghost">Sort ▾</Btn>} items={[["order", "App order"], ["name", "Name"], ["priceAsc", "Price ↑"], ["priceDesc", "Price ↓"], ["rating", "Rating"], ["newest", "Newest"]].map(([v, l]) => ({ label: `${l}${applied.sort === v ? " ✓" : ""}`, onClick: () => clear({ sort: v }) }))} />
+        <Btn kind={chips.length ? "gold" : "ghost"} onClick={() => { setDraft(applied); setDrawer(true); }}>Filters{chips.length ? ` (${chips.length})` : ""}</Btn>
+        <Btn kind="ghost" disabled={!list.length} onClick={() => exportCsv("zennara-services",
+          ["Name", "Type", "Category", "Price", "Price shown", "Paid in app", "Popular", "Active", "Rating", "Reviews"],
+          list.map((s) => [s.name, s.type ?? "", s.category, s.price, s.showPriceInApp ? "yes" : "no", s.chargeOnlineBooking === false ? "no" : "yes", s.isPopular ? "yes" : "no", s.isActive ? "yes" : "no", s.rating ?? "", s.reviews ?? 0]))}>Export CSV</Btn>
+        {canManageCatalogue && <Btn onClick={() => nav("/service-editor", { state: { blank: true, type: type || undefined, category: category || undefined } })}>+ New service</Btn>}
+      </>}>
+      <Hint id="services-live">Pick a type or category on the left; everything on the right is exactly what the app shows. Click a service to edit its photo, gallery, price, copy, pre/post care and FAQs.</Hint>
+      <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
+
+      <div className="grid items-start gap-3.5 xl:grid-cols-[250px_minmax(0,1fr)]">
+        {/* ---- taxonomy tree ---- */}
+        <Card className="sticky top-[72px] max-h-[calc(100vh-96px)] overflow-y-auto p-2">
+          <button onClick={() => { setType(""); setCategory(""); }}
+            className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-[12.5px] font-bold ${!type && !category ? "bg-primary text-white" : "hover:bg-ivory"}`}>
+            <span>All services</span><span className={`font-mono text-[10.5px] ${!type && !category ? "text-white/70" : "text-ink3"}`}>{services.length}</span>
+          </button>
+          {tree.map((t) => (
+            <div key={t.type} className="mt-1">
+              <button onClick={() => { setType(t.type); setCategory(""); }}
+                className={`flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-[12px] font-bold ${type === t.type && !category ? "bg-primary text-white" : "hover:bg-ivory"}`}>
+                <span>{t.type}</span><span className={`font-mono text-[10.5px] ${type === t.type && !category ? "text-white/70" : "text-ink3"}`}>{countType(t.type)}</span>
+              </button>
+              {(type === t.type || !type) && t.categories.map((c) => (
+                <button key={c} onClick={() => { setType(t.type); setCategory(c); }}
+                  className={`ml-3 flex w-[calc(100%-12px)] items-center justify-between rounded-lg px-2.5 py-1 text-left text-[11.5px] ${type === t.type && category === c ? "bg-gold/20 font-bold text-primary" : "text-ink2 hover:bg-ivory"}`}>
+                  <span className="truncate">{c}</span><span className="ml-2 font-mono text-[10px] text-ink3">{countCat(t.type, c)}</span>
+                </button>
+              ))}
+            </div>
+          ))}
+          {canManageCatalogue && <Btn kind="ghost" className="mt-2 w-full !text-[11.5px]" onClick={() => nav("/categories")}>Manage types & categories</Btn>}
+        </Card>
+
+        {/* ---- results ---- */}
+        <div className="min-w-0">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search services, categories, tags…"
+              className="w-full max-w-[380px] rounded-(--radius-btn) border border-border bg-surface px-3.5 py-2 text-[13px] outline-none focus:border-gold-dark" />
+            <span className="text-[12px] text-ink3">{list.length} of {services.length}{category ? ` in ${category}` : type ? ` in ${type}` : ""}</span>
+            {incomplete > 0 && !applied.content && (
+              <button onClick={() => clear({ content: "needs" })} className="ml-auto rounded-full bg-warn-bg px-2.5 py-1 text-[11px] font-bold text-warn">{incomplete} need a photo or price →</button>
+            )}
+          </div>
+          <ActiveFilters items={chips} onClear={() => clear({ ...EMPTY_SF, sort: applied.sort })} />
+
+          <Async q={q} label="Loading the service catalogue…" rows={8}>
+            {() => list.length === 0 ? (
+              <Empty title="No services here" hint={debounced || chips.length ? "Nothing matched the search/filters." : "Create the first service for this category."}
+                action={canManageCatalogue ? <Btn onClick={() => nav("/service-editor", { state: { blank: true, type: type || undefined, category: category || undefined } })}>+ New service</Btn> : undefined} />
+            ) : grid ? (
+              groups.map(([title, items]) => (
+                <div key={title} className="mb-5">
+                  {!category && <div className="mb-2 flex items-baseline gap-2"><span className="text-[13px] font-extrabold">{title}</span><span className="text-[11.5px] text-ink3">{items.length}</span></div>}
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                    {items.map((s) => (
+                      <Card key={s._id} onClick={() => open(s)} className="group overflow-hidden">
+                        <div className="relative">
+                          {s.image ? <img src={s.image} alt="" className="h-36 w-full object-cover" /> : <div className="h-36 bg-gradient-to-br from-sage to-cream" />}
+                          <div className="absolute left-2 top-2 flex gap-1">
+                            {s.isPopular && <Tag kind="gold">★</Tag>}
+                            {!s.isActive && <Tag kind="mute">Hidden</Tag>}
+                          </div>
+                          {needsContent(s) && <span className="absolute bottom-2 left-2 rounded-full bg-warn-bg px-1.5 py-0.5 text-[9px] font-bold text-warn">needs {!s.image?.trim() ? "photo" : "price"}</span>}
+                        </div>
+                        <div className="p-3">
+                          <div className="text-[10.5px] font-bold uppercase tracking-wider text-ink3">{s.category}</div>
+                          <b className="mt-0.5 block text-[13.5px] font-bold leading-tight">{s.name}</b>
+                          <div className="mt-1 line-clamp-2 text-[11.5px] text-ink3">{s.summary}</div>
+                          <div className="mt-2.5 flex items-center justify-between">
+                            <b className="text-[13.5px]">{s.showPriceInApp ? fmtINR(s.price) : "On consultation"}</b>
+                            <span className="text-[11px] text-ink3">{s.rating ? `★ ${s.rating.toFixed(1)}` : ""}{(s.media?.length ?? 0) > 0 ? ` · ${s.media!.length} media` : ""}</span>
+                          </div>
+                        </div>
+                      </Card>
+                    ))}
+                  </div>
+                </div>
+              ))
+            ) : (
+              groups.map(([title, items]) => (
+                <div key={title} className="mb-5">
+                  {!category && <div className="mb-2 flex items-baseline gap-2"><span className="text-[13px] font-extrabold">{title}</span><span className="text-[11.5px] text-ink3">{items.length}</span></div>}
+                  <DataTable
+                    cols={[...(canReorder ? ["Order"] : []), "Service", "Price", "Rating", "Content", "Status"]}
+                    onRow={(i) => open(items[i])}
+                    rows={items.map((s, i) => row(s, i, canReorder))} />
+                </div>
+              ))
+            )}
+          </Async>
+        </div>
+      </div>
+
+      <FilterDrawer open={drawer} onClose={() => setDrawer(false)} title="Filter services" activeCount={chips.length}
+        onApply={() => setApplied(draft)} onReset={() => setDraft({ ...EMPTY_SF, sort: draft.sort })}>
+        <FSection title="Status"><Chips options={[["", "All"], ["active", "Live in app"], ["inactive", "Hidden"]]} value={draft.status} onChange={(v) => setDraft((d) => ({ ...d, status: v as string }))} /></FSection>
+        <FSection title="Highlights"><Chips options={[["1", "Popular only"]]} value={draft.popular} onChange={(v) => setDraft((d) => ({ ...d, popular: v as string }))} /></FSection>
+        <FSection title="Content"><Chips options={[["", "Any"], ["needs", "Needs photo or price"], ["complete", "Complete"]]} value={draft.content} onChange={(v) => setDraft((d) => ({ ...d, content: v as string }))} /></FSection>
+        <FSection title="Pricing">
+          <Chips options={[["shown", "Price shown"], ["hidden", "Price on consultation"], ["online", "Paid in app"], ["clinic", "Pay at clinic"]]} value={draft.pricing} onChange={(v) => setDraft((d) => ({ ...d, pricing: v as string }))} />
+          <div className="mt-2"><NumRange prefix="₹" min={draft.priceMin} max={draft.priceMax} onChange={(a, b) => setDraft((d) => ({ ...d, priceMin: a, priceMax: b }))} /></div>
+        </FSection>
+        <FSection title="Sort"><Chips options={[["order", "App order"], ["name", "Name"], ["priceAsc", "Price ↑"], ["priceDesc", "Price ↓"], ["rating", "Rating"], ["newest", "Newest"]]} value={draft.sort} onChange={(v) => setDraft((d) => ({ ...d, sort: (v as string) || "order" }))} /></FSection>
+      </FilterDrawer>
+    </Page>
+  );
+}
+
+/* ================= SERVICE EDITOR ================= */
+const BLANK: Partial<Consultation> = {
+  name: "", category: "", summary: "", about: "", price: 0, image: "",
+  key_benefits: [], ideal_for: [], tags: [], pre_care: [], post_care: [], faqs: [],
+  isActive: true, showPriceInApp: true, chargeOnlineBooking: true, isPopular: false, cta_label: "Book Consultation",
+};
+
+export function ServiceEditor() {
+  const nav = useNavigate();
+  const loc = useLocation();
+  const { toast, audit, canManageCatalogue } = useStore();
+  const [sp] = useSearchParams();
+  const state = { ...((loc.state as { id?: string; blank?: boolean; type?: string; category?: string } | null) ?? {}) };
+  if (!state.id && sp.get("id")) state.id = sp.get("id") ?? undefined;
+  const isNew = !state.id;
+
+  const [f, setF] = useState<Partial<Consultation>>({ ...BLANK, type: state.type ?? null, category: state.category ?? "" });
+  const [section, setSection] = useState(0);
+  const [delOpen, setDelOpen] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const types = useApi(() => api.serviceTypes.list(), []);
+  const cats = useApi(() => api.categories.list(), []);
+  const q = useApi(
+    () => (state.id ? api.services.get(state.id) : Promise.resolve(BLANK as Consultation)),
+    [state.id],
+  );
+
+  useEffect(() => { if (q.data) setF(q.data); }, [q.data]);
+
+  const set = <K extends keyof Consultation>(k: K) => (v: Consultation[K]) => setF((s) => ({ ...s, [k]: v }));
+  const setList = (k: "key_benefits" | "ideal_for" | "tags" | "pre_care" | "post_care") => (v: string) =>
+    setF((s) => ({ ...s, [k]: v.split("\n").map((x) => x.trim()).filter(Boolean) }));
+
+  const typeOptions = (types.data?.data ?? []).map((t) => t.name);
+  const allCats = cats.data?.data ?? [];
+  /* Only offer categories that belong to the chosen type — the tree stays valid. */
+  const scopedCats = f.type ? allCats.filter((c) => c.type === f.type) : allCats;
+  const categoryOptions = (scopedCats.length ? scopedCats : allCats).map((c) => c.name);
+
+  // A <select> always shows *something*; make sure state matches what it shows,
+  // otherwise a form that looks filled in is rejected on save.
+  useEffect(() => {
+    if (!f.type && typeOptions.length) setF((s) => ({ ...s, type: typeOptions[0] }));
+  }, [typeOptions.join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (categoryOptions.length && (!f.category || !categoryOptions.includes(f.category))) {
+      setF((s) => ({ ...s, category: categoryOptions[0] }));
+    }
+  }, [categoryOptions.join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const uploadImage = (file: File) => api.media.upload([file]).then((r) => r?.[0]?.url ?? "");
+
+  const save = async () => {
+    setErr(null);
+    if (!f.name?.trim()) return setErr("A sub-category name is required");
+    if (!f.type) return setErr("Pick a type — it is the top level of the menu");
+    if (!f.category) return setErr("Pick a treatment category");
+    if (!f.summary?.trim()) return setErr("A short summary is required — the app shows it on cards");
+    if (!f.about?.trim()) return setErr("The 'about' text is required — the app shows it on the detail page");
+    if (f.price === undefined || f.price === null || Number.isNaN(Number(f.price))) return setErr("A price is required (0 is allowed)");
+
+    setBusy(true);
+    try {
+      // The server owns `id`/`slug`; sending them back would pin a rename to the old slug.
+      const { _id, id, slug, createdAt, updatedAt, rating, reviews, ...rest } = f as Consultation & { updatedAt?: string };
+      void _id; void id; void slug; void createdAt; void updatedAt; void rating; void reviews;
+      const body: Partial<Consultation> = {
+        ...rest,
+        price: Number(f.price) || 0,
+        faqs: (f.faqs ?? []).filter((x) => x.q?.trim() || x.a?.trim()),
+      };
+      if (isNew) {
+        const created = await api.services.create(body);
+        audit("CATALOGUE_CREATED", `Service ${created.name}`, { serviceId: created._id });
+        toast("Service created — live in the app");
+        nav("/service-editor", { state: { id: created._id }, replace: true });
+      } else {
+        await api.services.update(state.id!, body);
+        audit("CATALOGUE_UPDATED", `Service ${f.name}`, { serviceId: state.id });
+        toast("Service saved — live in the app");
+        q.reload();
+      }
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+
+  if (q.initial && !isNew) return <Page title="Service editor"><Loading label="Loading service…" rows={6} /></Page>;
+  if (q.error && !q.data) return <Page title="Service editor"><Empty title="Couldn’t load that service" hint={q.error} action={<Btn onClick={() => nav("/services")}>← Back to services</Btn>} /></Page>;
+
+  return (
+    <Page title={isNew ? "New service" : "Service editor"}
+      sub={isNew ? "Creating a new treatment" : `${f.name} · updated ${fmtDate((q.data as Consultation & { updatedAt?: string })?.updatedAt ?? q.data?.createdAt)}`}
+      actions={<>
+        <Btn kind="ghost" onClick={() => nav("/services")}>← All services</Btn>
+        {!isNew && canManageCatalogue && <Btn kind="danger" onClick={() => setDelOpen(true)}>Delete</Btn>}
+        {canManageCatalogue && <Btn disabled={busy} onClick={save}>{busy ? "Saving…" : isNew ? "Create service" : "Save changes"}</Btn>}
+      </>}>
+      {!canManageCatalogue && <Note kind="crit">Your role can view the catalogue but not change it. Ask a Super Admin or Admin to make edits.</Note>}
+      {err && <Note kind="crit">{err}</Note>}
+
+      <div className="grid items-start gap-3.5 xl:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="min-w-0">
+          {/* The three levels, in order: type → treatment category → this. */}
+          <div className="mb-3 flex flex-wrap items-center gap-1.5 rounded-xl border border-border bg-ivory px-3 py-2 text-[12px]">
+            <span className="font-mono text-[9.5px] font-bold uppercase tracking-[0.12em] text-ink3">Sits under</span>
+            <Tag kind={f.type ? "info" : "mute"}>{f.type || "no type"}</Tag>
+            <span className="text-ink3">›</span>
+            <Tag kind={f.category ? "info" : "mute"}>{f.category || "no category"}</Tag>
+            <span className="text-ink3">›</span>
+            <B>{f.name || "this service"}</B>
+          </div>
+
+          <Tabs active={section} onChange={setSection} items={[["Basics"], ["Photos & gallery", (f.media?.length ?? 0) + (f.image ? 1 : 0)], ["App copy"], ["Care instructions", (f.pre_care?.length ?? 0) + (f.post_care?.length ?? 0)], ["FAQs", f.faqs?.length ?? 0]]} />
+
+          {section === 0 && (
+            <Card className="p-4">
+              <div className="grid gap-3 md:grid-cols-2">
+                <In label="Service name" value={f.name ?? ""} onChange={set("name")} hint="This is the treatment guests book" />
+                {typeOptions.length
+                  ? <Sel label="Type" value={f.type ?? typeOptions[0]} onChange={(v) => { set("type")(v); set("category")(""); }} options={typeOptions} />
+                  : <In label="Type" value={f.type ?? ""} onChange={set("type")} hint="No types yet — add them under Categories → Types" />}
+                {categoryOptions.length
+                  ? <Sel label="Treatment category" value={f.category ?? categoryOptions[0]} onChange={set("category")} options={categoryOptions} />
+                  : <In label="Treatment category" value={f.category ?? ""} onChange={set("category")} hint="No categories for this type yet" />}
+                <In label="Price (₹)" type="number" value={String(f.price ?? 0)} onChange={(v) => set("price")(Number(v) || 0)} hint="Hidden in the app when 'Show price' is off" />
+                <In label="Call-to-action label" value={f.cta_label ?? ""} onChange={set("cta_label")} placeholder="Book your appointment" hint="The button text under the service in the app" />
+              </div>
+              <div className="mt-3 grid gap-3">
+                <Area label="Short summary — shown on app cards and under the title" value={f.summary ?? ""} onChange={set("summary")} rows={2} />
+                <Area label="About — the detail page copy" value={f.about ?? ""} onChange={set("about")} rows={6} />
+              </div>
+              <SecH t="Visibility & booking" />
+              <div className="grid gap-2 md:grid-cols-2">
+                <Switch on={!!f.isActive} onChange={set("isActive")} label="Live in the app" sub="Off hides it from the app and from booking" />
+                <Switch on={!!f.isPopular} onChange={set("isPopular")} gold label="Mark as popular" sub="Pins it to the app home rail" />
+                <Switch on={!!f.showPriceInApp} onChange={set("showPriceInApp")} label="Show price in app" sub={'Off shows "Price on consultation"'} />
+                <Switch on={f.chargeOnlineBooking !== false} onChange={set("chargeOnlineBooking")} label="Collect payment in the app" sub="On: the guest pays this price when booking. Off: they book and pay at the clinic." />
+              </div>
+            </Card>
+          )}
+
+          {section === 1 && (
+            <Card className="p-4">
+              <UploadField label="Cover photo" value={f.image ?? ""} onChange={set("image")} full upload={uploadImage}
+                hint="The first image guests see — cards, the detail header and search" />
+              <SecH t="Gallery" em="· photos and videos shown in the detail carousel after the cover" right={
+                <label className="cursor-pointer rounded-(--radius-btn) border border-border bg-surface px-3 py-1.5 text-[12px] font-bold hover:border-gold-dark">
+                  + Add files
+                  <input type="file" multiple accept="image/*,video/mp4" className="hidden" onChange={async (e) => {
+                    const files = Array.from(e.target.files ?? []);
+                    if (!files.length) return;
+                    try {
+                      const r = await api.media.upload(files);
+                      const added = (r ?? []).map((m, k) => ({ type: /\.(mp4|mov|webm)(\?|$)/i.test(m.url) || files[k]?.type.startsWith("video/") ? "video" : "image", url: m.url }));
+                      setF((s) => ({ ...s, media: [...(s.media ?? []), ...added] }));
+                    } catch (err) { setErr((err as Error).message); }
+                    e.target.value = "";
+                  }} />
+                </label>} />
+              {(f.media?.length ?? 0) === 0 ? <div className="text-[12px] text-ink3">No gallery yet — the app shows just the cover photo.</div> : (
+                <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                  {(f.media ?? []).map((m, i) => (
+                    <div key={`${m.url}-${i}`} className="group relative overflow-hidden rounded-lg border border-border bg-ivory">
+                      {m.type === "video" ? <video src={m.url} className="h-28 w-full object-cover" muted /> : <img src={m.url} alt="" className="h-28 w-full object-cover" />}
+                      <div className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-black/50 px-1.5 py-1 text-[10px] text-white">
+                        <span>{m.type}</span>
+                        <span className="flex gap-1">
+                          <button onClick={() => setF((s) => { const arr = [...(s.media ?? [])]; if (i > 0) [arr[i - 1], arr[i]] = [arr[i], arr[i - 1]]; return { ...s, media: arr }; })} className="px-1">←</button>
+                          <button onClick={() => setF((s) => { const arr = [...(s.media ?? [])]; if (i < arr.length - 1) [arr[i + 1], arr[i]] = [arr[i], arr[i + 1]]; return { ...s, media: arr }; })} className="px-1">→</button>
+                          <button onClick={() => setF((s) => ({ ...s, media: (s.media ?? []).filter((_, j) => j !== i) }))} className="px-1 font-bold">×</button>
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
+          )}
+
+          {section === 2 && (
+            <Card className="p-4">
+              <Note className="mt-0">One item per line. These appear in the app exactly in this order.</Note>
+              <div className="grid gap-3 md:grid-cols-2">
+                <Area label="Key benefits" value={(f.key_benefits ?? []).join("\n")} onChange={setList("key_benefits")} rows={6} />
+                <Area label="Ideal for" value={(f.ideal_for ?? []).join("\n")} onChange={setList("ideal_for")} rows={6} />
+                <Area label="Search tags" value={(f.tags ?? []).join("\n")} onChange={setList("tags")} rows={4} />
+              </div>
+            </Card>
+          )}
+
+          {section === 3 && (
+            <Card className="p-4">
+              <Note className="mt-0">Shown in the app as “Before your visit” and “After your treatment”. One instruction per line.</Note>
+              <div className="grid gap-3 md:grid-cols-2">
+                <Area label="Before your visit (pre-care)" value={(f.pre_care ?? []).join("\n")} onChange={setList("pre_care")} rows={7} />
+                <Area label="After your treatment (post-care)" value={(f.post_care ?? []).join("\n")} onChange={setList("post_care")} rows={7} />
+              </div>
+            </Card>
+          )}
+
+          {section === 4 && (
+            <Card className="p-4">
+              <SecH t="FAQs" right={
+                <Btn kind="ghost" className="!py-1 !text-[12px]"
+                  onClick={() => setF((s) => ({ ...s, faqs: [...(s.faqs ?? []), { q: "", a: "" }] }))}>+ Add FAQ</Btn>} />
+              {(f.faqs ?? []).length === 0 && <div className="text-[12px] text-ink3">No FAQs yet.</div>}
+              {(f.faqs ?? []).map((faq, i) => (
+                <div key={i} className="mb-2 rounded-xl border border-border bg-ivory p-2.5">
+                  <div className="flex gap-2">
+                    <input value={faq.q} placeholder="Question"
+                      onChange={(e) => setF((s) => ({ ...s, faqs: (s.faqs ?? []).map((x, j) => (j === i ? { ...x, q: e.target.value } : x)) }))}
+                      className="flex-1 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[12.5px] outline-none focus:border-gold-dark" />
+                    <button onClick={() => setF((s) => ({ ...s, faqs: (s.faqs ?? []).filter((_, j) => j !== i) }))}
+                      className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-err-bg text-[12px] font-bold text-err">×</button>
+                  </div>
+                  <textarea value={faq.a} placeholder="Answer" rows={2}
+                    onChange={(e) => setF((s) => ({ ...s, faqs: (s.faqs ?? []).map((x, j) => (j === i ? { ...x, a: e.target.value } : x)) }))}
+                    className="mt-1.5 w-full resize-y rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[12.5px] outline-none focus:border-gold-dark" />
+                </div>
+              ))}
+            </Card>
+          )}
+        </div>
+
+        {/* ---- how it looks in the app ---- */}
+        <div className="grid gap-3">
+          <Card className="overflow-hidden">
+            <div className="border-b border-border bg-ivory px-3 py-2 font-mono text-[9.5px] font-bold uppercase tracking-[0.12em] text-ink3">As seen in the app</div>
+            {f.image ? <img src={f.image} alt="" className="h-40 w-full object-cover" /> : <div className="grid h-40 place-items-center bg-gradient-to-br from-sage to-cream text-[11px] text-ink3">No cover photo yet</div>}
+            <div className="p-3.5">
+              <div className="text-[10.5px] font-bold uppercase tracking-wider text-ink3">{f.category || "Category"}</div>
+              <div className="mt-0.5 text-[16px] font-extrabold leading-tight">{f.name || "Service name"}</div>
+              <div className="mt-1 text-[12px] text-ink2">{f.summary || "Short summary appears here."}</div>
+              <div className="mt-2 text-[15px] font-bold">{f.showPriceInApp ? fmtINR(Number(f.price) || 0) : "Price on consultation"}</div>
+              {(f.key_benefits?.length ?? 0) > 0 && (
+                <ul className="mt-2 grid gap-1 text-[11.5px] text-ink2">{(f.key_benefits ?? []).slice(0, 3).map((b, i) => <li key={i}>✓ {b}</li>)}</ul>
+              )}
+              {(f.ideal_for?.length ?? 0) > 0 && <div className="mt-2 flex flex-wrap gap-1">{(f.ideal_for ?? []).slice(0, 4).map((t, i) => <span key={i} className="rounded-full bg-sage px-2 py-0.5 text-[10.5px]">{t}</span>)}</div>}
+              <div className="mt-3 rounded-(--radius-btn) bg-primary py-2 text-center text-[12px] font-bold text-white">{f.cta_label || "Book your appointment"}</div>
+              <div className="mt-2 text-[10.5px] text-ink3">{f.isActive ? "Visible in the app" : "Hidden from the app"} · {f.chargeOnlineBooking === false ? "pay at clinic" : "pays in app"}{f.isPopular ? " · popular" : ""}</div>
+            </div>
+          </Card>
+
+          {!isNew && q.data && (
+            <Card className="p-4">
+              <SecH t="Live figures" />
+              <div className="grid gap-1.5 text-[12.5px] text-ink2">
+                <div className="flex justify-between"><span className="text-ink3">Rating</span><b>{q.data.rating ? q.data.rating.toFixed(1) : "—"}</b></div>
+                <div className="flex justify-between"><span className="text-ink3">Reviews</span><b>{q.data.reviews ?? 0}</b></div>
+                <div className="flex justify-between"><span className="text-ink3">Slug</span><b className="font-mono text-[11px]">{q.data.slug}</b></div>
+              </div>
+              <Btn kind="ghost" className="mt-3 w-full" onClick={async () => {
+                try {
+                  await api.services.toggle(state.id!);
+                  audit("CATALOGUE_STATUS_CHANGED", `${f.name}`, { serviceId: state.id });
+                  toast(f.isActive ? "Hidden from the app" : "Live in the app"); q.reload();
+                } catch (e) { setErr((e as Error).message); }
+              }}>{f.isActive ? "Hide from app now" : "Show in app now"}</Btn>
+            </Card>
+          )}
+        </div>
+      </div>
+
+      <DeleteModal open={delOpen} onClose={() => setDelOpen(false)} what={`service "${f.name}"`}
+        onConfirm={async (reason) => {
+          try {
+            await api.services.remove(state.id!);
+            audit("CATALOGUE_DELETED", `${f.name} · reason: ${reason}`, { serviceId: state.id });
+            toast("Service deleted"); nav("/services");
+          } catch (e) { toast((e as Error).message); }
+        }} />
+    </Page>
+  );
+}
+
+/* ================= CATEGORIES ================= */
+export function Categories() {
+  const nav = useNavigate();
+  const [selType, setSelType] = useQueryString("type", "");
+  const { toast, audit, canManageCatalogue } = useStore();
+  const [addOpen, setAddOpen] = useState(false);
+  const [edit, setEdit] = useState<Category | null>(null);
+  const [del, setDel] = useState<Category | null>(null);
+  const [nName, setNName] = useState("");
+  const [nDesc, setNDesc] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+
+  const [nType, setNType] = useState("");
+
+  // Level 1 — service types, edited inline on this page.
+  const [typeOpen, setTypeOpen] = useState(false);
+  const [typeEdit, setTypeEdit] = useState<ServiceType | null>(null);
+  const [tName, setTName] = useState("");
+  const [tDesc, setTDesc] = useState("");
+  const [tErr, setTErr] = useState<string | null>(null);
+  const [delType, setDelType] = useState<ServiceType | null>(null);
+
+  const types = useApi(() => api.serviceTypes.list({ includeInactive: "true" }), []);
+  const q = useApi(() => api.categories.list(), []);
+  const cats = [...(q.data?.data ?? [])].sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0) || a.name.localeCompare(b.name));
+  const typeList = [...(types.data?.data ?? [])].sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0));
+  const typeNames = typeList.map((t) => t.name);
+
+  const moveType = async (i: number, dir: -1 | 1) => {
+    const j = i + dir; if (j < 0 || j >= typeList.length) return;
+    const next = [...typeList]; [next[i], next[j]] = [next[j], next[i]];
+    try {
+      await Promise.all(next.map((t, k) => api.serviceTypes.update(t._id, { displayOrder: k })));
+      types.reload();
+    } catch (e) { toast((e as Error).message); }
+  };
+  const moveCat = async (items: Category[], i: number, dir: -1 | 1) => {
+    const j = i + dir; if (j < 0 || j >= items.length) return;
+    const next = [...items]; [next[i], next[j]] = [next[j], next[i]];
+    try {
+      await api.categories.reorder(next.map((c, k) => ({ id: c._id, displayOrder: k })));
+      q.reload();
+    } catch (e) { toast((e as Error).message); }
+  };
+
+  /* Grouped so the page reads as the tree it now is: type → categories. */
+  const grouped = [
+    ...typeList.map((t) => ({
+      type: t.name,
+      items: cats.filter((c) => c.type === t.name),
+    })),
+    { type: "", items: cats.filter((c) => !c.type || !typeNames.includes(c.type)) },
+  ].filter((g) => g.items.length > 0);
+
+  return (
+    <Page title="Categories" sub="Level 2 of the menu — treatment categories, filed under a type"
+      actions={<>
+        <Btn kind="ghost" onClick={async () => {
+          try {
+            await api.categories.syncCounts();
+            await api.serviceTypes.syncCounts();
+            toast("Counts recalculated"); q.reload(); types.reload();
+          } catch (e) { toast((e as Error).message); }
+        }}>Recount services</Btn>
+        {canManageCatalogue && <Btn kind="ghost" onClick={() => { setTypeOpen(true); setTypeEdit(null); setTName(""); setTDesc(""); setTErr(null); }}>+ New type</Btn>}
+        {canManageCatalogue && <Btn onClick={() => { setAddOpen(true); setNName(""); setNDesc(""); setNType(typeNames[0] ?? ""); setErr(null); }}>+ New category</Btn>}
+      </>}>
+      <Hint id="categories-live">Categories group services in the app. Deactivating a category hides it from browsing without touching the services inside it.</Hint>
+      <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
+
+      <div className="grid items-start gap-3.5 xl:grid-cols-[320px_minmax(0,1fr)]">
+        {/* Level 1 — types. The app's top-level chips, in this order. */}
+        <Card className="xl:sticky xl:top-[72px]">
+          <div className="flex items-center justify-between gap-2 border-b border-border bg-ivory px-4 py-2">
+            <span className="font-mono text-[10px] font-bold uppercase tracking-[0.12em] text-ink3">Types · level 1</span>
+            <span className="font-mono text-[10px] text-ink3">{typeList.length}</span>
+          </div>
+          <button onClick={() => setSelType("")} className={`flex w-full items-center justify-between px-4 py-2 text-left text-[12.5px] font-bold ${!selType ? "bg-primary text-white" : "hover:bg-ivory"}`}>
+            <span>All types</span><span className={`font-mono text-[10.5px] ${!selType ? "text-white/70" : "text-ink3"}`}>{cats.length} categories</span>
+          </button>
+          {typeList.length === 0 && <div className="px-4 py-6 text-center text-[12.5px] text-ink3">No types yet — add Skin, Hair, Wellness and so on.</div>}
+          {typeList.map((t, i) => (
+            <div key={t._id} className={`flex items-center gap-2 border-t border-border px-3 py-2 ${selType === t.name ? "bg-gold/10" : ""}`}>
+              {canManageCatalogue && (
+                <span className="flex flex-col gap-0.5">
+                  <button onClick={() => moveType(i, -1)} disabled={i === 0} className="rounded border border-border px-1 text-[9px] leading-3 disabled:opacity-30">▲</button>
+                  <button onClick={() => moveType(i, 1)} disabled={i === typeList.length - 1} className="rounded border border-border px-1 text-[9px] leading-3 disabled:opacity-30">▼</button>
+                </span>
+              )}
+              <button onClick={() => setSelType(t.name)} className="min-w-0 flex-1 text-left">
+                <b className={`text-[13px] font-bold ${selType === t.name ? "text-primary" : ""}`}>{t.name}</b>
+                <div className="truncate text-[11px] text-ink3">
+                  {cats.filter((c) => c.type === t.name).length} categories · {t.treatmentCount ?? 0} services{!t.isActive ? " · hidden" : ""}
+                </div>
+              </button>
+              {canManageCatalogue && (
+                <Menu align="right" button={<button className="px-1 text-ink3">⋯</button>} items={[
+                  { label: "Edit", onClick: () => { setTypeOpen(true); setTypeEdit(t); setTName(t.name); setTDesc(t.description ?? ""); setTErr(null); } },
+                  { label: <span className="text-err">Delete</span>, onClick: () => setDelType(t) },
+                ]} />
+              )}
+            </div>
+          ))}
+        </Card>
+
+        <div className="min-w-0">
+          <Async q={q} label="Loading categories…" rows={6}>
+            {() => cats.length === 0 ? (
+              <Empty title="No categories yet" hint="Create the groups your services sit in — Laser, Injectables, Facials and so on."
+                action={canManageCatalogue ? <Btn onClick={() => setAddOpen(true)}>+ New category</Btn> : undefined} />
+            ) : (
+              grouped.filter((g) => !selType || g.type === selType).map((group) => (
+              <Card key={group.type || "unfiled"} className="mb-3">
+                <div className="flex items-center justify-between gap-2 border-b border-border bg-ivory px-4 py-2">
+                  <span className="font-mono text-[10px] font-bold uppercase tracking-[0.12em] text-ink3">
+                    {group.type || "Not filed under a type"} · level 2
+                  </span>
+                  <span className="font-mono text-[10px] text-ink3">
+                    {group.items.length} categor{group.items.length === 1 ? "y" : "ies"}
+                  </span>
+                </div>
+                {group.items.map((c, i) => (
+                  <div key={c._id} className="flex items-center gap-3 border-b border-border px-4 py-2.5 last:border-0">
+                    {canManageCatalogue && group.type && (
+                      <span className="flex flex-col gap-0.5">
+                        <button onClick={() => moveCat(group.items, i, -1)} disabled={i === 0} className="rounded border border-border px-1 text-[9px] leading-3 disabled:opacity-30">▲</button>
+                        <button onClick={() => moveCat(group.items, i, 1)} disabled={i === group.items.length - 1} className="rounded border border-border px-1 text-[9px] leading-3 disabled:opacity-30">▼</button>
+                      </span>
+                    )}
+                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-sage text-[12px] font-bold text-primary">
+                      {initials(c.name)}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <b className="text-[13px] font-bold">{c.name}</b>
+                      <div className="truncate text-[11px] text-ink3">
+                        {c.consultationCount ?? 0} service{(c.consultationCount ?? 0) === 1 ? "" : "s"}
+                        {c.description ? ` · ${c.description}` : ""}
+                      </div>
+                    </div>
+                    <button onClick={() => nav(`/services?type=${encodeURIComponent(group.type ?? "")}&category=${encodeURIComponent(c.name)}`)} className="text-[11.5px] font-semibold text-ink3 hover:text-primary">View services →</button>
+                    <Toggle on={c.isActive} onChange={async () => {
+                      if (!canManageCatalogue) return toast("Your role cannot change the catalogue");
+                      try {
+                        await api.categories.toggle(c._id);
+                        audit("CATALOGUE_STATUS_CHANGED", `Category ${c.name}`, { categoryId: c._id });
+                        toast(`${c.name} ${c.isActive ? "hidden from" : "shown in"} the app`);
+                        q.reload();
+                      } catch (e) { toast((e as Error).message); }
+                    }} />
+                    {canManageCatalogue && (
+                      <Menu align="right" button={<button className="px-1 text-ink3">⋯</button>} items={[
+                        { label: "Edit", onClick: () => { setEdit(c); setNName(c.name); setNDesc(c.description ?? ""); setNType(c.type ?? ""); setErr(null); } },
+                        { label: "+ New service here", onClick: () => nav("/service-editor", { state: { blank: true, type: group.type ?? undefined, category: c.name } }) },
+                        { label: <span className="text-err">Delete</span>, onClick: () => setDel(c) },
+                      ]} />
+                    )}
+                  </div>
+                ))}
+              </Card>
+              ))
+            )}
+          </Async>
+        </div>
+      </div>
+
+      <Modal open={addOpen || !!edit} onClose={() => { setAddOpen(false); setEdit(null); }}
+        title={edit ? `Edit ${edit.name}` : "New category"}>
+        <div className="grid gap-3">
+          <In label="Category name" value={nName} onChange={setNName} />
+          {typeNames.length
+            ? <Sel label="Type" value={nType || typeNames[0]} onChange={setNType} options={typeNames} />
+            : <In label="Type" value={nType} onChange={setNType} hint="No types yet — add one with “+ New type” first" />}
+          <Area label="Description (optional)" value={nDesc} onChange={setNDesc} rows={2} />
+        </div>
+        {err && <Note kind="crit">{err}</Note>}
+        <div className="mt-4 flex justify-end gap-2">
+          <Btn kind="ghost" onClick={() => { setAddOpen(false); setEdit(null); }}>Cancel</Btn>
+          <Btn disabled={nName.trim().length < 2} onClick={async () => {
+            setErr(null);
+            try {
+              if (edit) {
+                await api.categories.update(edit._id, { name: nName.trim(), description: nDesc.trim(), type: nType || typeNames[0] });
+                audit("CATALOGUE_UPDATED", `Category ${nName.trim()}`, { categoryId: edit._id });
+                toast("Category updated");
+              } else {
+                await api.categories.create({ name: nName.trim(), description: nDesc.trim(), type: nType || typeNames[0] });
+                audit("CATALOGUE_CREATED", `Category ${nName.trim()}`);
+                toast("Category created");
+              }
+              setAddOpen(false); setEdit(null); q.reload(); types.reload();
+            } catch (e) { setErr((e as Error).message); }
+          }}>{edit ? "Save" : "Create"}</Btn>
+        </div>
+      </Modal>
+
+      <DeleteModal open={!!del} onClose={() => setDel(null)} what={del ? `category "${del.name}"` : ""}
+        onConfirm={async (reason) => {
+          if (!del) return;
+          try {
+            await api.categories.remove(del._id);
+            audit("CATALOGUE_DELETED", `Category ${del.name} · reason: ${reason}`, { categoryId: del._id });
+            toast("Category deleted"); q.reload();
+          } catch (e) { toast((e as Error).message); }
+        }} />
+
+      <Modal open={typeOpen} onClose={() => setTypeOpen(false)} title={typeEdit ? `Edit type ${typeEdit.name}` : "New type"}>
+        <div className="grid gap-3">
+          <In label="Type name" value={tName} onChange={setTName} hint="Skin, Hair, Wellness… the app's top-level chips" />
+          <Area label="Description (optional)" value={tDesc} onChange={setTDesc} rows={2} />
+          {typeEdit && (
+            <Switch on={typeEdit.isActive} label="Shown in the app" sub="Hidden types keep their categories and services"
+              onChange={async (v) => {
+                try { await api.serviceTypes.update(typeEdit._id, { isActive: v }); setTypeEdit({ ...typeEdit, isActive: v }); types.reload(); }
+                catch (e) { setTErr((e as Error).message); }
+              }} />
+          )}
+        </div>
+        {tErr && <Note kind="crit">{tErr}</Note>}
+        <div className="mt-4 flex justify-end gap-2">
+          <Btn kind="ghost" onClick={() => setTypeOpen(false)}>Cancel</Btn>
+          <Btn disabled={tName.trim().length < 2} onClick={async () => {
+            setTErr(null);
+            try {
+              if (typeEdit) {
+                await api.serviceTypes.update(typeEdit._id, { name: tName.trim(), description: tDesc.trim() });
+                audit("CATALOGUE_UPDATED", `Type ${tName.trim()}`, { typeId: typeEdit._id });
+                toast("Type updated — categories and services were re-filed");
+              } else {
+                await api.serviceTypes.create({ name: tName.trim(), description: tDesc.trim(), displayOrder: typeList.length });
+                audit("CATALOGUE_CREATED", `Type ${tName.trim()}`);
+                toast("Type created");
+              }
+              setTypeOpen(false); types.reload(); q.reload();
+            } catch (e) { setTErr((e as Error).message); }
+          }}>{typeEdit ? "Save" : "Create"}</Btn>
+        </div>
+      </Modal>
+
+      <DeleteModal open={!!delType} onClose={() => setDelType(null)} what={delType ? `type "${delType.name}"` : ""}
+        onConfirm={async (reason) => {
+          if (!delType) return;
+          try {
+            await api.serviceTypes.remove(delType._id);
+            audit("CATALOGUE_DELETED", `Type ${delType.name} · reason: ${reason}`, { typeId: delType._id });
+            toast("Type deleted"); types.reload(); q.reload();
+          } catch (e) { toast((e as Error).message); }
+        }} />
+    </Page>
+  );
+}
+
+/* ================= PACKAGES ================= */
+export function Packages() {
+  const { toast, audit, canManageCatalogue } = useStore();
+  const [edit, setEdit] = useState<Package | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [del, setDel] = useState<Package | null>(null);
+
+  const [tab, setTab] = useQueryNumber("tab", 0, { min: 0, max: 2 });
+  const [pickOpen, setPickOpen] = useState(false);
+  const [assignFor, setAssignFor] = useState<User | null>(null);
+  const assignUi = (
+    <>
+      <PatientPickerModal open={pickOpen} onClose={() => setPickOpen(false)} title="Assign a package — who is it for?" onPick={(u) => { setPickOpen(false); setAssignFor(u); }} />
+      {assignFor && <AssignPackageModal open={!!assignFor} onClose={() => setAssignFor(null)} user={assignFor} onAssigned={() => { setAssignFor(null); assignments.reload(); }} />}
+    </>
+  );
+
+  const q = useApi(() => api.packages.list({ includeInactive: "true" }), []);
+  const assignments = useApi(() => api.packageAssignments.stats().catch(() => undefined), []);
+  const list = q.data ?? [];
+
+  const tabs: [string, number?][] = [["Catalogue", list.length], ["Assignments"], ["Zennara clinic packages"]];
+  if (tab === 1) {
+    return (
+      <Page title="Packages" sub="Packages assigned to patients — sessions, payment and cancellation"
+        actions={<Btn kind="gold" onClick={() => setPickOpen(true)}>+ Assign package</Btn>}>
+        <Tabs active={tab} onChange={setTab} items={tabs} />
+        <AssignmentsConsole />
+        {assignUi}
+      </Page>
+    );
+  }
+  if (tab === 2) {
+    return (
+      <Page title="Packages" sub="Packages customers bought at the clinic (Zenoti) — synced automatically, per customer">
+        <Tabs active={tab} onChange={setTab} items={tabs} />
+        <ZenotiList kind="packages" embedded />
+      </Page>
+    );
+  }
+
+  return (
+    <Page title="Packages" sub="Bundles of services and consultations, assignable to any patient"
+      actions={<>
+        <Btn kind="ghost" disabled={!list.length} onClick={() => exportCsv("zennara-packages",
+          ["Name", "Price", "Original", "Discount %", "Services", "Bookings", "Active"],
+          list.map((p) => [p.name, p.price, p.originalPrice ?? "", p.discount ?? 0,
+            (p.services?.length ?? 0) + (p.consultationServices?.length ?? 0), p.bookingsCount ?? 0, p.isActive ? "yes" : "no"]))}>Export CSV</Btn>
+        <Btn kind="gold" onClick={() => setPickOpen(true)}>+ Assign package</Btn>
+        {canManageCatalogue && <Btn onClick={() => { setCreating(true); setEdit(null); }}>+ New package</Btn>}
+      </>}>
+      {assignUi}
+      <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
+      <Tabs active={tab} onChange={setTab} items={tabs} />
+      <Async q={q} label="Loading packages…" rows={6}>
+        {() => (
+          <>
+            {assignments.data && (
+              <Stats items={[
+                { k: "Packages", v: list.length, d: `${list.filter((p) => p.isActive).length} live in the app` },
+                ...(assignments.data.statusCounts ?? []).slice(0, 3).map((s) => ({
+                  k: `${s._id} assignments`, v: s.count,
+                })),
+                {
+                  k: "Assigned revenue",
+                  v: fmtINR(assignments.data.totalRevenue?.[0]?.total),
+                  d: `${(assignments.data.paymentStats ?? []).find((p) => p._id === true)?.count ?? 0} paid`,
+                },
+              ]} />
+            )}
+
+            {list.length === 0 ? (
+              <Empty title="No packages yet" hint="Bundle a course of treatments into a package the app can sell."
+                action={canManageCatalogue ? <Btn onClick={() => setCreating(true)}>+ New package</Btn> : undefined} />
+            ) : (
+              <DataTable cols={["Package", "Includes", "Price", "Discount", "Assigned", "In app"]}
+                onRow={(i) => canManageCatalogue && setEdit(list[i])}
+                rows={list.map((p) => [
+                  <B key={p._id}>{p.name}{p.isPopular ? " ★" : ""}</B>,
+                  `${(p.services?.length ?? 0) + (p.consultationServices?.length ?? 0)} services`,
+                  <span key={`${p._id}pr`}>
+                    <B>{fmtINR(p.price)}</B>
+                    {!!p.originalPrice && p.originalPrice > p.price && (
+                      <s className="ml-1.5 text-[11px] text-ink3">{fmtINR(p.originalPrice)}</s>
+                    )}
+                  </span>,
+                  p.discount ? `${p.discount}%` : "—",
+                  p.bookingsCount ?? 0,
+                  p.isActive ? <Tag key={`${p._id}a`} kind="ok">shown</Tag> : <Tag key={`${p._id}a`} kind="mute">hidden</Tag>,
+                ])} />
+            )}
+          </>
+        )}
+      </Async>
+
+      <PackageEditor
+        open={creating || !!edit}
+        pkg={edit}
+        onClose={() => { setCreating(false); setEdit(null); }}
+        onSaved={() => { q.reload(); setCreating(false); setEdit(null); }}
+        onDelete={(p) => { setEdit(null); setDel(p); }}
+      />
+
+      <DeleteModal open={!!del} onClose={() => setDel(null)} what={del ? `package "${del.name}"` : ""}
+        onConfirm={async (reason) => {
+          if (!del) return;
+          try {
+            await api.packages.remove(del._id);
+            audit("CATALOGUE_DELETED", `Package ${del.name} · reason: ${reason}`, { packageId: del._id });
+            toast("Package deleted"); q.reload();
+          } catch (e) { toast((e as Error).message); }
+        }} />
+    </Page>
+  );
+}
+
+function PackageEditor({ open, pkg, onClose, onSaved, onDelete }: {
+  open: boolean; pkg: Package | null; onClose: () => void; onSaved: () => void; onDelete: (p: Package) => void;
+}) {
+  const { toast, audit } = useStore();
+  const [f, setF] = useState<Partial<Package>>({});
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [svcSearch, setSvcSearch] = useState("");
+
+  const services = useApi(() => api.services.list({ isActive: "true", limit: 500 }), [open]);
+  const catalogue = services.data?.data ?? [];
+
+  /** Stored rows key on the Consultation `id`; the picker keys on `_id`. Match either. */
+  const findSvc = (key?: string) => catalogue.find((s) => s._id === key || s.id === key || s.slug === key);
+
+  useEffect(() => {
+    if (!open) return;
+    setF(pkg ?? {
+      name: "", description: "", price: 0, originalPrice: 0, discount: 0, image: "",
+      benefits: [], services: [], consultationServices: [], isActive: true, isPopular: false,
+    });
+    setErr(null);
+  }, [open, pkg?._id]);
+
+  const set = <K extends keyof Package>(k: K) => (v: Package[K]) => setF((s) => ({ ...s, [k]: v }));
+  const uploadImage = (file: File) => api.media.upload([file]).then((r) => r?.[0]?.url ?? "");
+
+  const included = (f.services ?? []) as { serviceId?: string; name?: string; serviceName?: string; sessions?: number; customPrice?: number }[];
+  const listPrice = included.reduce((sum, it) => {
+    const svc = findSvc(it.serviceId);
+    const unit = it.customPrice ?? svc?.price ?? 0;
+    return sum + unit * (it.sessions ?? 1);
+  }, 0);
+  const price = Number(f.price) || 0;
+  const savings = listPrice > 0 ? Math.round((1 - price / listPrice) * 100) : 0;
+
+  const save = async () => {
+    setErr(null);
+    if (!f.name?.trim()) return setErr("A package name is required");
+    if (!f.description?.trim()) return setErr("A description is required — the app shows it");
+    if (!price) return setErr("A price is required");
+    setBusy(true);
+    try {
+      // The server recomputes originalPrice/discount from the services, and owns `id`.
+      const { _id, id, originalPrice, discount, bookingsCount, createdAt, ...rest } = f as Package & { createdAt?: string };
+      void _id; void id; void originalPrice; void discount; void bookingsCount; void createdAt;
+      const body: Partial<Package> = {
+        ...rest,
+        price,
+        services: included.map((it) => ({
+          serviceId: findSvc(it.serviceId)?._id ?? it.serviceId,
+          sessions: Math.max(1, it.sessions ?? 1),
+          ...(it.customPrice !== undefined && it.customPrice !== null ? { customPrice: Number(it.customPrice) } : {}),
+        })),
+      };
+      if (pkg) {
+        await api.packages.update(pkg._id, body);
+        audit("CATALOGUE_UPDATED", `Package ${f.name}`, { packageId: pkg._id });
+        toast("Package saved");
+      } else {
+        const created = await api.packages.create(body);
+        audit("CATALOGUE_CREATED", `Package ${created.name}`, { packageId: created._id });
+        toast("Package created");
+      }
+      onSaved();
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title={pkg ? `Edit ${pkg.name}` : "New package"} xl>
+      {services.initial && !services.data ? <Loading label="Loading services…" /> : (
+        <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
+          <div className="min-w-0">
+            <div className="grid gap-3 md:grid-cols-2">
+              <In label="Package name" value={f.name ?? ""} onChange={set("name")} placeholder="e.g. Glow Ritual · 6 sessions" />
+              <In label="Package price (₹)" type="number" value={String(f.price ?? 0)} onChange={(v) => set("price")(Number(v) || 0)} hint={listPrice ? `List value ${fmtINR(listPrice)}` : undefined} />
+            </div>
+            <div className="mt-3"><Area label="Description — shown in the app" value={f.description ?? ""} onChange={set("description")} rows={3} /></div>
+            <div className="mt-3">
+              <Area label="Benefits (one per line)" value={(f.benefits ?? []).join("\n")}
+                onChange={(v) => set("benefits")(v.split("\n").map((x) => x.trim()).filter(Boolean))} rows={3} />
+            </div>
+
+            <SecH t="What's included" em={`· ${included.reduce((n, it) => n + (it.sessions ?? 1), 0)} sessions`} />
+            <div className="mb-2 flex gap-2">
+              <input value={svcSearch} onChange={(e) => setSvcSearch(e.target.value)} placeholder="Search a service to add…"
+                className="min-w-0 flex-1 rounded-lg border border-border bg-ivory px-2.5 py-1.5 text-[12.5px] outline-none focus:border-gold-dark" />
+            </div>
+            {svcSearch && (
+              <div className="mb-2 max-h-40 overflow-y-auto rounded-lg border border-border bg-surface">
+                {catalogue.filter((c) => c.name.toLowerCase().includes(svcSearch.toLowerCase()) || c.category.toLowerCase().includes(svcSearch.toLowerCase())).slice(0, 12).map((c) => (
+                  <button key={c._id} onClick={() => { setF((s) => ({ ...s, services: [...(s.services ?? []), { serviceId: c._id, name: c.name, sessions: 1 }] })); setSvcSearch(""); }}
+                    className="flex w-full items-center justify-between px-2.5 py-1.5 text-left text-[12.5px] hover:bg-ivory">
+                    <span><B>{c.name}</B> <span className="text-[11px] text-ink3">· {c.category}</span></span><span className="font-mono text-[11px] text-ink3">{fmtINR(c.price)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {included.length === 0 && <div className="rounded-lg border border-dashed border-border px-3 py-3 text-[12px] text-ink3">No services yet — search above to add the treatments this package covers.</div>}
+            {included.map((it, i) => {
+              const svc = findSvc(it.serviceId);
+              return (
+                <div key={i} className="mb-2 rounded-xl border border-border bg-ivory px-3 py-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <B>{svc?.name ?? it.name ?? it.serviceName ?? "Service"}</B>
+                      <div className="text-[10.5px] text-ink3">{svc?.category ?? ""}{svc ? ` · list ${fmtINR(svc.price)}/session` : ""}</div>
+                    </div>
+                    <button title="Remove" onClick={() => setF((s) => ({ ...s, services: ((s.services ?? []) as typeof included).filter((_, j) => j !== i) }))}
+                      className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-err-bg text-[12px] font-bold text-err">×</button>
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
+                    <label className="flex items-center gap-2 text-[11px] font-bold text-ink2">
+                      Sessions
+                      <span className="flex items-center overflow-hidden rounded-lg border border-border">
+                        <button className="grid h-8 w-8 place-items-center bg-sage font-bold"
+                          onClick={() => setF((s) => ({ ...s, services: ((s.services ?? []) as typeof included).map((x, j) => (j === i ? { ...x, sessions: Math.max(1, (x.sessions ?? 1) - 1) } : x)) }))}>−</button>
+                        <span className="grid h-8 w-10 place-items-center bg-surface font-mono text-[13px] font-bold">{it.sessions ?? 1}</span>
+                        <button className="grid h-8 w-8 place-items-center bg-sage font-bold"
+                          onClick={() => setF((s) => ({ ...s, services: ((s.services ?? []) as typeof included).map((x, j) => (j === i ? { ...x, sessions: (x.sessions ?? 1) + 1 } : x)) }))}>+</button>
+                      </span>
+                    </label>
+                    <label className="flex items-center gap-2 text-[11px] font-bold text-ink2">
+                      ₹ / session
+                      <input type="number" value={String(it.customPrice ?? svc?.price ?? 0)}
+                        onChange={(e) => setF((s) => ({ ...s, services: ((s.services ?? []) as typeof included).map((x, j) => (j === i ? { ...x, customPrice: Number(e.target.value) || 0 } : x)) }))}
+                        className="w-24 rounded-lg border border-border bg-surface px-2 py-1.5 text-right font-mono text-[12px] outline-none focus:border-gold-dark" />
+                    </label>
+                    <span className="ml-auto font-mono text-[12.5px] font-bold tabular-nums">
+                      {fmtINR((it.customPrice ?? svc?.price ?? 0) * (it.sessions ?? 1))}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
+              <Switch on={!!f.isActive} onChange={set("isActive")} label="Live in the app" sub="Off hides it from the app" />
+              <Switch on={!!f.isPopular} onChange={set("isPopular")} gold label="Popular" sub="Pins it to the app home rail" />
+            </div>
+            {err && <Note kind="crit">{err}</Note>}
+          </div>
+
+          <div className="grid gap-3">
+            <Card className="overflow-hidden">
+              <div className="border-b border-border bg-ivory px-3 py-2 font-mono text-[9.5px] font-bold uppercase tracking-[0.12em] text-ink3">As seen in the app</div>
+              {f.image ? <img src={f.image} alt="" className="h-32 w-full object-cover" /> : <div className="grid h-32 place-items-center bg-gradient-to-br from-sage to-cream text-[11px] text-ink3">No photo yet</div>}
+              <div className="p-3">
+                <div className="text-[14px] font-extrabold leading-tight">{f.name || "Package name"}</div>
+                <div className="mt-1 line-clamp-3 text-[11.5px] text-ink3">{f.description || "Description appears here."}</div>
+                <div className="mt-2 flex items-baseline gap-2">
+                  <b className="text-[15px]">{fmtINR(price)}</b>
+                  {listPrice > price && <s className="text-[11px] text-ink3">{fmtINR(listPrice)}</s>}
+                  {listPrice > price && <Tag kind="ok">save {savings}%</Tag>}
+                </div>
+                <ul className="mt-2 grid gap-0.5 text-[11px] text-ink2">
+                  {included.slice(0, 5).map((it, i) => <li key={i}>• {it.sessions ?? 1}× {findSvc(it.serviceId)?.name ?? it.name ?? "service"}</li>)}
+                </ul>
+              </div>
+            </Card>
+            <UploadField label="Photo" value={f.image ?? ""} onChange={set("image")} upload={uploadImage} preview={false} />
+            {listPrice > 0 && price >= listPrice && <Note kind="crit" className="mb-0">Priced at or above the list value — the guest saves nothing.</Note>}
+            <div className="flex flex-col gap-2">
+              <Btn disabled={busy} onClick={save}>{busy ? "Saving…" : pkg ? "Save package" : "Create package"}</Btn>
+              <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
+              {pkg && <Btn kind="danger" onClick={() => onDelete(pkg)}>Delete package</Btn>}
+            </div>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+
+/* ================= PACKAGE ASSIGNMENTS ================= */
+function AssignmentsConsole() {
+  const { toast, audit, canManageCatalogue } = useStore();
+  const [status, setStatus] = useQueryString("assignmentStatus", "all");
+  const [search, setSearch] = useQueryString("assignmentQ");
+  const debounced = useDebounced(search);
+  const [page, setPage] = useQueryPage("assignmentPage");
+  const [sel, setSel] = useState<PackageAssignment | null>(null);
+
+  const q = useApi(() => api.packageAssignments.list({ status, search: debounced || undefined, page, limit: 15 }), [status, debounced, page]);
+  const rows = q.data?.data ?? [];
+  const pag = (q.data as { pagination?: { totalPages?: number; pages?: number; total?: number } } | undefined)?.pagination;
+  const totalPages = pag?.totalPages ?? pag?.pages ?? 1;
+
+  return (
+    <>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} placeholder="Search guest, phone, assignment id…"
+          className="w-full max-w-[360px] rounded-(--radius-btn) border border-border bg-surface px-3.5 py-2 text-[13px] outline-none focus:border-gold-dark" />
+        <div className="flex overflow-hidden rounded-(--radius-btn) border border-border">
+          {["all", "Active", "Completed", "Expired", "Cancelled"].map((st) => (
+            <button key={st} onClick={() => { setStatus(st); setPage(1); }}
+              className={`px-3 py-2 text-[12px] font-bold ${status === st ? "bg-primary text-white" : "bg-surface text-ink2"}`}>{st === "all" ? "All" : st}</button>
+          ))}
+        </div>
+      </div>
+      <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
+      <Async q={q} label="Loading assignments…" rows={6}>
+        {() => rows.length === 0 ? (
+          <Empty title="No assignments" hint="Assign a package from a patient's record (Patients → open → Assign package)." />
+        ) : (
+          <>
+            <DataTable cols={["Guest", "Package", "Sessions", "Paid", "Valid until", "Status"]}
+              onRow={(i) => setSel(rows[i])}
+              rows={rows.map((a) => {
+                const done = (a.sessions ?? []).filter((x) => x.status === "Completed").length + 0;
+                const total = (a.sessions ?? []).length;
+                return [
+                  <span key={a._id}><B>{a.userDetails?.fullName ?? nameOf(a.userId, "Guest")}</B><div className="text-[11px] text-ink3">{a.userDetails?.phone ?? ""} · {a.assignmentId}</div></span>,
+                  a.packageDetails?.packageName ?? nameOf(a.packageId, "Package"),
+                  `${done}/${total}`,
+                  a.payment?.isReceived ? <Tag key={`${a._id}p`} kind="ok">paid</Tag> : <Tag key={`${a._id}p`} kind="warn">due</Tag>,
+                  a.validUntil ? fmtDate(a.validUntil) : "—",
+                  <Tag key={`${a._id}s`} kind={a.status === "Active" ? "ok" : a.status === "Cancelled" ? "err" : "mute"}>{a.status}</Tag>,
+                ];
+              })} />
+            {pag && totalPages > 1 && (
+              <div className="mt-2 flex items-center justify-end gap-2 text-[12px] text-ink3">
+                <Btn kind="ghost" disabled={page <= 1} onClick={() => setPage(page - 1)}>Previous</Btn>
+                <span>Page {page} of {totalPages}</span>
+                <Btn kind="ghost" disabled={page >= totalPages} onClick={() => setPage(page + 1)}>Next</Btn>
+              </div>
+            )}
+          </>
+        )}
+      </Async>
+      <AssignmentDrawer a={sel} onClose={() => setSel(null)} onChanged={() => { q.reload(); }} canEdit={canManageCatalogue} toast={toast} audit={audit} />
+    </>
+  );
+}
+
+function AssignmentDrawer({ a, onClose, onChanged, canEdit, toast, audit }: {
+  a: PackageAssignment | null; onClose: () => void; onChanged: () => void; canEdit: boolean;
+  toast: (m: string) => void; audit: (action: AuditAction, detail: string, extra?: Record<string, unknown>) => void;
+}) {
+  const [sessions, setSessions] = useState<PackageSession[]>([]);
+  const [notes, setNotes] = useState("");
+  const [validUntil, setValidUntil] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [otp, setOtp] = useState("");
+  const [cancelReason, setCancelReason] = useState("");
+  // Roster for the per-session dermatologist picker.
+  const doctors = useApi(() => api.doctors.list({ isActive: "true" }), []);
+
+  useEffect(() => {
+    if (!a) return;
+    setSessions((a.sessions ?? []).map((x) => ({ ...x })));
+    setNotes(a.notes ?? "");
+    setValidUntil(a.validUntil ? String(a.validUntil).slice(0, 10) : "");
+    setErr(null); setCancelOpen(false); setOtpSent(false); setOtp(""); setCancelReason("");
+  }, [a?._id]);
+
+  if (!a) return null;
+  const guest = a.userDetails?.fullName ?? nameOf(a.userId, "Guest");
+
+  const save = async () => {
+    if (sessions.some((x) => !x.scheduledDate)) { setErr("Every session needs a date — the server drops undated sessions."); return; }
+    setBusy(true); setErr(null);
+    try {
+      await api.packageAssignments.update(a._id, {
+        sessions: sessions.map((x) => ({ ...x, scheduledDate: x.scheduledDate || null })),
+        notes,
+        validUntil: validUntil || null,
+      });
+      audit("CATALOGUE_UPDATED", `Assignment ${a.assignmentId} sessions/notes`, { assignmentId: a._id });
+      toast("Assignment saved"); onChanged();
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  const markPaid = async (paid: boolean) => {
+    setBusy(true); setErr(null);
+    try {
+      await api.packageAssignments.update(a._id, { "payment.isReceived": paid });
+      audit("CATALOGUE_UPDATED", `Assignment ${a.assignmentId} marked ${paid ? "paid" : "unpaid"}`, { assignmentId: a._id });
+      toast(paid ? "Marked as paid" : "Marked as unpaid"); onChanged();
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  const uploadProof = async (file: File) => {
+    const form = new FormData(); form.append("proof", file);
+    setBusy(true); setErr(null);
+    try { await api.packageAssignments.uploadProof(a._id, form); toast("Payment proof attached"); onChanged(); }
+    catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  const sendOtp = async () => {
+    setBusy(true); setErr(null);
+    try { await api.packageAssignments.cancelSendOtp(a._id); setOtpSent(true); toast(`Code sent to ${guest}`); }
+    catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  const confirmCancel = async () => {
+    setBusy(true); setErr(null);
+    try {
+      await api.packageAssignments.cancelVerifyOtp(a._id, { otp, reason: cancelReason });
+      audit("CATALOGUE_UPDATED", `Assignment ${a.assignmentId} cancelled · ${cancelReason}`, { assignmentId: a._id });
+      toast("Package cancelled"); onChanged(); onClose();
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+
+  return (
+    <Drawer open={!!a} onClose={onClose} title={<span>{a.packageDetails?.packageName ?? "Package"} <span className="font-mono text-[11px] text-ink3">{a.assignmentId}</span></span>}>
+      <div className="grid gap-1.5 text-[12.5px]">
+        <div className="flex justify-between"><span className="text-ink3">Guest</span><B>{guest}</B></div>
+        <div className="flex justify-between"><span className="text-ink3">Phone</span><span>{a.userDetails?.phone ?? "—"}</span></div>
+        <div className="flex justify-between"><span className="text-ink3">Price</span><B>{fmtINR(a.pricing?.finalAmount ?? a.packageDetails?.packagePrice)}</B></div>
+        <div className="flex justify-between"><span className="text-ink3">Payment</span>
+          {a.payment?.isReceived ? <Tag kind="ok">paid{a.payment.receivedDate ? ` · ${fmtDate(a.payment.receivedDate)}` : ""}</Tag> : <Tag kind="warn">due</Tag>}</div>
+        {a.payment?.proofUrl && <a href={a.payment.proofUrl} target="_blank" rel="noreferrer" className="text-[12px] font-semibold text-primary">View payment proof ↗</a>}
+        <div className="flex justify-between"><span className="text-ink3">Status</span><Tag kind={a.status === "Active" ? "ok" : "mute"}>{a.status}</Tag></div>
+        <div className="flex justify-between"><span className="text-ink3">Clinic</span><span>{a.preferredLocation || "—"}</span></div>
+      </div>
+
+      {canEdit && a.status === "Active" && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Btn kind="ghost" disabled={busy} onClick={() => markPaid(!a.payment?.isReceived)}>{a.payment?.isReceived ? "Mark unpaid" : "Mark paid"}</Btn>
+          <label className="cursor-pointer rounded-(--radius-btn) border border-border bg-surface px-3 py-2 text-[12.5px] font-bold text-ink2">
+            Attach proof<input type="file" accept="image/*,application/pdf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) uploadProof(f); }} />
+          </label>
+          <Btn kind="danger" disabled={busy} onClick={() => setCancelOpen(true)}>Cancel package…</Btn>
+        </div>
+      )}
+
+      <SecH t="Sessions" em={`· ${sessions.length}`} />
+      {sessions.length === 0 && <div className="text-[12px] text-ink3">No sessions were scheduled on this assignment.</div>}
+      {sessions.map((sess, i) => (
+        <div key={sess._id ?? i} className="mb-2 rounded-xl border border-border bg-ivory p-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <B>{sess.serviceName ?? sess.serviceId}</B>
+            <Tag kind={sess.status === "Completed" ? "ok" : sess.status === "Booked" ? "info" : sess.status === "Cancelled" ? "err" : "mute"}>{sess.status ?? "Scheduled"}</Tag>
+          </div>
+          {canEdit && sess.status !== "Completed" ? (
+            <>
+              <div className="mt-1.5 grid grid-cols-2 gap-2">
+                <input type="date" value={sess.scheduledDate ? String(sess.scheduledDate).slice(0, 10) : ""}
+                  onChange={(e) => setSessions((xs) => xs.map((x, j) => (j === i ? { ...x, scheduledDate: e.target.value ? new Date(e.target.value).toISOString() : undefined } : x)))}
+                  className="rounded-lg border border-border bg-surface px-2 py-1.5 text-[12px] outline-none" />
+                <input type="text" value={sess.scheduledTime ?? ""} placeholder="e.g. 2:30 PM"
+                  onChange={(e) => setSessions((xs) => xs.map((x, j) => (j === i ? { ...x, scheduledTime: e.target.value } : x)))}
+                  className="rounded-lg border border-border bg-surface px-2 py-1.5 text-[12px] outline-none" />
+              </div>
+              <select value={sess.specialistId ?? ""}
+                onChange={(e) => {
+                  const doc = (doctors.data?.data ?? []).find((d) => d.doctorId === e.target.value);
+                  setSessions((xs) => xs.map((x, j) => (j === i
+                    ? { ...x, specialistId: e.target.value || null, specialistName: doc?.name ?? null, specialistTier: doc?.designation ?? null }
+                    : x)));
+                }}
+                className="mt-2 w-full rounded-lg border border-border bg-surface px-2 py-1.5 text-[12px] outline-none focus:border-gold-dark">
+                <option value="">No dermatologist</option>
+                {(doctors.data?.data ?? []).map((d) => <option key={d._id} value={d.doctorId}>{d.name}</option>)}
+              </select>
+            </>
+          ) : (
+            <div className="mt-1 text-[11.5px] text-ink3">
+              {sess.scheduledDate ? `${fmtDate(sess.scheduledDate)} ${sess.scheduledTime ?? ""}` : "not scheduled"}
+              {sess.specialistName ? ` · ${sess.specialistName}` : ""}
+            </div>
+          )}
+        </div>
+      ))}
+
+      {canEdit && (
+        <>
+          <div className="mt-2 grid gap-2">
+            <In label="Valid until" type="date" value={validUntil} onChange={setValidUntil} />
+            <Area label="Notes" value={notes} onChange={setNotes} rows={2} />
+          </div>
+          {err && <Note kind="crit">{err}</Note>}
+          <div className="mt-3 flex justify-end gap-2">
+            <Btn kind="ghost" onClick={onClose}>Close</Btn>
+            <Btn disabled={busy} onClick={save}>{busy ? "Saving…" : "Save changes"}</Btn>
+          </div>
+        </>
+      )}
+
+      <Modal open={cancelOpen} onClose={() => setCancelOpen(false)} title="Cancel this package">
+        <Note kind="crit"><B>The guest must approve.</B> A one-time code is sent to {guest}; enter it here to confirm. The package is marked cancelled — no refund is triggered automatically.</Note>
+        <div className="grid gap-2">
+          <Area label="Reason (shared with the guest)" value={cancelReason} onChange={setCancelReason} rows={2} />
+          {!otpSent
+            ? <Btn disabled={busy || cancelReason.trim().length < 4} onClick={sendOtp}>Send code to guest</Btn>
+            : <>
+                <In label="Code from the guest" value={otp} onChange={setOtp} placeholder="6 digits" />
+                <div className="flex justify-end gap-2">
+                  <Btn kind="ghost" disabled={busy} onClick={sendOtp}>Resend</Btn>
+                  <Btn kind="danger" disabled={busy || otp.trim().length !== 6} onClick={confirmCancel}>Confirm cancellation</Btn>
+                </div>
+              </>}
+        </div>
+        {err && <Note kind="crit">{err}</Note>}
+      </Modal>
+    </Drawer>
+  );
+}
+
+/* ================= DOCTORS ================= */
+export function Doctors() {
+  const { toast, audit, canManageCatalogue, branches } = useStore();
+  const nav = useNavigate();
+  const [sel, setSel] = useState<Doctor | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [del, setDel] = useState<Doctor | null>(null);
+
+  const q = useApi(() => api.doctors.list({ includeInactive: "true" }), []);
+  const tiers = useApi(() => api.doctors.tiers().catch(() => []), []);
+  const requests = useApi(() => api.feeRequests.list({ limit: 200 }), []);
+  const list = q.data?.data ?? [];
+  const tierList = tiers.data ?? [];
+  const allRequests = requests.data?.data ?? [];
+  const pending = allRequests.filter((r) => r.status === "Pending");
+
+  /** Effective fee: an approved personal rate, else the tier's standard fee. */
+  const feeFor = (d: Doctor) => d.fee || tierList.find((t) => t.id === d.tier)?.fee || 0;
+  const onStandard = (d: Doctor) => !d.fee || d.fee <= 0;
+
+  const reloadAll = () => { q.reload(); tiers.reload(); requests.reload(); };
+
+  return (
+    <Page title="Dermatologists"
+      sub={list.length
+        ? `${list.length} practitioner${list.length === 1 ? "" : "s"} · ${tierList.map((t) => `${t.title} ${fmtINR(t.fee)}`).join(" · ")}`
+        : "The dermatology team the app shows"}
+      actions={<>
+        {canManageCatalogue && tierList.length > 0 && <TierEditor tiers={tierList} onSaved={reloadAll} />}
+        {canManageCatalogue && <Btn onClick={() => setAddOpen(true)}>+ Add dermatologist</Btn>}
+      </>}>
+      <Hint id="doctors-live">The clinic sets a <B>standard fee per tier</B> under Consultation fees — that is what every dermatologist on the tier charges. A doctor who wants a different rate raises a request, and you decide here. Nothing a doctor does changes their own price.</Hint>
+      <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
+
+      <FeeRequestQueue
+        requests={allRequests}
+        canDecide={canManageCatalogue}
+        tiers={tierList}
+        onDecided={reloadAll}
+      />
+
+      <Async q={q} label="Loading the team…" rows={6}>
+        {() => list.length === 0 ? (
+          <Empty title="No dermatologists yet"
+            hint="Add the dermatology team, or seed it from the clinic's profiles with `node scripts/seedDoctors.js` in the Backend folder."
+            action={canManageCatalogue ? <Btn onClick={() => setAddOpen(true)}>+ Add dermatologist</Btn> : undefined} />
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {list.map((doc) => (
+              <Card key={doc._id} onClick={() => setSel(doc)} className={`p-4 ${doc.isActive ? "" : "opacity-60"}`}>
+                <div className="flex items-start gap-3">
+                  {doc.photo
+                    ? <img src={doc.photo} alt="" className="h-12 w-12 shrink-0 rounded-full object-cover" />
+                    : <span className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-gradient-to-br from-sage to-cream text-[15px] font-extrabold text-primary">{initials(doc.name)}</span>}
+                  <div className="min-w-0">
+                    <b className="block text-[14px] font-bold leading-tight">{doc.name}</b>
+                    <div className="mt-0.5 text-[10.5px] font-bold uppercase tracking-[0.05em] text-gold-dark">
+                      {doc.designation ?? tierList.find((t) => t.id === doc.tier)?.title ?? doc.tier}
+                    </div>
+                    <div className="mt-0.5 text-[11px] text-ink3">
+                      {doc.experienceYears ? `${doc.experienceYears} yrs` : ""}
+                      {doc.availableCentres?.length ? ` · ${doc.availableCentres.join(", ")}` : ""}
+                    </div>
+                  </div>
+                  <span className="ml-auto shrink-0 text-right">
+                    <span className="block rounded-lg bg-cream px-2 py-1 font-mono text-[11.5px] font-bold text-primary">{fmtINR(feeFor(doc))}</span>
+                    <span className={`mt-0.5 block text-[9px] font-bold uppercase tracking-[0.04em] ${onStandard(doc) ? "text-ink3" : "text-gold-dark"}`}>
+                      {onStandard(doc) ? "standard" : "own rate"}
+                    </span>
+                    {pending.some((r) => r.doctorId === doc.doctorId) && (
+                      <span className="mt-0.5 block text-[9px] font-bold uppercase tracking-[0.04em] text-warn">request open</span>
+                    )}
+                  </span>
+                </div>
+                {!!doc.qualifications?.length && (
+                  <div className="mt-2.5 text-[11px] leading-relaxed text-ink3">{doc.qualifications.join(", ")}</div>
+                )}
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {(doc.expertise ?? []).slice(0, 4).map((e) => (
+                    <span key={e} className="rounded-full bg-sage px-2 py-0.5 text-[10px] font-semibold text-secondary">{e}</span>
+                  ))}
+                  {(doc.expertise?.length ?? 0) > 4 && <span className="text-[10px] text-ink3">+{doc.expertise!.length - 4}</span>}
+                </div>
+                <div className="mt-3 flex items-center justify-between border-t border-border pt-2.5 text-[11px] text-ink3">
+                  <span className="flex gap-1.5">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); nav(`/dermatologist?id=${doc._id}`); }}
+                      className="rounded-lg bg-primary px-2.5 py-1 text-[11px] font-bold text-white hover:bg-primary-hover">
+                      View details
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); nav(`/doctors/schedule?doctorId=${encodeURIComponent(doc.doctorId)}`); }}
+                      className="rounded-lg bg-sage px-2.5 py-1 text-[11px] font-bold text-primary hover:bg-primary hover:text-white"
+                      title="Set the days and hours this dermatologist takes appointments — this is what fills the booking slots">
+                      Working hours
+                    </button>
+                  </span>
+                  <Tag kind={doc.isActive ? "ok" : "mute"}>{doc.isActive ? "Live" : "Hidden"}</Tag>
+                </div>
+              </Card>
+            ))}
+          </div>
+        )}
+      </Async>
+
+      <DoctorEditor
+        open={addOpen || !!sel}
+        doctor={sel}
+        tiers={tierList}
+        branchNames={branches.map((b) => b.name)}
+        onClose={() => { setAddOpen(false); setSel(null); }}
+        onSaved={() => { q.reload(); setAddOpen(false); setSel(null); }}
+        onDelete={(d) => { setSel(null); setDel(d); }}
+      />
+
+      <DeleteModal open={!!del} onClose={() => setDel(null)} what={del ? `dermatologist "${del.name}"` : ""}
+        onConfirm={async (reason) => {
+          if (!del) return;
+          try {
+            const res = await api.doctors.remove(del._id);
+            audit("DOCTOR_DELETED", `${del.name} · reason: ${reason}`, { doctorId: del.doctorId });
+            toast((res as { message?: string }).message ?? "Dermatologist removed");
+            q.reload();
+          } catch (e) { toast((e as Error).message); }
+        }} />
+    </Page>
+  );
+}
+
+
+/* ---------- fee-change requests: the admin's decision queue ---------- */
+function FeeRequestQueue({ requests, canDecide, tiers, onDecided }: {
+  requests: DoctorFeeRequest[];
+  canDecide: boolean;
+  tiers: { id: string; title: string; fee: number }[];
+  onDecided: () => void;
+}) {
+  const { toast, audit } = useStore();
+  const [open, setOpen] = useState<DoctorFeeRequest | null>(null);
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
+
+  const pending = requests.filter((r) => r.status === "Pending");
+  const decided = requests.filter((r) => r.status !== "Pending");
+
+  useEffect(() => {
+    if (!open) return;
+    setAmount(String(open.requestedFee));
+    setNote("");
+    setErr(null);
+  }, [open?._id]);
+
+  const decide = async (action: "approve" | "reject") => {
+    if (!open) return;
+    setBusy(true); setErr(null);
+    try {
+      if (action === "approve") {
+        const res = await api.feeRequests.approve(open._id, {
+          approvedFee: Number(amount) || open.requestedFee,
+          reviewNote: note.trim() || undefined,
+        });
+        audit("DOCTOR_UPDATED",
+          `Approved fee for ${open.doctorName} at ${fmtINR(res.approvedFee ?? 0)}`,
+          { doctorId: open.doctorId });
+        toast(`${open.doctorName} now charges ${fmtINR(res.approvedFee ?? 0)}`);
+      } else {
+        await api.feeRequests.reject(open._id, note.trim());
+        audit("DOCTOR_UPDATED", `Rejected fee request from ${open.doctorName}`, { doctorId: open.doctorId });
+        toast("Request rejected — the dermatologist can see your note");
+      }
+      setOpen(null);
+      onDecided();
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+
+  if (pending.length === 0 && decided.length === 0) return null;
+
+  const delta = (r: DoctorFeeRequest) => {
+    const diff = r.requestedFee - r.currentFee;
+    const sign = diff > 0 ? "+" : "";
+    const pctChange = r.currentFee ? Math.round((diff / r.currentFee) * 100) : 0;
+    return `${sign}${fmtINR(diff)}${r.currentFee ? ` · ${sign}${pctChange}%` : ""}`;
+  };
+
+  return (
+    <>
+      {pending.length > 0 && (
+        <Card className="mb-4 border-gold-dark p-4">
+          <SecH t="Fee change requests" em={`· ${pending.length} awaiting your decision`} />
+          {!canDecide && (
+            <Note kind="crit" className="mt-0">
+              Only an Admin or Super Admin can decide these.
+            </Note>
+          )}
+          <DataTable
+            cols={["Dermatologist", "Now", "Requested", "Change", "Reason", "Raised", ""]}
+            onRow={canDecide ? (i) => setOpen(pending[i]) : undefined}
+            rows={pending.map((r) => [
+              <span key={r._id}>
+                <B>{r.doctorName}</B>
+                <span className="block text-[10.5px] text-ink3">
+                  {r.currentFeeWasTierFee ? "on the standard fee" : "on a personal rate"}
+                </span>
+              </span>,
+              fmtINR(r.currentFee),
+              <b key={`${r._id}rf`} className="text-gold-dark">{fmtINR(r.requestedFee)}</b>,
+              <span key={`${r._id}d`} className={r.requestedFee > r.currentFee ? "text-warn" : "text-ok"}>
+                {delta(r)}
+              </span>,
+              <span key={`${r._id}re`} className="line-clamp-2 text-[11.5px] text-ink3">{r.reason}</span>,
+              fmtWhen(r.createdAt),
+              canDecide ? <Btn key={`${r._id}b`} kind="ghost" className="!px-2.5 !py-1 !text-[11.5px]">Review</Btn> : "",
+            ])}
+          />
+        </Card>
+      )}
+
+      {decided.length > 0 && (
+        <div className="mb-4">
+          <button onClick={() => setShowHistory((v) => !v)}
+            className="text-[12px] font-semibold text-ink3 hover:text-ink2">
+            {showHistory ? "▾" : "▸"} Decided requests ({decided.length})
+          </button>
+          {showHistory && (
+            <div className="mt-2">
+              <DataTable cols={["Dermatologist", "Requested", "Outcome", "Decided by", "Note", "When"]}
+                rows={decided.slice(0, 30).map((r) => [
+                  <B key={r._id}>{r.doctorName}</B>,
+                  <span key={`${r._id}a`}>{fmtINR(r.currentFee)} → {fmtINR(r.requestedFee)}</span>,
+                  r.status === "Approved"
+                    ? <Tag key={`${r._id}s`} kind="ok">
+                        Approved{r.approvedFee !== r.requestedFee ? ` at ${fmtINR(r.approvedFee ?? 0)}` : ""}
+                      </Tag>
+                    : r.status === "Rejected"
+                      ? <Tag key={`${r._id}s`} kind="err">Rejected</Tag>
+                      : <Tag key={`${r._id}s`} kind="mute">{r.status}</Tag>,
+                  r.reviewedByEmail ?? "—",
+                  <span key={`${r._id}n`} className="line-clamp-2 text-[11.5px] text-ink3">{r.reviewNote ?? "—"}</span>,
+                  fmtWhen(r.decidedAt ?? r.createdAt),
+                ])} />
+            </div>
+          )}
+        </div>
+      )}
+
+      <Modal open={!!open} onClose={() => setOpen(null)} title={open ? `Fee request — ${open.doctorName}` : ""}>
+        {open && (
+          <>
+            <Card className="p-3.5">
+              <div className="grid gap-1.5 text-[12.5px]">
+                <div className="flex justify-between">
+                  <span className="text-ink3">Charging now</span>
+                  <b>{fmtINR(open.currentFee)}{open.currentFeeWasTierFee ? " (standard)" : " (personal rate)"}</b>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-ink3">Requested</span>
+                  <b className="text-gold-dark">{fmtINR(open.requestedFee)}</b>
+                </div>
+                <div className="flex justify-between border-t border-border pt-1.5">
+                  <span className="text-ink3">Change</span>
+                  <b className={open.requestedFee > open.currentFee ? "text-warn" : "text-ok"}>{delta(open)}</b>
+                </div>
+              </div>
+              <div className="mt-2.5 rounded-lg bg-ivory px-3 py-2 text-[12.5px] text-ink2">
+                <b className="block text-[11px] text-ink3">Their reason</b>
+                {open.reason}
+              </div>
+              <div className="mt-1.5 font-mono text-[10.5px] text-ink3">
+                Raised {fmtWhen(open.createdAt)}{open.requestedByEmail ? ` by ${open.requestedByEmail}` : ""}
+              </div>
+            </Card>
+
+            <div className="mt-3">
+              <In label="Approve at (₹)" type="number" value={amount} onChange={setAmount}
+                hint={`Change this to approve a different amount than the ${fmtINR(open.requestedFee)} requested.`} />
+            </div>
+            <div className="mt-3">
+              <Area label="Note to the dermatologist" value={note} onChange={setNote} rows={2}
+                placeholder="Optional when approving · required when rejecting" />
+            </div>
+
+            <Note className="mb-0 text-[11.5px]">
+              Approving sets a <B>personal rate</B> for this doctor. Everyone else on the{" "}
+              {tiers.find((t) => t.id)?.title ? "same tier" : "tier"} stays on the standard fee, and the
+              new price applies to bookings made from now on.
+            </Note>
+
+            {err && <Note kind="crit">{err}</Note>}
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <Btn kind="ghost" onClick={() => setOpen(null)}>Close</Btn>
+              <Btn kind="danger" disabled={busy || note.trim().length < 4} onClick={() => decide("reject")}>
+                Reject
+              </Btn>
+              <Btn disabled={busy || !Number(amount)} onClick={() => decide("approve")}>
+                {busy ? "Saving…" : `Approve at ${fmtINR(Number(amount) || 0)}`}
+              </Btn>
+            </div>
+          </>
+        )}
+      </Modal>
+    </>
+  );
+}
+
+function TierEditor({ tiers, onSaved }: {
+  tiers: { id: string; title: string; description?: string; fee: number }[]; onSaved: () => void;
+}) {
+  const { toast, audit } = useStore();
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(tiers);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { if (open) setDraft(tiers); }, [open, tiers]);
+
+  return (
+    <>
+      <Btn kind="ghost" onClick={() => setOpen(true)}>Standard pricing</Btn>
+      <Modal open={open} onClose={() => setOpen(false)} title="Standard consultation pricing">
+        <Note className="mt-0">
+          This is the clinic's <B>standard fee</B> for each tier — the price every dermatologist on that tier
+          charges. It is the whole cost of the consultation; nothing is added at checkout. A doctor who
+          needs a different rate raises a request for you to approve; they cannot change it themselves.
+        </Note>
+        {draft.map((t, i) => (
+          <div key={t.id} className="mb-3 rounded-xl border border-border bg-ivory p-3">
+            <In label="Title" value={t.title} onChange={(v) => setDraft((d) => d.map((x, j) => (j === i ? { ...x, title: v } : x)))} />
+            <div className="mt-2"><In label="Standard fee (₹)" type="number" value={String(t.fee)}
+              onChange={(v) => setDraft((d) => d.map((x, j) => (j === i ? { ...x, fee: Number(v) || 0 } : x)))}
+              hint="Applies to every dermatologist on this tier who is not on an approved personal rate." /></div>
+            <div className="mt-2"><Area label="Description" value={t.description ?? ""} rows={2}
+              onChange={(v) => setDraft((d) => d.map((x, j) => (j === i ? { ...x, description: v } : x)))} /></div>
+          </div>
+        ))}
+        <div className="mt-3 flex justify-end gap-2">
+          <Btn kind="ghost" onClick={() => setOpen(false)}>Cancel</Btn>
+          <Btn disabled={busy} onClick={async () => {
+            setBusy(true);
+            try {
+              for (const t of draft) await api.doctors.updateTier?.(t.id, t);
+              audit("SETTINGS_UPDATED", `Standard consultation pricing: ${draft.map((t) => `${t.title} ${t.fee}`).join(", ")}`);
+              toast("Standard pricing updated — the app and checkout follow it now");
+              onSaved(); setOpen(false);
+            } catch (e) { toast((e as Error).message); } finally { setBusy(false); }
+          }}>{busy ? "Saving…" : "Save fees"}</Btn>
+        </div>
+      </Modal>
+    </>
+  );
+}
+
+
+/* ================= DERMATOLOGIST DETAIL ================= */
+export function DermatologistDetail() {
+  const nav = useNavigate();
+  const [sp] = useSearchParams();
+  const id = sp.get("id") ?? "";
+  const { toast, audit, canManageCatalogue, branches, admin } = useStore();
+  const [range, setRange] = useState("Last 90 days");
+  const [editOpen, setEditOpen] = useState(false);
+  const [pwOpen, setPwOpen] = useState(false);
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [acctEmail, setAcctEmail] = useState("");
+  const [acctPhone, setAcctPhone] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const win = useMemo(() => {
+    const e = new Date(); const s = new Date();
+    if (range === "Last 30 days") s.setDate(e.getDate() - 29);
+    else if (range === "Last 90 days") s.setDate(e.getDate() - 89);
+    else if (range === "This year") s.setMonth(0, 1);
+    else s.setFullYear(e.getFullYear() - 5);
+    return { startDate: isoDay(s), endDate: isoDay(e) };
+  }, [range]);
+
+  const q = useApi(() => (id ? api.doctors.get(id) : Promise.reject(new Error("No dermatologist selected"))), [id]);
+  const tiers = useApi(() => api.doctors.tiers().catch(() => []), []);
+  const stats = useApi(() => (id ? api.doctors.stats(id, win) : Promise.resolve(undefined)), [id, win.startDate, win.endDate]);
+  const account = useApi(() => (id && admin?.role !== "doctor" ? api.doctors.account(id).catch(() => null) : Promise.resolve(null)), [id]);
+  useEffect(() => { if (account.data) { setAcctEmail(account.data.email); setAcctPhone(account.data.phone ?? ""); } }, [account.data]);
+
+  const d = q.data;
+  const st = stats.data;
+  const tierList = tiers.data ?? [];
+  const tierTitle = d ? (tierList.find((t) => t.id === d.tier)?.title ?? (d.tier === "senior-consultant" ? "Senior Dermatologist" : "Dermatologist")) : "";
+  const fee = d ? (d.fee || tierList.find((t) => t.id === d.tier)?.fee || 0) : 0;
+
+  const saveAccount = async () => {
+    if (!d) return;
+    setBusy(true);
+    try {
+      await api.doctors.update(d._id, { email: acctEmail.trim().toLowerCase() || null, phone: acctPhone.trim() || null } as Partial<Doctor>);
+      audit("DOCTOR_UPDATED", `${d.name} · login contact updated`, { doctorId: d._id });
+      toast("Login details saved"); q.reload(); account.reload();
+    } catch (e) { toast((e as Error).message); } finally { setBusy(false); }
+  };
+
+  return (
+    <Async q={q} label="Loading dermatologist…" rows={6}>
+      {(doc) => (
+        <Page title={doc.name}
+          sub={`${tierTitle} · ${fmtINR(fee)} per consultation · ${(doc.availableCentres ?? []).join(", ") || "no centre yet"}${doc.experienceYears ? ` · ${doc.experienceYears} yrs` : ""}`}
+          actions={<>
+            <Menu button={<Btn kind="ghost">{range} ▾</Btn>} items={["Last 30 days", "Last 90 days", "This year", "All time"].map((l) => ({ label: l, onClick: () => setRange(l) }))} />
+            <Btn kind="ghost" onClick={() => nav("/doctors")}>← All dermatologists</Btn>
+            <Btn kind="ghost" onClick={() => nav(`/doctors/schedule?doctorId=${encodeURIComponent(doc.doctorId)}`)}>Working hours</Btn>
+            <Btn kind="ghost" onClick={() => nav(`/bookings?scope=all`, { state: { specialistId: doc.doctorId } })}>Bookings</Btn>
+            {canManageCatalogue && <Btn onClick={() => setEditOpen(true)}>Edit profile</Btn>}
+          </>}>
+          <div className="grid items-start gap-3.5 xl:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="min-w-0">
+              {st && (
+                <>
+                  <Stats items={[
+                    { k: "Revenue", v: fmtCompactINR(st.summary.revenue), d: `consults ${fmtCompactINR(st.summary.consultationRevenue)} · treatments ${fmtCompactINR(st.summary.treatmentRevenue)}`, hot: true },
+                    { k: "Consultations", v: st.summary.consultations, d: `${st.summary.treatments} treatments` },
+                    { k: "Completed", v: st.summary.completed, d: `${st.summary.bookings} booked · ${st.summary.upcoming} upcoming` },
+                    { k: "No-shows", v: st.summary.noShow, d: `${st.summary.cancelled} cancelled`, tone: st.summary.noShow ? "dn" : undefined },
+                    { k: "Patients", v: st.summary.patients, d: `${st.allTime.patients} all time` },
+                    { k: "Rating", v: st.summary.avgRating ? `★ ${st.summary.avgRating}` : "—", d: `${st.summary.ratings} rating${st.summary.ratings === 1 ? "" : "s"}${st.summary.avgSessionMinutes ? ` · ${st.summary.avgSessionMinutes} min avg` : ""}` },
+                  ]} />
+                  <div className="grid gap-3 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+                    <ChartCard title="Month by month" sub="Consultations vs treatments">
+                      {st.byMonth.length > 1 ? <GBars cats={st.byMonth.map((m) => m.month.slice(2).replace("-", "/"))} series={[{ n: "Consultations", v: st.byMonth.map((m) => m.consultations) }, { n: "Treatments", v: st.byMonth.map((m) => m.treatments) }]} /> : <Empty title="Pick a longer range" />}
+                    </ChartCard>
+                    <ChartCard title="Revenue by month" hero={fmtINR(st.summary.revenue)}>
+                      {st.byMonth.length > 1 ? <AreaChart pts={st.byMonth.map((m) => m.revenue)} label="Revenue" labels={st.byMonth.map((m) => m.month.slice(5))} format={fmtCompactINR} /> : <Empty title="Pick a longer range" />}
+                    </ChartCard>
+                  </div>
+                  <div className="mt-3 grid gap-3 xl:grid-cols-2">
+                    <ChartCard title="Top services">{st.topServices.length ? <HBars rows={st.topServices.slice(0, 8).map((s) => [s.name, s.bookings, fmtINR(s.revenue)] as [string, number, string])} /> : <Empty title="No visits in this period" />}</ChartCard>
+                    <ChartCard title="By centre">{st.byCentre.length ? <HBars rows={st.byCentre.map((c) => [c.centre, c.bookings] as [string, number])} color="var(--color-c3)" /> : <Empty title="No visits in this period" />}</ChartCard>
+                  </div>
+                  <div className="mt-3">
+                    <SecH t="Recent visits" em={`· ${st.recent.length}`} />
+                    {st.recent.length === 0 ? <Empty title="No visits in this period" /> : (
+                      <DataTable cols={["When", "Guest", "Service", "Kind", "Status", "Amount", "Rating"]}
+                        onRow={(i) => nav("/bookings", { state: { open: st.recent[i]._id } })}
+                        rows={st.recent.map((r) => [
+                          fmtWhen(r.date, r.time), <B key={r._id}>{r.guest}</B>, r.service ?? "—",
+                          r.kind === "consultation" ? <Tag key={`${r._id}k`} kind="gold">Consultation</Tag> : <Tag key={`${r._id}k`} kind="mute">Treatment</Tag>,
+                          r.status, r.paymentStatus === "paid" ? fmtINR(r.amount) : <span className="text-ink3">{fmtINR(r.amount)} due</span>, r.rating ? `★ ${r.rating}` : "—",
+                        ])} />
+                    )}
+                  </div>
+                  {st.feedback.length > 0 && (
+                    <div className="mt-3"><SecH t="Guest feedback" />
+                      {st.feedback.map((f, i) => <Card key={i} className="mb-2 p-3 text-[12.5px]"><B>★ {f.rating}</B> · {f.guest} · <span className="text-ink3">{fmtDate(f.date)}</span><div className="mt-1 text-ink2">{f.feedback}</div></Card>)}
+                    </div>
+                  )}
+                </>
+              )}
+              {stats.loading && !st && <Loading label="Crunching the numbers…" rows={4} />}
+            </div>
+
+            <div className="grid gap-3">
+              <Card className="p-4">
+                <div className="flex items-center gap-3">
+                  {doc.photo ? <img src={doc.photo} alt="" className="h-16 w-16 rounded-full object-cover" /> : <span className="grid h-16 w-16 place-items-center rounded-full bg-gradient-to-br from-sage to-cream text-[18px] font-extrabold text-primary">{initials(doc.name)}</span>}
+                  <div className="min-w-0">
+                    <b className="block text-[15px] font-bold leading-tight">{doc.name}</b>
+                    <div className="text-[10.5px] font-bold uppercase tracking-[0.05em] text-gold-dark">{doc.designation ?? tierTitle}</div>
+                    <div className="mt-0.5"><Tag kind={doc.isActive ? "ok" : "mute"}>{doc.isActive ? "Live in app" : "Hidden"}</Tag></div>
+                  </div>
+                </div>
+                <div className="mt-3 grid gap-1 text-[12.5px]">
+                  <div className="flex justify-between border-b border-border py-1.5"><span className="text-ink3">Fee</span><B>{fmtINR(fee)}{doc.fee ? " (own rate)" : " (standard)"}</B></div>
+                  <div className="flex justify-between border-b border-border py-1.5"><span className="text-ink3">Experience</span><B>{doc.experienceYears ? `${doc.experienceYears} years` : "—"}</B></div>
+                  <div className="flex justify-between border-b border-border py-1.5"><span className="text-ink3">Centres</span><b className="text-right font-bold">{(doc.availableCentres ?? []).join(", ") || "—"}</b></div>
+                </div>
+                {!!doc.qualifications?.length && <div className="mt-3"><div className="text-[10.5px] font-bold uppercase tracking-wider text-ink3">Qualifications</div><div className="text-[12px] text-ink2">{doc.qualifications.join(", ")}</div></div>}
+                {!!doc.expertise?.length && <div className="mt-2"><div className="text-[10.5px] font-bold uppercase tracking-wider text-ink3">Expertise</div><div className="mt-1 flex flex-wrap gap-1">{doc.expertise.map((e) => <span key={e} className="rounded-full bg-sage px-2 py-0.5 text-[10.5px] font-semibold text-secondary">{e}</span>)}</div></div>}
+                {!!doc.achievements?.length && <div className="mt-2"><div className="text-[10.5px] font-bold uppercase tracking-wider text-ink3">Achievements</div><ul className="text-[12px] text-ink2">{doc.achievements.map((a) => <li key={a}>• {a}</li>)}</ul></div>}
+              </Card>
+
+              {canManageCatalogue && (
+                <Card className="p-4">
+                  <SecH t="Panel login" right={account.data ? <Tag kind={account.data.hasPassword ? "ok" : "warn"}>{account.data.hasPassword ? "password set" : "no password — cannot sign in"}</Tag> : undefined} />
+                  <Note className="mt-0">The clinic can set or change the login email, phone and password here at any time; the dermatologist can also change their own from My profile in their panel. Sign-in is password-only for dermatologists.</Note>
+                  <div className="grid gap-2">
+                    <In label="Login email" type="email" value={acctEmail} onChange={setAcctEmail} hint={account.data?.placeholderEmail ? "Placeholder — replace with their real address" : undefined} />
+                    <In label="Phone" value={acctPhone} onChange={setAcctPhone} placeholder="10-digit mobile" />
+                    <Btn kind="ghost" disabled={busy} onClick={saveAccount}>Save login details</Btn>
+                    <Btn kind="gold" onClick={() => { setPw(""); setPw2(""); setPwOpen(true); }}>{account.data?.hasPassword ? "Reset password" : "Set password"}</Btn>
+                    {account.data?.lastLogin && <div className="text-[11px] text-ink3">Last signed in {fmtAgo(account.data.lastLogin)}</div>}
+                  </div>
+                </Card>
+              )}
+            </div>
+          </div>
+
+          <DoctorEditor open={editOpen} doctor={doc} tiers={tierList} branchNames={branches.map((b) => b.name)}
+            onClose={() => setEditOpen(false)} onSaved={() => { setEditOpen(false); q.reload(); }} onDelete={() => undefined} />
+
+          <Modal open={pwOpen} onClose={() => setPwOpen(false)} title={`Set password — ${doc.name}`}>
+            <Note>They sign in at the Dermatologist panel with <B>{acctEmail || account.data?.email}</B> and this password — it is their only way in (no emailed codes). The new details are emailed to them automatically when you save.</Note>
+            <div className="mt-3 grid gap-2">
+              <In label="New password" type="password" value={pw} onChange={setPw} hint="At least 8 characters" />
+              <In label="Confirm" type="password" value={pw2} onChange={setPw2} />
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <Btn kind="ghost" onClick={() => setPwOpen(false)}>Cancel</Btn>
+              <Btn disabled={busy || pw.length < 8 || pw !== pw2} onClick={async () => {
+                setBusy(true);
+                try { await api.doctors.setPassword(doc._id, pw); audit("DOCTOR_UPDATED", `${doc.name} · password set`, { doctorId: doc._id }); toast("Password set"); setPwOpen(false); account.reload(); }
+                catch (e) { toast((e as Error).message); } finally { setBusy(false); }
+              }}>Save password</Btn>
+            </div>
+          </Modal>
+        </Page>
+      )}
+    </Async>
+  );
+}
+
+/** Chip editor — click a chip to remove it, type and press Enter to add one.
+    Mirrors the dermatologist panel's My profile, so both sides edit the same
+    fields with the same element. */
+function ChipList({ label, em, values, onChange, placeholder }: {
+  label: string; em?: string; values: string[]; onChange: (next: string[]) => void; placeholder?: string;
+}) {
+  const [draft, setDraft] = useState("");
+  const add = () => {
+    const v = draft.trim();
+    if (v && !values.includes(v)) onChange([...values, v]);
+    setDraft("");
+  };
+  return (
+    <div>
+      <SecH t={label} em={em} />
+      <div className="flex flex-wrap items-center gap-1.5">
+        {values.map((e, i) => (
+          <button key={`${e}${i}`} type="button" title="Remove" onClick={() => onChange(values.filter((_, j) => j !== i))}
+            className="rounded-full bg-sage px-2.5 py-1 text-[11px] font-semibold text-secondary hover:bg-err-bg hover:text-err">{e} ×</button>
+        ))}
+        <input value={draft} onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
+          onBlur={add}
+          placeholder={placeholder ?? "+ type & press Enter"}
+          className="w-60 max-w-full rounded-full border border-dashed border-border bg-surface px-2.5 py-1 text-[11px] outline-none focus:border-gold-dark" />
+      </div>
+    </div>
+  );
+}
+
+function DoctorEditor({ open, doctor, tiers, branchNames, onClose, onSaved, onDelete }: {
+  open: boolean; doctor: Doctor | null;
+  tiers: { id: string; title: string; fee: number }[];
+  branchNames: string[];
+  onClose: () => void; onSaved: () => void; onDelete: (d: Doctor) => void;
+}) {
+  const { toast, audit } = useStore();
+  const [f, setF] = useState<Partial<Doctor>>({});
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  // Panel login password — creation only; afterwards it lives on the detail page.
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    setF(doctor ?? {
+      name: "", tier: (tiers[tiers.length - 1]?.id ?? "") as Doctor["tier"], level: "dermatologist",
+      designation: tiers[tiers.length - 1]?.title ?? "Dermatologist",
+      availableCentres: [], qualifications: [], expertise: [], achievements: [],
+      experienceYears: 0, fee: 0, isActive: true, photo: "", email: "", phone: "", branch: "", displayOrder: 0,
+    });
+    setErr(null);
+    setPw(""); setPw2("");
+  }, [open, doctor?._id]);
+
+  const uploadPhoto = (file: File) => api.media.upload([file]).then((r) => r?.[0]?.url ?? "");
+
+  const set = <K extends keyof Doctor>(k: K) => (v: Doctor[K]) => setF((s) => ({ ...s, [k]: v }));
+  const save = async () => {
+    setErr(null);
+    if (!f.name?.trim()) return setErr("A name is required");
+    if (!f.tier) return setErr("Pick a consultation tier");
+    if (!(f.availableCentres ?? []).length) return setErr("Assign at least one centre — a dermatologist with no centre cannot be booked");
+    // Creating a dermatologist creates their login in the same save — name,
+    // email, phone and password are all required, and the credentials are
+    // emailed to them by the server.
+    if (!doctor) {
+      const email = f.email?.trim() ?? "";
+      if (!/^\S+@\S+\.\S+$/.test(email)) return setErr("A valid work email is required — it becomes their sign-in address");
+      if (!f.phone?.trim()) return setErr("A contact phone number is required");
+      if (!pw) return setErr("Set a panel password — it is emailed to them on save");
+      if (pw.length < 8) return setErr("The panel password must be at least 8 characters");
+      if (pw !== pw2) return setErr("The panel passwords don't match");
+    }
+
+    setBusy(true);
+    try {
+      const body: Partial<Doctor> = {
+        ...f,
+        email: f.email?.trim().toLowerCase() || null,
+        phone: f.phone?.trim() || null,
+        branch: f.branch || null,
+        displayOrder: Number(f.displayOrder) || 0,
+        experienceYears: Number(f.experienceYears) || 0,
+        fee: Number(f.fee) || 0,
+      };
+      if (doctor) {
+        await api.doctors.update(doctor._id, body);
+        audit("DOCTOR_UPDATED", `${f.name} · ${(f.availableCentres ?? []).join(", ")}`, { doctorId: doctor.doctorId });
+        toast("Dermatologist updated — the app reflects it immediately");
+      } else {
+        // One request: profile + login + credentials email, so the account
+        // exists and the dermatologist knows their password the moment we save.
+        const res = await api.doctors.create({ ...body, password: pw });
+        const created = res.data as Doctor;
+        audit("DOCTOR_CREATED", `${created.name} · ${(created.availableCentres ?? []).join(", ")}`, { doctorId: created.doctorId });
+        toast((res.message as string) ?? `${created.name} added`);
+      }
+      onSaved();
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+
+  return (
+    <Drawer open={open} onClose={onClose} title={doctor ? doctor.name : "Add dermatologist"}>
+      <div className="grid gap-3">
+        <In label="Full name" value={f.name ?? ""} onChange={set("name")} placeholder="Rickson Pereira" />
+        <UploadField label="Photo" value={f.photo ?? ""} onChange={set("photo")} upload={uploadPhoto} preview={false}
+          hint="Leave blank for an initials avatar" />
+        {f.photo && <img src={f.photo} alt="" className="h-24 w-24 rounded-full border border-border object-cover" />}
+
+        <In label="Work email" value={f.email ?? ""} onChange={set("email")} placeholder="doctor@zennara.in"
+          hint="Their sign-in address for the Dermatologist panel — dermatologists sign in with email + password (no emailed codes)" />
+        <In label="Phone (staff only — never shown in the app)" value={f.phone ?? ""} onChange={set("phone")} />
+        {!doctor && (
+          <div className="grid grid-cols-2 gap-2">
+            <In label="Panel password" type="password" value={pw} onChange={setPw}
+              hint="Required, at least 8 characters — emailed to them the moment you save." />
+            <In label="Confirm password" type="password" value={pw2} onChange={setPw2} />
+          </div>
+        )}
+
+        {tiers.length === 0 && <Note kind="crit">No consultation tiers exist yet — set them up under Standard pricing before adding dermatologists.</Note>}
+        <Sel label="Consultation tier"
+          value={tiers.find((t) => t.id === f.tier)?.title ?? f.tier ?? ""}
+          onChange={(v) => set("tier")((tiers.find((t) => t.title === v)?.id ?? f.tier) as Doctor["tier"])}
+          options={tiers.map((t) => t.title)} />
+        <In label="Personal rate (₹)" type="number" value={String(f.fee ?? 0)} onChange={(v) => set("fee")(Number(v) || 0)}
+          hint={`0 keeps them on the standard fee of ${fmtINR(tiers.find((t) => t.id === f.tier)?.fee ?? 0)}. Normally this is set by approving the dermatologist's request rather than typed here.`} />
+        {!!f.fee && f.fee > 0 && doctor && (
+          <Btn kind="ghost" disabled={busy} onClick={async () => {
+            setBusy(true); setErr(null);
+            try {
+              await api.feeRequests.clearOverride(doctor.doctorId);
+              set("fee")(0);
+              audit("DOCTOR_FEE_APPROVED", `${doctor.name} back on the standard fee`, { doctorId: doctor.doctorId });
+              toast("Back on the standard fee"); onSaved();
+            } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+          }}>
+            Put back on the standard fee ({fmtINR(tiers.find((t) => t.id === f.tier)?.fee ?? 0)})
+          </Btn>
+        )}
+
+        <Note className="mb-0">Shown in the app as <B>{f.tier === "senior-consultant" ? "Senior Dermatologist" : "Dermatologist"}</B> — the label follows the fee tier above. There are only two.</Note>
+        <div className="grid grid-cols-2 gap-2">
+          <In label="Years of experience" type="number" value={String(f.experienceYears ?? 0)}
+            onChange={(v) => set("experienceYears")(Number(v) || 0)} />
+          <In label="Order in the app" type="number" value={String(f.displayOrder ?? 0)}
+            onChange={(v) => set("displayOrder")(Number(v) || 0)} hint="Lower comes first" />
+        </div>
+        {branchNames.length > 0 && (
+          <Sel label="Home centre — profile label only" value={f.branch || "—"} onChange={(v) => set("branch")(v === "—" ? null : v)}
+            options={["—", ...branchNames]} />
+        )}
+        {!!f.branch && !(f.availableCentres ?? []).includes(f.branch) && (
+          <Note kind="crit" className="mt-0">
+            {f.branch} is set as the home centre but is not in their bookable centres below — guests will
+            read a centre they cannot book there. Add it below or clear the home centre.
+          </Note>
+        )}
+        <Area label="About them — shown on the app card" value={f.experienceNote ?? ""} onChange={set("experienceNote")} rows={2} />
+
+        <div>
+          <div className="mb-1.5 text-[11px] font-bold text-ink2">Centres — a dermatologist only appears where they practise</div>
+          {branchNames.length === 0 ? (
+            <div className="text-[12px] text-ink3">No branches configured yet.</div>
+          ) : (
+            <MultiSelect options={branchNames.map((b) => [b, b])} value={f.availableCentres ?? []}
+              onChange={set("availableCentres")} placeholder="Select centres…" searchPlaceholder="Search centres…" />
+          )}
+        </div>
+
+        <div className="grid gap-4">
+          <ChipList label="Qualifications" em="· shown on the app card" values={f.qualifications ?? []}
+            onChange={set("qualifications")} placeholder="+ e.g. MD (Dermatology) — Enter to add" />
+          <ChipList label="Expertise" em="· shown on the app card" values={f.expertise ?? []}
+            onChange={set("expertise")} placeholder="+ e.g. Acne & acne scars — Enter to add" />
+          <ChipList label="Achievements" em="· optional" values={f.achievements ?? []}
+            onChange={set("achievements")} placeholder="+ e.g. 10,000+ procedures — Enter to add" />
+        </div>
+
+        <Switch on={!!f.isActive} onChange={set("isActive")} label="Listed in the app"
+          sub="Off removes them from consultation booking without deleting history" />
+
+        <Note>Selecting centres here also updates the booking slot engine, so a dermatologist becomes bookable at those centres straight away.</Note>
+        {err && <Note kind="crit">{err}</Note>}
+
+        <div className="flex flex-wrap gap-2">
+          <Btn disabled={busy} onClick={save}>{busy ? "Saving…" : doctor ? "Save changes" : "Add dermatologist"}</Btn>
+          {doctor && <Btn kind="danger" onClick={() => onDelete(doctor)}>Delete</Btn>}
+        </div>
+      </div>
+    </Drawer>
+  );
+}
+
+
+/* ================= THERAPISTS ================= */
+/**
+ * Floor-staff accounts — the people who run treatment sessions on the tablet.
+ *
+ * Mirrors the dermatologist onboarding: name, email, phone and password are
+ * all required at creation, the credentials are emailed by the server, and
+ * sign-in is password-only. The assigned centre pins their panel's floor to
+ * that centre.
+ */
+export function Therapists() {
+  const { toast, audit, branches, canManageStaff } = useStore();
+  const q = useApi(() => api.staff.list({ role: "therapist" }), []);
+  const list = (q.data?.data ?? []) as Admin[];
+
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editing, setEditing] = useState<Admin | null>(null);
+  const [pwFor, setPwFor] = useState<Admin | null>(null);
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwErr, setPwErr] = useState<string | null>(null);
+  const [toDelete, setToDelete] = useState<Admin | null>(null);
+
+  const centreNames = (a: Admin) => {
+    const ids = (a.branchIds?.length ? a.branchIds : a.branchId ? [a.branchId] : []) as string[];
+    const names = ids.map((id) => branches.find((b) => b._id === id)?.name).filter(Boolean) as string[];
+    return names.length ? names.join(", ") : "—";
+  };
+
+  const open = (a: Admin | null) => { setEditing(a); setEditorOpen(true); };
+
+  const savePassword = async () => {
+    if (!pwFor) return;
+    if (pw.length < 8) { setPwErr("The password must be at least 8 characters"); return; }
+    if (pw !== pw2) { setPwErr("The passwords don't match"); return; }
+    setPwBusy(true); setPwErr(null);
+    try {
+      const res = await api.staff.setPassword(pwFor._id, pw);
+      audit("SETTINGS_UPDATED", `${pwFor.name} · therapist password ${pwFor.hasPassword ? "reset" : "set"}`, { staffId: pwFor._id });
+      toast((res.message as string) ?? "Password set");
+      setPwFor(null); setEditorOpen(false); q.reload();
+    } catch (e) { setPwErr((e as Error).message); } finally { setPwBusy(false); }
+  };
+
+  return (
+    <Page title="Therapists" sub={`${list.length} floor staff · they run sessions on the Therapist panel`}
+      actions={canManageStaff ? <Btn onClick={() => open(null)}>+ Add therapist</Btn> : undefined}>
+      <Hint id="therapists-how">
+        A therapist signs in to the Therapist panel with email + password only — no emailed codes. Creating one
+        here emails them their login details; the assigned centre pins their floor to that centre. Sessions,
+        stock use and service cards are written from their tablet.
+      </Hint>
+
+      <Async q={q} label="Loading therapists…" rows={5}>
+        {() => list.length === 0 ? (
+          <Empty title="No therapists yet"
+            hint="Add one — they'll get their login by email and can run sessions the moment a centre is assigned."
+            action={canManageStaff ? <Btn onClick={() => open(null)}>+ Add therapist</Btn> : undefined} />
+        ) : (
+          <>
+            <DataTable cols={["Name", "Email", "Phone", "Centres", "Password", "Last sign-in", "Status"]}
+              onRow={canManageStaff ? (i) => open(list[i]) : undefined}
+              rows={list.map((a) => [
+                <B key={a._id}>{a.name}</B>,
+                a.email,
+                a.phone || "—",
+                centreNames(a),
+                a.hasPassword ? <Tag key={`${a._id}p`} kind="ok">set</Tag> : <Tag key={`${a._id}p`} kind="warn">none — cannot sign in</Tag>,
+                a.lastLogin ? fmtAgo(a.lastLogin) : "never",
+                a.isActive ? <Tag key={`${a._id}s`} kind="ok">active</Tag> : <Tag key={`${a._id}s`} kind="mute">inactive</Tag>,
+              ])} />
+            {canManageStaff && <div className="mt-2 text-[11.5px] text-ink3">Click a therapist to open their details — password, centres, status and delete live there.</div>}
+          </>
+        )}
+      </Async>
+
+      <TherapistEditor open={editorOpen} therapist={editing} branches={branches.map((b) => [b._id, b.name] as [string, string])}
+        onClose={() => setEditorOpen(false)}
+        onSaved={() => { setEditorOpen(false); q.reload(); }}
+        onPassword={() => { if (editing) { setPw(""); setPw2(""); setPwErr(null); setPwFor(editing); } }}
+        onToggle={async () => {
+          if (!editing) return;
+          try {
+            await api.staff.toggle(editing._id);
+            audit("SETTINGS_UPDATED", `${editing.name} · therapist ${editing.isActive ? "deactivated" : "activated"}`, { staffId: editing._id });
+            toast(editing.isActive ? `${editing.name} deactivated — signed out everywhere` : `${editing.name} activated`);
+            setEditorOpen(false); q.reload();
+          } catch (e) { toast((e as Error).message); }
+        }}
+        onDelete={() => { if (editing) { setEditorOpen(false); setToDelete(editing); } }} />
+
+      <Modal open={!!pwFor} onClose={() => setPwFor(null)} title={`${pwFor?.hasPassword ? "Reset" : "Set"} password — ${pwFor?.name ?? ""}`}>
+        <Note>They sign in at the Therapist panel with <B>{pwFor?.email}</B> and this password — it is their only
+          way in (no emailed codes). The new details are emailed to them automatically when you save.</Note>
+        <div className="mt-3 grid gap-2.5">
+          <In label="New password" type="password" value={pw} onChange={setPw} hint="At least 8 characters" />
+          <In label="Confirm" type="password" value={pw2} onChange={setPw2} />
+          {pwErr && <Note kind="crit" className="mb-0">{pwErr}</Note>}
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <Btn kind="ghost" onClick={() => setPwFor(null)}>Cancel</Btn>
+          <Btn disabled={pwBusy || !pw || !pw2} onClick={savePassword}>{pwBusy ? "Saving…" : "Save password"}</Btn>
+        </div>
+      </Modal>
+
+      <DeleteModal open={!!toDelete} onClose={() => setToDelete(null)}
+        what={toDelete ? `${toDelete.name} (therapist)` : "this therapist"}
+        onConfirm={async (reason) => {
+          if (!toDelete) return;
+          try {
+            await api.staff.remove(toDelete._id);
+            audit("SETTINGS_UPDATED", `${toDelete.name} · therapist deleted — ${reason}`, { staffId: toDelete._id });
+            toast(`${toDelete.name} deleted`);
+            setToDelete(null); q.reload();
+          } catch (e) { toast((e as Error).message); }
+        }} />
+    </Page>
+  );
+}
+
+function TherapistEditor({ open, therapist, branches, onClose, onSaved, onPassword, onToggle, onDelete }: {
+  open: boolean; therapist: Admin | null; branches: [string, string][];
+  onClose: () => void; onSaved: () => void;
+  onPassword?: () => void; onToggle?: () => void; onDelete?: () => void;
+}) {
+  const { toast, audit } = useStore();
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [branchIds, setBranchIds] = useState<string[]>([]);
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setName(therapist?.name ?? "");
+    setEmail(therapist?.email ?? "");
+    setPhone(therapist?.phone ?? "");
+    setBranchIds(((therapist?.branchIds?.length ? therapist.branchIds : therapist?.branchId ? [therapist.branchId] : []) as string[]) ?? []);
+    setPw(""); setPw2(""); setErr(null);
+  }, [open, therapist?._id]);
+
+  const save = async () => {
+    setErr(null);
+    if (!name.trim()) return setErr("A name is required");
+    const addr = email.trim().toLowerCase();
+    if (!/^\S+@\S+\.\S+$/.test(addr)) return setErr("A valid email is required — it becomes their sign-in address");
+    if (!therapist) {
+      if (!phone.trim()) return setErr("A phone number is required");
+      if (!pw) return setErr("Set a password — it is emailed to them on save");
+      if (pw.length < 8) return setErr("The password must be at least 8 characters");
+      if (pw !== pw2) return setErr("The passwords don't match");
+    }
+    setBusy(true);
+    try {
+      if (therapist) {
+        await api.staff.update(therapist._id, { name: name.trim(), phone: phone.trim() || null, branchIds } as Partial<Admin>);
+        audit("SETTINGS_UPDATED", `${name.trim()} · therapist updated`, { staffId: therapist._id });
+        toast("Therapist updated");
+      } else {
+        const res = await api.staff.create({
+          email: addr, name: name.trim(), role: "therapist",
+          phone: phone.trim() || null, branchIds, password: pw,
+        });
+        const created = res.data as Admin;
+        audit("SETTINGS_UPDATED", `Created therapist ${created.email}`, { staffId: created._id });
+        toast((res.message as string) ?? `${created.name} added`);
+      }
+      onSaved();
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+
+  return (
+    <Drawer open={open} onClose={onClose} title={therapist ? therapist.name : "Add therapist"}>
+      <div className="grid gap-3">
+        <In label="Full name" value={name} onChange={setName} placeholder="Asha Verma" />
+        <In label="Work email" type="email" value={email} onChange={setEmail} readOnly={!!therapist}
+          placeholder="therapist@zennara.in"
+          hint={therapist ? "Their sign-in address — fixed once created" : "Their sign-in address for the Therapist panel — password-only, no emailed codes"} />
+        <In label="Phone (staff only — never shown to guests)" value={phone} onChange={setPhone} />
+        <div>
+          <div className="mb-1.5 text-[11px] font-bold text-ink2">Centres — their floor tablet is pinned to these</div>
+          {branches.length === 0 ? (
+            <div className="text-[12px] text-ink3">No branches configured yet.</div>
+          ) : (
+            <MultiSelect options={branches} value={branchIds} onChange={setBranchIds}
+              placeholder="Select centres…" searchPlaceholder="Search centres…" />
+          )}
+          <div className="mt-1 text-[11px] text-ink3">One centre pins their panel to it; several let them switch between those centres only.</div>
+        </div>
+        {!therapist && (
+          <div className="grid grid-cols-2 gap-2">
+            <In label="Panel password" type="password" value={pw} onChange={setPw}
+              hint="Required, at least 8 characters — emailed to them the moment you save." />
+            <In label="Confirm password" type="password" value={pw2} onChange={setPw2} />
+          </div>
+        )}
+        {err && <Note kind="crit">{err}</Note>}
+        <div className="flex gap-2">
+          <Btn disabled={busy} onClick={save}>{busy ? "Saving…" : therapist ? "Save changes" : "Add therapist"}</Btn>
+          <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
+        </div>
+
+        {therapist && (
+          <>
+            <SecH t="Account" em="· password, access, removal" />
+            <div className="grid gap-2">
+              <div className="flex items-center justify-between rounded-xl border border-border bg-ivory px-3.5 py-2.5">
+                <div>
+                  <div className="text-[12.5px] font-bold">Password</div>
+                  <div className="text-[11px] text-ink3">
+                    {therapist.hasPassword ? "Set — they sign in with it" : "Not set — they cannot sign in yet"}
+                    {therapist.lastLogin ? ` · last sign-in ${fmtAgo(therapist.lastLogin)}` : ""}
+                  </div>
+                </div>
+                <Btn kind="gold" onClick={onPassword}>{therapist.hasPassword ? "Reset" : "Set"}</Btn>
+              </div>
+              <div className="flex items-center justify-between rounded-xl border border-border bg-ivory px-3.5 py-2.5">
+                <div>
+                  <div className="text-[12.5px] font-bold">{therapist.isActive ? "Active" : "Deactivated"}</div>
+                  <div className="text-[11px] text-ink3">
+                    {therapist.isActive ? "Deactivating signs them out everywhere immediately" : "Activate to let them sign in again"}
+                  </div>
+                </div>
+                <Btn kind="ghost" onClick={onToggle}>{therapist.isActive ? "Deactivate" : "Activate"}</Btn>
+              </div>
+              <Btn kind="danger" onClick={onDelete}>Delete therapist</Btn>
+            </div>
+          </>
+        )}
+      </div>
+    </Drawer>
+  );
+}
