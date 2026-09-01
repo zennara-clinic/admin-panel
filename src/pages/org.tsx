@@ -12,8 +12,9 @@ import { useQueryNumber, useQueryPage, useQueryString } from "../lib/useListStat
 import {
   fmtCompactINR, fmtDate, fmtDateFull, fmtINR, fmtWhen, initials, isoDay, mapToRows, nameOf, pct,
 } from "../lib/format";
-import type { Admin, AdminRole, AuditEntry, Branch, ConsultationReview, ProductReview, ServiceReview } from "../lib/types";
+import type { Admin, AdminRole, AuditEntry, Branch, ConsultationReview, PermissionGroup, PermissionKey, ProductReview, Role, ServiceReview } from "../lib/types";
 import { SESSION_SLOT_MINUTES } from "../lib/scheduling";
+import { RolesManager, StaffAccessFields, RoleChip, useCatalog } from "./access";
 
 /* ================= BRANCHES ================= */
 const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
@@ -32,7 +33,7 @@ function branchToday(b: Branch, iso = isoDay()) {
 }
 
 export function Branches() {
-  const { toast, audit, reloadBranches, isSuperAdmin } = useStore();
+  const { toast, audit, reloadBranches, can } = useStore();
   const [sel, setSel] = useState<Branch | null>(null);
   const [view, setView] = useState<Branch | null>(null);
   const [addOpen, setAddOpen] = useState(false);
@@ -211,7 +212,7 @@ export function Branches() {
       <Note>
         Deleting a branch <B>deactivates</B> it rather than erasing it, because bookings, chats and stock still point
         at it. An inactive centre disappears from the app's picker and from the branch switcher here.
-        {isSuperAdmin ? (
+        {can("branches.manage") ? (
           <label className="mt-2 flex items-center gap-2 text-[12px]">
             <input type="checkbox" checked={permanent} onChange={(e) => setPermanent(e.target.checked)} className="h-4 w-4" />
             Super admin: erase permanently on the next delete (cannot be undone; history keeps the name only)
@@ -965,36 +966,64 @@ const Row = ({ k, v }: { k: string; v: string }) => (
 type StaffRow = Admin & { canSignIn?: boolean; isVerified?: boolean };
 
 export function Roles() {
+  const { can } = useStore();
+  const canViewStaff = can("staff.view");
+  const canViewRoles = can("roles.view");
+  // Land on whichever tab the account can actually see.
+  const [tab, setTab] = useState(canViewStaff ? 0 : 1);
+
+  const rolesQ = useApi(() => (canViewRoles || canViewStaff ? api.roles.list() : Promise.resolve([] as Role[])), []);
+  const roleCount = rolesQ.data?.length;
+
+  const tabs: [string, (number | string)?][] = [];
+  if (canViewStaff) tabs.push(["Staff"]);
+  if (canViewRoles) tabs.push(["Roles & permissions", roleCount]);
+  const showTabs = tabs.length > 1;
+  // Map the visible tab index to which panel to render.
+  const active = showTabs ? tab : (canViewStaff ? 0 : 1);
+
+  return (
+    <Page title="Staff & roles" sub="Who signs into the panel, and exactly what each person can do">
+      {showTabs && <Tabs items={tabs} active={tab} onChange={setTab} />}
+      {active === 0 ? <StaffTab roles={rolesQ.data ?? []} /> : <RolesManager />}
+    </Page>
+  );
+}
+
+function StaffTab({ roles }: { roles: Role[] }) {
   const { toast, audit, canManageStaff, admin } = useStore();
   const [invOpen, setInvOpen] = useState(false);
   const [sel, setSel] = useState<StaffRow | null>(null);
   const [del, setDel] = useState<StaffRow | null>(null);
+  const [pwFor, setPwFor] = useState<StaffRow | null>(null);
   const [search, setSearch] = useState("");
   const debounced = useDebounced(search);
 
   const q = useApi(() => api.staff.list({ search: debounced || undefined }), [debounced]);
   const rows = (q.data?.data ?? []) as StaffRow[];
   const stats = q.data?.stats as { total?: number; active?: number; byRole?: Record<string, number> } | undefined;
+  const catalog = useCatalog();
+  const roleName = (id?: string | null) => roles.find((r) => r._id === id)?.name ?? null;
   // Doctor profiles, for linking a `doctor` login to the profile it edits.
   const doctors = useApi(() => api.doctors.list({ includeInactive: "true" }).then((r) => r.data ?? []), []);
   const doctorOptions = ["— not linked —", ...(doctors.data ?? []).map((d) => `${d.name} (${d.email || "no email"})`)];
   const doctorByLabel = (label: string) => (doctors.data ?? []).find((d) => `${d.name} (${d.email || "no email"})` === label)?._id ?? null;
   const doctorLabel = (id?: string | null) => { const d = (doctors.data ?? []).find((x) => x._id === id); return d ? `${d.name} (${d.email || "no email"})` : "— not linked —"; };
 
-  const ROLES: AdminRole[] = ["super_admin", "doctor", "therapist"];
+  const ROLES: AdminRole[] = ["super_admin", "staff", "doctor", "therapist"];
 
   return (
-    <Page title="Staff & roles" sub="Who can sign into the panel, and which panel they land on"
-      actions={canManageStaff ? <Btn onClick={() => setInvOpen(true)}>+ Add staff</Btn> : undefined}>
+    <>
+      {canManageStaff && <div className="mb-3 flex justify-end"><Btn onClick={() => setInvOpen(true)}>+ Add staff</Btn></div>}
       <Hint id="roles-live" steps={[
-        "Every panel account lives here — super admins, dermatologists and therapists all sign in with the same email-and-code flow.",
-        "The role decides which panel opens: Super Admin/Admin/Reception land on the admin panel, Dermatologist on My day, Therapist on the floor.",
-        "An account also has to be on the server's ADMIN_EMAILS allow-list before it can sign in — the list below says when it isn't.",
+        "Every panel account lives here — super admins, staff, dermatologists and therapists.",
+        "A Staff account gets a custom role (a bundle of permissions) — build roles on the Roles & permissions tab.",
+        "Super admins hold every permission; dermatologists and therapists sign into their own panels.",
         "Deactivating blocks sign-in immediately but keeps every audit entry that person created.",
       ]} />
 
       {!canManageStaff && (
-        <Note kind="crit">You can see the team, but only an Admin or Super Admin can add, change or remove staff accounts.</Note>
+        <Note kind="crit">You can see the team, but only someone with the “manage staff” permission can add, change or remove accounts.</Note>
       )}
 
       {stats && (
@@ -1026,7 +1055,9 @@ export function Roles() {
                 <B>{s.name || s.email.split("@")[0]}</B>
               </span>,
               <span key={`${s._id}e`} className="text-[11.5px]">{s.email}</span>,
-              <Tag key={`${s._id}r`} kind={s.role === "super_admin" ? "gold" : "info"}>{ROLE_LABEL[s.role]}</Tag>,
+              s.role === "staff"
+                ? (roleName(s.customRoleId) ? <RoleChip key={`${s._id}r`} role={{ name: roleName(s.customRoleId)!, color: roles.find((r) => r._id === s.customRoleId)?.color }} /> : <Tag key={`${s._id}r`} kind="warn">no role</Tag>)
+                : <Tag key={`${s._id}r`} kind={s.role === "super_admin" ? "gold" : "info"}>{ROLE_LABEL[s.role]}</Tag>,
               s.role === "doctor" ? "Dermatologist panel" : s.role === "therapist" ? "Floor panel" : "Admin panel",
               s.lastLogin ? fmtWhen(s.lastLogin) : "Never",
               !s.isActive
@@ -1072,13 +1103,32 @@ export function Roles() {
                   <div className="-mt-2 text-[10.5px] text-ink3">Without a link the dermatologist panel matches on email; linking here is explicit and survives an email change.</div>
                 )}
 
+                {sel.role === "staff" && (
+                  <StaffAccessFields
+                    roles={roles}
+                    groups={catalog.data ?? []}
+                    customRoleId={sel.customRoleId ?? null}
+                    permissions={new Set(sel.permissions ?? [])}
+                    onRole={(id) => setSel({ ...sel, customRoleId: id })}
+                    onPermissions={(next) => setSel({ ...sel, permissions: [...next] })}
+                  />
+                )}
+
                 <Btn onClick={async () => {
                   try {
-                    await api.staff.update(sel._id, { name: sel.name, role: sel.role, doctorId: sel.role === "doctor" ? (sel.doctorId ?? null) : null });
+                    await api.staff.update(sel._id, {
+                      name: sel.name, role: sel.role,
+                      doctorId: sel.role === "doctor" ? (sel.doctorId ?? null) : null,
+                      ...(sel.role === "staff" ? { customRoleId: sel.customRoleId ?? null, permissions: sel.permissions ?? [] } : {}),
+                    });
                     audit("SETTINGS_UPDATED", `Staff ${sel.email} → ${ROLE_LABEL[sel.role]}`, { staffId: sel._id });
                     toast("Staff account updated"); q.reload(); setSel(null);
                   } catch (e) { toast((e as Error).message); }
                 }}>Save changes</Btn>
+
+                {sel.role === "staff" && (
+                  <Btn kind="ghost" onClick={() => setPwFor(sel)}>Set / reset password</Btn>
+                )}
 
                 {sel._id !== admin?._id && (
                   <>
@@ -1094,7 +1144,7 @@ export function Roles() {
                 )}
               </>
             ) : (
-              <Note>Only an Admin or Super Admin can change staff accounts.</Note>
+              <Note>Only someone with the “manage staff” permission can change staff accounts.</Note>
             )}
 
             <Note className="text-[11.5px]">
@@ -1105,9 +1155,11 @@ export function Roles() {
         )}
       </Drawer>
 
-      <Modal open={invOpen} onClose={() => setInvOpen(false)} title="Add staff account">
-        <AddStaffForm onDone={() => { setInvOpen(false); q.reload(); }} />
+      <Modal open={invOpen} onClose={() => setInvOpen(false)} title="Add staff account" wide>
+        <AddStaffForm roles={roles} groups={catalog.data ?? []} onDone={() => { setInvOpen(false); q.reload(); }} />
       </Modal>
+
+      <StaffPasswordModal staff={pwFor} onClose={() => setPwFor(null)} onSaved={() => { setPwFor(null); q.reload(); }} />
 
       <DeleteModal open={!!del} onClose={() => setDel(null)} what={del ? `staff account "${del.email}"` : ""}
         onConfirm={async (reason) => {
@@ -1118,59 +1170,122 @@ export function Roles() {
             toast("Staff account removed"); q.reload();
           } catch (e) { toast((e as Error).message); }
         }} />
-    </Page>
+    </>
   );
 }
 
-function AddStaffForm({ onDone }: { onDone: () => void }) {
+/** Set / reset a staff member's panel password (staff sign in with a password). */
+function StaffPasswordModal({ staff, onClose, onSaved }: { staff: StaffRow | null; onClose: () => void; onSaved: () => void }) {
+  const { toast, audit } = useStore();
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  if (!staff) return null;
+  return (
+    <Modal open onClose={onClose} title={`${staff.hasPassword ? "Reset" : "Set"} password — ${staff.name || staff.email}`}>
+      <Note>They sign in at the admin panel with <B>{staff.email}</B> and this password. At least 8 characters.</Note>
+      <div className="mt-3 grid gap-2.5">
+        <In label="New password" type="password" value={pw} onChange={setPw} />
+        <In label="Confirm" type="password" value={pw2} onChange={setPw2} />
+        {err && <Note kind="crit" className="mb-0">{err}</Note>}
+      </div>
+      <div className="mt-4 flex justify-end gap-2">
+        <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
+        <Btn disabled={busy || pw.length < 8 || pw !== pw2} onClick={async () => {
+          setBusy(true); setErr(null);
+          try {
+            await api.staff.setPassword(staff._id, pw);
+            audit("SETTINGS_UPDATED", `${staff.email} · staff password ${staff.hasPassword ? "reset" : "set"}`, { staffId: staff._id });
+            toast("Password saved"); onSaved();
+          } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+        }}>{busy ? "Saving…" : "Save password"}</Btn>
+      </div>
+    </Modal>
+  );
+}
+
+function AddStaffForm({ roles, groups, onDone }: { roles: Role[]; groups: PermissionGroup[]; onDone: () => void }) {
   const { toast, audit } = useStore();
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
-  const [role, setRole] = useState<AdminRole>("doctor");
+  const [role, setRole] = useState<AdminRole>("staff");
   const [doctorId, setDoctorId] = useState<string | null>(null);
+  const [customRoleId, setCustomRoleId] = useState<string | null>(roles[0]?._id ?? null);
+  const [perms, setPerms] = useState<Set<PermissionKey>>(new Set());
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const roleInfo = useApi(() => api.staff.roles().catch(() => [] as { id: string; label: string; description?: string }[]), []);
   const doctors = useApi(() => api.doctors.list({ includeInactive: "true" }).then((r) => r.data ?? []), []);
   const doctorOptions = ["— not linked —", ...(doctors.data ?? []).map((d) => `${d.name} (${d.email || "no email"})`)];
 
-  const ROLES: AdminRole[] = ["super_admin", "doctor", "therapist"];
-  const describe = (r: AdminRole) => roleInfo.data?.find((x) => x.id === r)?.description;
+  // 'staff' is the default — the new granular admin-panel account.
+  const ROLES: AdminRole[] = ["staff", "super_admin", "doctor", "therapist"];
+  const needsPassword = role === "staff";
+
+  const submit = async () => {
+    setBusy(true); setErr(null);
+    try {
+      if (needsPassword) {
+        if (pw.length < 8) { setErr("Set a password of at least 8 characters"); setBusy(false); return; }
+        if (pw !== pw2) { setErr("The passwords don't match"); setBusy(false); return; }
+      }
+      const res = await api.staff.create({
+        email: email.trim().toLowerCase(), name: name.trim() || undefined, role,
+        doctorId: role === "doctor" ? doctorId : null,
+        ...(role === "staff" ? { customRoleId, permissions: [...perms], password: pw } : {}),
+      });
+      const created = res.data as Admin;
+      audit("SETTINGS_UPDATED", `Created staff ${created.email} as ${ROLE_LABEL[role]}`, { staffId: created._id });
+      toast(`${created.email} added as ${ROLE_LABEL[role]}`);
+      onDone();
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
 
   return (
     <>
       <div className="grid gap-3">
         <In label="Work email" type="email" value={email} onChange={setEmail} placeholder="name@zennara.in"
-          hint="This is what they sign in with — a one-time code goes to this address." />
+          hint={needsPassword ? "Their sign-in address for the admin panel." : "A one-time code goes to this address at sign-in."} />
         <In label="Display name" value={name} onChange={setName} placeholder="Leave blank to use the email prefix" />
-        <Sel label="Role" value={ROLE_LABEL[role]}
-          onChange={(v) => setRole((Object.keys(ROLE_LABEL) as AdminRole[]).find((r) => ROLE_LABEL[r] === v) ?? "doctor")}
+        <Sel label="Account type" value={ROLE_LABEL[role]}
+          onChange={(v) => setRole((Object.keys(ROLE_LABEL) as AdminRole[]).find((r) => ROLE_LABEL[r] === v) ?? "staff")}
           options={ROLES.map((r) => ROLE_LABEL[r])} />
-        {describe(role) && <div className="-mt-2 text-[10.5px] text-ink3">{describe(role)}</div>}
+
+        {role === "staff" && (
+          <>
+            <StaffAccessFields
+              roles={roles} groups={groups}
+              customRoleId={customRoleId} permissions={perms}
+              onRole={setCustomRoleId} onPermissions={setPerms}
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <In label="Password" type="password" value={pw} onChange={setPw} hint="At least 8 characters" />
+              <In label="Confirm" type="password" value={pw2} onChange={setPw2} />
+            </div>
+          </>
+        )}
+
         {role === "doctor" && (
           <Sel label="Dermatologist profile (optional)" value={doctorOptions.find((o) => o.startsWith((doctors.data ?? []).find((d) => d._id === doctorId)?.name ?? "\u0000")) ?? "— not linked —"}
             onChange={(v) => setDoctorId((doctors.data ?? []).find((d) => `${d.name} (${d.email || "no email"})` === v)?._id ?? null)}
             options={doctorOptions} />
         )}
       </div>
-      <Note>
-        There is no password. Signing in emails a six-digit code to this address — <B>once</B> the address is also on the
-        server's <code>ADMIN_EMAILS</code> allow-list (an environment variable; the staff list flags accounts that aren't on it).
-      </Note>
+
+      {role !== "staff" && (
+        <Note>
+          {role === "super_admin"
+            ? <>Super admins hold every permission and sign in with a one-time code — the email must be on the server's <code>ADMIN_EMAILS</code> allow-list.</>
+            : <>Dermatologists and therapists sign into their own panels; set their password from the {role === "doctor" ? "Dermatologists" : "Therapists"} page.</>}
+        </Note>
+      )}
       {err && <Note kind="crit">{err}</Note>}
       <div className="mt-3 flex justify-end gap-2">
         <Btn kind="ghost" onClick={onDone}>Cancel</Btn>
-        <Btn disabled={busy || !/^\S+@\S+\.\S+$/.test(email)} onClick={async () => {
-          setBusy(true); setErr(null);
-          try {
-            const res = await api.staff.create({ email: email.trim().toLowerCase(), name: name.trim() || undefined, role, doctorId: role === "doctor" ? doctorId : null });
-            const created = res.data as Admin;
-            audit("SETTINGS_UPDATED", `Created staff ${created.email} as ${ROLE_LABEL[role]}`, { staffId: created._id });
-            toast(`${created.email} added as ${ROLE_LABEL[role]}`);
-            onDone();
-          } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
-        }}>{busy ? "Adding…" : "Add staff"}</Btn>
+        <Btn disabled={busy || !/^\S+@\S+\.\S+$/.test(email)} onClick={submit}>{busy ? "Adding…" : "Add staff"}</Btn>
       </div>
     </>
   );

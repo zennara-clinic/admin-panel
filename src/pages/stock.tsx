@@ -110,7 +110,7 @@ function ProductSearch({ products, value, loading, error, onChange, onSelect }: 
 }
 
 export function Inventory() {
-  const { toast, audit, canManageCatalogue } = useStore();
+  const { toast, audit, can } = useStore();
   const [sp] = useSearchParams();
   const [tab, setTab] = useState(0);
   const [search, setSearch] = useState("");
@@ -169,7 +169,7 @@ export function Inventory() {
           Export CSV
         </Btn>
         <Btn kind="ghost" onClick={() => window.print()}>Print report</Btn>
-        {canManageCatalogue && <Btn onClick={() => setAddOpen(true)}>+ Add item</Btn>}
+        {can("inventory.manage") && <Btn onClick={() => setAddOpen(true)}>+ Add item</Btn>}
       </>}>
 
       <Hint id="inventory-live">Batch and expiry are columns rather than detail fields, because a recall question is “which batch, and who received it” — it has to be answerable at a glance. Anything at or below its re-order level shows in the second tab; that is your ordering list.</Hint>
@@ -200,7 +200,7 @@ export function Inventory() {
         {() => list.length === 0 ? (
           <Empty title={tab === 0 ? "No stock items yet" : "Nothing in this bucket"}
             hint={tab === 0 ? "Add the consumables and retail stock the clinic holds." : "Good news — nothing needs attention here."}
-            action={tab === 0 && canManageCatalogue ? <Btn onClick={() => setAddOpen(true)}>+ Add item</Btn> : undefined} />
+            action={tab === 0 && can("inventory.manage") ? <Btn onClick={() => setAddOpen(true)}>+ Add item</Btn> : undefined} />
         ) : (
           <DataTable cols={["Item", "Category", "Batch", "Expiry", "On hand", "Re-order", "Value", "Vendor", "Status"]}
             onRow={(i) => setSel(list[i])}
@@ -444,7 +444,7 @@ function ItemEditor({ open, item, onClose, onSaved, onDelete }: {
 
 /* ================= VENDORS ================= */
 export function Vendors() {
-  const { toast, audit, canManageCatalogue } = useStore();
+  const { toast, audit, can } = useStore();
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("All");
   const [sel, setSel] = useState<Vendor | null>(null);
@@ -470,7 +470,7 @@ export function Vendors() {
           ["Vendor", "Contact", "Email", "Phone", "GSTIN", "PAN", "City", "Rating", "Products", "Status"],
           rows.map((v) => [v.name, v.contactPerson ?? "", v.email ?? "", v.phone ?? "", v.gstNumber ?? "",
             v.panNumber ?? "", v.city ?? "", v.rating ?? 0, v.productsSupplied ?? v.productsCount ?? 0, v.status]))}>Export CSV</Btn>
-        {canManageCatalogue && <Btn onClick={() => setAddOpen(true)}>+ Vendor</Btn>}
+        {can("vendors.manage") && <Btn onClick={() => setAddOpen(true)}>+ Vendor</Btn>}
       </>}>
       {Object.keys(s).length > 0 && (
         <Stats items={Object.entries(s).slice(0, 6).map(([k, v]) => ({
@@ -533,7 +533,7 @@ export function Vendors() {
 function VendorEditor({ open, vendor, onClose, onSaved, onDelete }: {
   open: boolean; vendor: Vendor | null; onClose: () => void; onSaved: () => void; onDelete: (v: Vendor) => void;
 }) {
-  const { toast, audit, canManageCatalogue } = useStore();
+  const { toast, audit, can } = useStore();
   const [f, setF] = useState<Partial<Vendor> & { bankDetails?: Record<string, string> }>({});
   const [showBank, setShowBank] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -617,7 +617,7 @@ function VendorEditor({ open, vendor, onClose, onSaved, onDelete }: {
         </div>
 
         <SecH t="Bank details" right={
-          canManageCatalogue ? <Btn kind="ghost" className="!py-1 !text-[11.5px]" disabled={bankBusy} onClick={reveal}>{bankBusy ? "…" : showBank ? "Hide" : "Reveal (audited)"}</Btn> : <Tag kind="mute">admin only</Tag>} />
+          can("vendors.bank") ? <Btn kind="ghost" className="!py-1 !text-[11.5px]" disabled={bankBusy} onClick={reveal}>{bankBusy ? "…" : showBank ? "Hide" : "Reveal (audited)"}</Btn> : <Tag kind="mute">admin only</Tag>} />
         {showBank ? (
           <div className="grid gap-3">
             <In label="Account holder" value={bank.accountHolderName ?? ""} onChange={setBank("accountHolderName")} />
@@ -636,7 +636,7 @@ function VendorEditor({ open, vendor, onClose, onSaved, onDelete }: {
         <Area label="Notes" value={f.notes ?? ""} onChange={set("notes")} rows={2} />
 
         {err && <Note kind="crit">{err}</Note>}
-        {canManageCatalogue ? (
+        {can("vendors.manage") ? (
           <div className="flex flex-wrap gap-2">
             <Btn disabled={busy} onClick={save}>{busy ? "Saving…" : vendor ? "Save changes" : "Create vendor"}</Btn>
             {vendor && <Btn kind="danger" onClick={() => onDelete(vendor)}>Delete</Btn>}

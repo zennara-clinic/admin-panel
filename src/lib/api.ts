@@ -13,6 +13,7 @@ import type {
   DoctorFeeRequest, Formulation, MyFee, ScheduleDay, SlotDay,
   Id, Inventory, Notification, Package, PackageAssignment, PreConsultForm, Product, ProductOrder,
   ProductReview, ServiceCard, ServiceReview, ServiceType, SupportMessage, TaxonomyTree, User, Vendor,
+  Role, PermissionGroup, PermissionKey,
 } from "./types";
 import type { VisitCodeLog } from "./types";
 
@@ -733,7 +734,7 @@ export const staff = {
   list: (q?: Query) => requestRaw<Admin[]>("/admin/staff", { query: q }),
   roles: () => request<{ id: string; label: string; description?: string }[]>("/admin/staff/roles"),
   /** `password` sets the login in the same request — the server emails the credentials. */
-  create: (body: { email: string; name?: string; role: string; doctorId?: Id | null; phone?: string | null; branchId?: Id | null; branchIds?: Id[]; password?: string }) =>
+  create: (body: { email: string; name?: string; role: string; doctorId?: Id | null; phone?: string | null; branchId?: Id | null; branchIds?: Id[]; password?: string; customRoleId?: Id | null; permissions?: PermissionKey[] }) =>
     requestRaw<Admin>("/admin/staff", { method: "POST", body }),
   update: (id: Id, body: Partial<Admin>) => request<Admin>(`/admin/staff/${id}`, { method: "PUT", body }),
   /** Set / reset a staff password — the new details are emailed to them. */
@@ -877,11 +878,23 @@ export const contactChange = {
     request<ContactChangeRow[]>("/admin/contact-change-requests", { query: q }),
 };
 
+/** RBAC — custom roles & the permission catalog. */
+export const roles = {
+  /** The permission catalog (groups + keys) the server enforces. */
+  catalog: () => request<{ groups: PermissionGroup[] }>("/admin/roles/catalog"),
+  list: () => request<Role[]>("/admin/roles"),
+  create: (body: { name: string; description?: string; color?: string; permissions: PermissionKey[] }) =>
+    requestRaw<Role>("/admin/roles", { method: "POST", body }),
+  update: (id: Id, body: Partial<Pick<Role, "name" | "description" | "color" | "permissions" | "isActive">>) =>
+    request<Role>(`/admin/roles/${id}`, { method: "PUT", body }),
+  remove: (id: Id) => requestRaw(`/admin/roles/${id}`, { method: "DELETE" }),
+};
+
 export const api = {
   auth, branches, patients, bookings, services, serviceTypes, categories, packages, packageAssignments, consultationNotes,
   doctors, availability, schedules, feeRequests, products, brands, formulations, coupons, orders, inventory, vendors,
   appStudio, media, chat, notifications, reviews, support, preConsult, consentForms,
-  serviceCards, analytics, audit, staff, zenoti, contactChange, banners,
+  serviceCards, analytics, audit, staff, zenoti, contactChange, banners, roles,
 };
 
 export default api;

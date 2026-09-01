@@ -13,7 +13,7 @@ import type { Brand, Coupon, Formulation, OrderStatus, Product, ProductOrder } f
 
 /* ================= PRODUCTS ================= */
 export function Products() {
-  const { toast, audit, canManageCatalogue } = useStore();
+  const { toast, audit, can } = useStore();
   const loc = useLocation();
   const [tab, setTab] = useState(0);
   const [search, setSearch] = useState("");
@@ -51,9 +51,9 @@ export function Products() {
     else if (!q.loading) api.products.get(id).then((p) => p && setSel(p)).catch(() => undefined);
   }, [loc.state, rows.length, q.loading]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const { toast: toastMsg, audit: auditMsg, canManageCatalogue: canEdit } = useStore();
+  const { toast: toastMsg, audit: auditMsg } = useStore();
   const quickToggle = async (p: Product) => {
-    if (!canEdit) return;
+    if (!can("products.manage")) return;
     try {
       await api.products.toggle(p._id);
       auditMsg("PRODUCT_UPDATED", `${p.name} ${p.isActive ? "hidden from" : "shown in"} the app`, { productId: p._id });
@@ -73,7 +73,7 @@ export function Products() {
         <Btn kind="ghost" disabled={!list.length} onClick={() => exportCsv("zennara-products",
           ["Code", "Name", "Brand", "Formulation", "Price", "GST %", "Stock", "Rating", "Active"],
           list.map((p) => [p.code ?? "", p.name, p.OrgName, p.formulation, p.price, p.gstPercentage, p.stock, p.rating ?? 0, p.isActive ? "yes" : "no"]))}>Export CSV</Btn>
-        {canManageCatalogue && <Btn onClick={() => setAddOpen(true)}>+ New product</Btn>}
+        {can("products.manage") && <Btn onClick={() => setAddOpen(true)}>+ New product</Btn>}
       </>}>
       <Hint id="products-live" steps={[
         "This is the live retail catalogue the app sells from — formulation tabs mirror the app's filters.",
@@ -113,7 +113,7 @@ export function Products() {
 
             {list.length === 0 ? (
               <Empty title="No products here" hint={debounced ? `Nothing matched “${debounced}”.` : "Add the first product to this formulation."}
-                action={canManageCatalogue ? <Btn onClick={() => setAddOpen(true)}>+ New product</Btn> : undefined} />
+                action={can("products.manage") ? <Btn onClick={() => setAddOpen(true)}>+ New product</Btn> : undefined} />
             ) : grid ? (
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 {list.slice(0, 60).map((p) => (
@@ -183,7 +183,7 @@ function ProductEditor({ open, product, formulations, onClose, onSaved, onDelete
   open: boolean; product: Product | null; formulations: string[];
   onClose: () => void; onSaved: () => void; onDelete: (p: Product) => void;
 }) {
-  const { toast, audit, canManageCatalogue } = useStore();
+  const { toast, audit, can } = useStore();
   const [f, setF] = useState<Partial<Product>>({});
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -294,7 +294,7 @@ function ProductEditor({ open, product, formulations, onClose, onSaved, onDelete
         )}
 
         {err && <Note kind="crit">{err}</Note>}
-        {canManageCatalogue ? (
+        {can("products.manage") ? (
           <div className="flex flex-wrap gap-2">
             <Btn disabled={busy} onClick={save}>{busy ? "Saving…" : product ? "Save changes" : "Create product"}</Btn>
             {product && <Btn kind="danger" onClick={() => onDelete(product)}>Delete</Btn>}
@@ -307,7 +307,7 @@ function ProductEditor({ open, product, formulations, onClose, onSaved, onDelete
 
 /* ================= BRANDS & FORMULATIONS ================= */
 export function Brands() {
-  const { toast, audit, canManageCatalogue } = useStore();
+  const { toast, audit, can } = useStore();
   const [bOpen, setBOpen] = useState(false);
   const [fOpen, setFOpen] = useState(false);
   const [editBrand, setEditBrand] = useState<Brand | null>(null);
@@ -330,7 +330,7 @@ export function Brands() {
 
   return (
     <Page title="Brands & formulations" sub="These power the app's product filters and the catalogue's grouping"
-      actions={canManageCatalogue ? <>
+      actions={can("brands.manage") ? <>
         <Btn kind="ghost" onClick={() => openForm()}>+ Formulation</Btn>
         <Btn onClick={() => openBrand()}>+ Brand</Btn>
       </> : undefined}>
@@ -342,12 +342,12 @@ export function Brands() {
               <div className="grid gap-2 md:grid-cols-2">
                 {list.map((b) => (
                   <div key={b._id} className={`flex items-center justify-between gap-2 rounded-xl border border-border bg-ivory px-3 py-2 ${b.isActive ? "" : "opacity-55"}`}>
-                    <button className="min-w-0 flex-1 text-left" onClick={() => canManageCatalogue && openBrand(b)}>
+                    <button className="min-w-0 flex-1 text-left" onClick={() => can("brands.manage") && openBrand(b)}>
                       <span className="block truncate text-[12.5px] font-bold">{b.name}</span>
                       {b.description && <span className="block truncate text-[10.5px] text-ink3">{b.description}</span>}
                     </button>
                     <span className="shrink-0 font-mono text-[11px] text-ink3">{b.productsCount ?? 0} SKUs</span>
-                    {canManageCatalogue && (
+                    {can("brands.manage") && (
                       <button onClick={() => setDelBrand(b)} className="shrink-0 text-[11px] font-bold text-err">×</button>
                     )}
                   </div>
@@ -364,12 +364,12 @@ export function Brands() {
               <div className="grid gap-2 md:grid-cols-2">
                 {list.map((f) => (
                   <div key={f._id} className={`flex items-center justify-between gap-2 rounded-xl border border-border bg-ivory px-3 py-2 ${f.isActive ? "" : "opacity-55"}`}>
-                    <button className="min-w-0 flex-1 text-left" onClick={() => canManageCatalogue && openForm(f)}>
+                    <button className="min-w-0 flex-1 text-left" onClick={() => can("brands.manage") && openForm(f)}>
                       <span className="block truncate text-[12.5px] font-bold">{f.name}</span>
                       {f.description && <span className="block truncate text-[10.5px] text-ink3">{f.description}</span>}
                     </button>
                     <span className="shrink-0 font-mono text-[11px] text-gold-dark">{f.productsCount ?? 0}</span>
-                    {canManageCatalogue && (
+                    {can("brands.manage") && (
                       <button onClick={() => setDelForm(f)} className="shrink-0 text-[11px] font-bold text-err">×</button>
                     )}
                   </div>
@@ -452,7 +452,7 @@ export function Brands() {
 
 /* ================= COUPONS ================= */
 export function Coupons() {
-  const { toast, audit, canManageCatalogue } = useStore();
+  const { toast, audit, can } = useStore();
   const [open, setOpen] = useState(false);
   const [edit, setEdit] = useState<Coupon | null>(null);
   const [del, setDel] = useState<Coupon | null>(null);
@@ -475,7 +475,7 @@ export function Coupons() {
           ["Code", "Type", "Value", "Min order", "Max discount", "Used", "Limit", "Valid from", "Valid until", "Active"],
           rows.map((c) => [c.code, c.discountType, c.discountValue, c.minOrderValue ?? 0, c.maxDiscount ?? "",
             c.usageCount ?? 0, c.usageLimit ?? "∞", fmtDate(c.validFrom), fmtDate(c.validUntil), c.isActive ? "yes" : "no"]))}>Export CSV</Btn>
-        {canManageCatalogue && <Btn onClick={() => { setEdit(null); setOpen(true); }}>+ New coupon</Btn>}
+        {can("coupons.manage") && <Btn onClick={() => { setEdit(null); setOpen(true); }}>+ New coupon</Btn>}
       </>}>
       {stats.data && (
         <Stats items={[
@@ -498,10 +498,10 @@ export function Coupons() {
       <Async q={q} label="Loading coupons…" rows={5}>
         {() => rows.length === 0 ? (
           <Empty title="No coupons yet" hint="Create a discount code guests can apply at checkout."
-            action={canManageCatalogue ? <Btn onClick={() => setOpen(true)}>+ New coupon</Btn> : undefined} />
+            action={can("coupons.manage") ? <Btn onClick={() => setOpen(true)}>+ New coupon</Btn> : undefined} />
         ) : (
           <DataTable cols={["Code", "Discount", "Min order", "Description", "Used / limit", "Valid until", "Visible", "Active"]}
-            onRow={(i) => canManageCatalogue && (setEdit(rows[i]), setOpen(true))}
+            onRow={(i) => can("coupons.manage") && (setEdit(rows[i]), setOpen(true))}
             rows={rows.map((c) => [
               <B key={c._id}>{c.code}</B>,
               c.discountType === "percentage"
@@ -515,7 +515,7 @@ export function Coupons() {
                 : fmtDate(c.validUntil),
               c.isPublic ? <Tag key={`${c._id}p`} kind="ok">in app</Tag> : <Tag key={`${c._id}p`} kind="mute">desk only</Tag>,
               <Toggle key={`${c._id}t`} on={c.isActive} onChange={async (v) => {
-                if (!canManageCatalogue) return toast("Your role cannot change coupons");
+                if (!can("coupons.manage")) return toast("Your role cannot change coupons");
                 try {
                   await api.coupons.update(c._id, { isActive: v });
                   audit("CATALOGUE_STATUS_CHANGED", `Coupon ${c.code} ${v ? "activated" : "deactivated"}`, { couponId: c._id });
@@ -680,7 +680,7 @@ const statusTone = (s: string) =>
     : ["Order Placed", "Return Requested"].includes(s) ? "warn" : "info";
 
 export function Orders() {
-  const { toast, audit, canManageCatalogue } = useStore();
+  const { toast, audit, can } = useStore();
   const loc = useLocation();
   const [tab, setTab] = useQueryNumber("tab", 0, { min: 0, max: ORDER_STATUSES.length });
   const [sel, setSel] = useState<string | null>(null);
@@ -916,7 +916,7 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
             {selOrder.notes && <Note className="my-0"><B>Guest note.</B> {selOrder.notes}</Note>}
             {err && <Note kind="crit" className="my-0">{err}</Note>}
 
-            {canManageCatalogue && (
+            {can("orders.manage") && (
               <>
                 {nextStatus && nextStatus !== "Out for Delivery" && (
                   <Btn className="w-full" disabled={busy} onClick={() => setStatus(selOrder, nextStatus)}>Mark {nextStatus}</Btn>

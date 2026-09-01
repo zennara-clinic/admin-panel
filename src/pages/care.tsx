@@ -20,7 +20,7 @@ const EMPTY_SF: ServiceFilters = { status: "", popular: "", content: "", priceMi
 
 export function Services() {
   const nav = useNavigate();
-  const { canManageCatalogue, toast, audit } = useStore();
+  const { can, toast, audit } = useStore();
   const [search, setSearch] = useQueryString("q");
   const [type, setType] = useQueryString("type", "");
   const [category, setCategory] = useQueryString("category", "");
@@ -83,7 +83,7 @@ export function Services() {
   if (applied.priceMin || applied.priceMax) chips.push({ key: "pr", label: `₹${applied.priceMin || 0}–${applied.priceMax || "∞"}`, onRemove: () => clear({ priceMin: "", priceMax: "" }) });
 
   // Manual ordering inside one category — the app lists in this order.
-  const canReorder = canManageCatalogue && !!category && !debounced && !grid && applied.sort === "order";
+  const canReorder = can("services.manage") && !!category && !debounced && !grid && applied.sort === "order";
   const move = async (i: number, dir: -1 | 1) => {
     const j = i + dir;
     if (j < 0 || j >= list.length) return;
@@ -143,7 +143,7 @@ export function Services() {
         <Btn kind="ghost" disabled={!list.length} onClick={() => exportCsv("zennara-services",
           ["Name", "Type", "Category", "Price", "Price shown", "Paid in app", "Popular", "Active", "Rating", "Reviews"],
           list.map((s) => [s.name, s.type ?? "", s.category, s.price, s.showPriceInApp ? "yes" : "no", s.chargeOnlineBooking === false ? "no" : "yes", s.isPopular ? "yes" : "no", s.isActive ? "yes" : "no", s.rating ?? "", s.reviews ?? 0]))}>Export CSV</Btn>
-        {canManageCatalogue && <Btn onClick={() => nav("/service-editor", { state: { blank: true, type: type || undefined, category: category || undefined } })}>+ New service</Btn>}
+        {can("services.manage") && <Btn onClick={() => nav("/service-editor", { state: { blank: true, type: type || undefined, category: category || undefined } })}>+ New service</Btn>}
       </>}>
       <Hint id="services-live">Pick a type or category on the left; everything on the right is exactly what the app shows. Click a service to edit its photo, gallery, price, copy, pre/post care and FAQs.</Hint>
       <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
@@ -169,7 +169,7 @@ export function Services() {
               ))}
             </div>
           ))}
-          {canManageCatalogue && <Btn kind="ghost" className="mt-2 w-full !text-[11.5px]" onClick={() => nav("/categories")}>Manage types & categories</Btn>}
+          {can("services.manage") && <Btn kind="ghost" className="mt-2 w-full !text-[11.5px]" onClick={() => nav("/categories")}>Manage types & categories</Btn>}
         </Card>
 
         {/* ---- results ---- */}
@@ -187,7 +187,7 @@ export function Services() {
           <Async q={q} label="Loading the service catalogue…" rows={8}>
             {() => list.length === 0 ? (
               <Empty title="No services here" hint={debounced || chips.length ? "Nothing matched the search/filters." : "Create the first service for this category."}
-                action={canManageCatalogue ? <Btn onClick={() => nav("/service-editor", { state: { blank: true, type: type || undefined, category: category || undefined } })}>+ New service</Btn> : undefined} />
+                action={can("services.manage") ? <Btn onClick={() => nav("/service-editor", { state: { blank: true, type: type || undefined, category: category || undefined } })}>+ New service</Btn> : undefined} />
             ) : grid ? (
               groups.map(([title, items]) => (
                 <div key={title} className="mb-5">
@@ -257,7 +257,7 @@ const BLANK: Partial<Consultation> = {
 export function ServiceEditor() {
   const nav = useNavigate();
   const loc = useLocation();
-  const { toast, audit, canManageCatalogue } = useStore();
+  const { toast, audit, can } = useStore();
   const [sp] = useSearchParams();
   const state = { ...((loc.state as { id?: string; blank?: boolean; type?: string; category?: string } | null) ?? {}) };
   if (!state.id && sp.get("id")) state.id = sp.get("id") ?? undefined;
@@ -342,10 +342,10 @@ export function ServiceEditor() {
       sub={isNew ? "Creating a new treatment" : `${f.name} · updated ${fmtDate((q.data as Consultation & { updatedAt?: string })?.updatedAt ?? q.data?.createdAt)}`}
       actions={<>
         <Btn kind="ghost" onClick={() => nav("/services")}>← All services</Btn>
-        {!isNew && canManageCatalogue && <Btn kind="danger" onClick={() => setDelOpen(true)}>Delete</Btn>}
-        {canManageCatalogue && <Btn disabled={busy} onClick={save}>{busy ? "Saving…" : isNew ? "Create service" : "Save changes"}</Btn>}
+        {!isNew && can("services.manage") && <Btn kind="danger" onClick={() => setDelOpen(true)}>Delete</Btn>}
+        {can("services.manage") && <Btn disabled={busy} onClick={save}>{busy ? "Saving…" : isNew ? "Create service" : "Save changes"}</Btn>}
       </>}>
-      {!canManageCatalogue && <Note kind="crit">Your role can view the catalogue but not change it. Ask a Super Admin or Admin to make edits.</Note>}
+      {!can("services.manage") && <Note kind="crit">Your role can view the catalogue but not change it. Ask a Super Admin or Admin to make edits.</Note>}
       {err && <Note kind="crit">{err}</Note>}
 
       <div className="grid items-start gap-3.5 xl:grid-cols-[minmax(0,1fr)_340px]">
@@ -527,7 +527,7 @@ export function ServiceEditor() {
 export function Categories() {
   const nav = useNavigate();
   const [selType, setSelType] = useQueryString("type", "");
-  const { toast, audit, canManageCatalogue } = useStore();
+  const { toast, audit, can } = useStore();
   const [addOpen, setAddOpen] = useState(false);
   const [edit, setEdit] = useState<Category | null>(null);
   const [del, setDel] = useState<Category | null>(null);
@@ -587,8 +587,8 @@ export function Categories() {
             toast("Counts recalculated"); q.reload(); types.reload();
           } catch (e) { toast((e as Error).message); }
         }}>Recount services</Btn>
-        {canManageCatalogue && <Btn kind="ghost" onClick={() => { setTypeOpen(true); setTypeEdit(null); setTName(""); setTDesc(""); setTErr(null); }}>+ New type</Btn>}
-        {canManageCatalogue && <Btn onClick={() => { setAddOpen(true); setNName(""); setNDesc(""); setNType(typeNames[0] ?? ""); setErr(null); }}>+ New category</Btn>}
+        {can("categories.manage") && <Btn kind="ghost" onClick={() => { setTypeOpen(true); setTypeEdit(null); setTName(""); setTDesc(""); setTErr(null); }}>+ New type</Btn>}
+        {can("categories.manage") && <Btn onClick={() => { setAddOpen(true); setNName(""); setNDesc(""); setNType(typeNames[0] ?? ""); setErr(null); }}>+ New category</Btn>}
       </>}>
       <Hint id="categories-live">Categories group services in the app. Deactivating a category hides it from browsing without touching the services inside it.</Hint>
       <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
@@ -606,7 +606,7 @@ export function Categories() {
           {typeList.length === 0 && <div className="px-4 py-6 text-center text-[12.5px] text-ink3">No types yet — add Skin, Hair, Wellness and so on.</div>}
           {typeList.map((t, i) => (
             <div key={t._id} className={`flex items-center gap-2 border-t border-border px-3 py-2 ${selType === t.name ? "bg-gold/10" : ""}`}>
-              {canManageCatalogue && (
+              {can("categories.manage") && (
                 <span className="flex flex-col gap-0.5">
                   <button onClick={() => moveType(i, -1)} disabled={i === 0} className="rounded border border-border px-1 text-[9px] leading-3 disabled:opacity-30">▲</button>
                   <button onClick={() => moveType(i, 1)} disabled={i === typeList.length - 1} className="rounded border border-border px-1 text-[9px] leading-3 disabled:opacity-30">▼</button>
@@ -618,7 +618,7 @@ export function Categories() {
                   {cats.filter((c) => c.type === t.name).length} categories · {t.treatmentCount ?? 0} services{!t.isActive ? " · hidden" : ""}
                 </div>
               </button>
-              {canManageCatalogue && (
+              {can("categories.manage") && (
                 <Menu align="right" button={<button className="px-1 text-ink3">⋯</button>} items={[
                   { label: "Edit", onClick: () => { setTypeOpen(true); setTypeEdit(t); setTName(t.name); setTDesc(t.description ?? ""); setTErr(null); } },
                   { label: <span className="text-err">Delete</span>, onClick: () => setDelType(t) },
@@ -632,7 +632,7 @@ export function Categories() {
           <Async q={q} label="Loading categories…" rows={6}>
             {() => cats.length === 0 ? (
               <Empty title="No categories yet" hint="Create the groups your services sit in — Laser, Injectables, Facials and so on."
-                action={canManageCatalogue ? <Btn onClick={() => setAddOpen(true)}>+ New category</Btn> : undefined} />
+                action={can("categories.manage") ? <Btn onClick={() => setAddOpen(true)}>+ New category</Btn> : undefined} />
             ) : (
               grouped.filter((g) => !selType || g.type === selType).map((group) => (
               <Card key={group.type || "unfiled"} className="mb-3">
@@ -646,7 +646,7 @@ export function Categories() {
                 </div>
                 {group.items.map((c, i) => (
                   <div key={c._id} className="flex items-center gap-3 border-b border-border px-4 py-2.5 last:border-0">
-                    {canManageCatalogue && group.type && (
+                    {can("categories.manage") && group.type && (
                       <span className="flex flex-col gap-0.5">
                         <button onClick={() => moveCat(group.items, i, -1)} disabled={i === 0} className="rounded border border-border px-1 text-[9px] leading-3 disabled:opacity-30">▲</button>
                         <button onClick={() => moveCat(group.items, i, 1)} disabled={i === group.items.length - 1} className="rounded border border-border px-1 text-[9px] leading-3 disabled:opacity-30">▼</button>
@@ -664,7 +664,7 @@ export function Categories() {
                     </div>
                     <button onClick={() => nav(`/services?type=${encodeURIComponent(group.type ?? "")}&category=${encodeURIComponent(c.name)}`)} className="text-[11.5px] font-semibold text-ink3 hover:text-primary">View services →</button>
                     <Toggle on={c.isActive} onChange={async () => {
-                      if (!canManageCatalogue) return toast("Your role cannot change the catalogue");
+                      if (!can("categories.manage")) return toast("Your role cannot change the catalogue");
                       try {
                         await api.categories.toggle(c._id);
                         audit("CATALOGUE_STATUS_CHANGED", `Category ${c.name}`, { categoryId: c._id });
@@ -672,7 +672,7 @@ export function Categories() {
                         q.reload();
                       } catch (e) { toast((e as Error).message); }
                     }} />
-                    {canManageCatalogue && (
+                    {can("categories.manage") && (
                       <Menu align="right" button={<button className="px-1 text-ink3">⋯</button>} items={[
                         { label: "Edit", onClick: () => { setEdit(c); setNName(c.name); setNDesc(c.description ?? ""); setNType(c.type ?? ""); setErr(null); } },
                         { label: "+ New service here", onClick: () => nav("/service-editor", { state: { blank: true, type: group.type ?? undefined, category: c.name } }) },
@@ -776,7 +776,7 @@ export function Categories() {
 
 /* ================= PACKAGES ================= */
 export function Packages() {
-  const { toast, audit, canManageCatalogue } = useStore();
+  const { toast, audit, can } = useStore();
   const [edit, setEdit] = useState<Package | null>(null);
   const [creating, setCreating] = useState(false);
   const [del, setDel] = useState<Package | null>(null);
@@ -823,7 +823,7 @@ export function Packages() {
           list.map((p) => [p.name, p.price, p.originalPrice ?? "", p.discount ?? 0,
             (p.services?.length ?? 0) + (p.consultationServices?.length ?? 0), p.bookingsCount ?? 0, p.isActive ? "yes" : "no"]))}>Export CSV</Btn>
         <Btn kind="gold" onClick={() => setPickOpen(true)}>+ Assign package</Btn>
-        {canManageCatalogue && <Btn onClick={() => { setCreating(true); setEdit(null); }}>+ New package</Btn>}
+        {can("packages.manage") && <Btn onClick={() => { setCreating(true); setEdit(null); }}>+ New package</Btn>}
       </>}>
       {assignUi}
       <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
@@ -847,10 +847,10 @@ export function Packages() {
 
             {list.length === 0 ? (
               <Empty title="No packages yet" hint="Bundle a course of treatments into a package the app can sell."
-                action={canManageCatalogue ? <Btn onClick={() => setCreating(true)}>+ New package</Btn> : undefined} />
+                action={can("packages.manage") ? <Btn onClick={() => setCreating(true)}>+ New package</Btn> : undefined} />
             ) : (
               <DataTable cols={["Package", "Includes", "Price", "Discount", "Assigned", "In app"]}
-                onRow={(i) => canManageCatalogue && setEdit(list[i])}
+                onRow={(i) => can("packages.manage") && setEdit(list[i])}
                 rows={list.map((p) => [
                   <B key={p._id}>{p.name}{p.isPopular ? " ★" : ""}</B>,
                   `${(p.services?.length ?? 0) + (p.consultationServices?.length ?? 0)} services`,
@@ -1067,7 +1067,7 @@ function PackageEditor({ open, pkg, onClose, onSaved, onDelete }: {
 
 /* ================= PACKAGE ASSIGNMENTS ================= */
 function AssignmentsConsole() {
-  const { toast, audit, canManageCatalogue } = useStore();
+  const { toast, audit, can } = useStore();
   const [status, setStatus] = useQueryString("assignmentStatus", "all");
   const [search, setSearch] = useQueryString("assignmentQ");
   const debounced = useDebounced(search);
@@ -1121,7 +1121,7 @@ function AssignmentsConsole() {
           </>
         )}
       </Async>
-      <AssignmentDrawer a={sel} onClose={() => setSel(null)} onChanged={() => { q.reload(); }} canEdit={canManageCatalogue} toast={toast} audit={audit} />
+      <AssignmentDrawer a={sel} onClose={() => setSel(null)} onChanged={() => { q.reload(); }} canEdit={can("packages.manage")} toast={toast} audit={audit} />
     </>
   );
 }
@@ -1292,7 +1292,7 @@ function AssignmentDrawer({ a, onClose, onChanged, canEdit, toast, audit }: {
 
 /* ================= DOCTORS ================= */
 export function Doctors() {
-  const { toast, audit, canManageCatalogue, branches } = useStore();
+  const { toast, audit, can, branches } = useStore();
   const nav = useNavigate();
   const [sel, setSel] = useState<Doctor | null>(null);
   const [addOpen, setAddOpen] = useState(false);
@@ -1318,15 +1318,15 @@ export function Doctors() {
         ? `${list.length} practitioner${list.length === 1 ? "" : "s"} · ${tierList.map((t) => `${t.title} ${fmtINR(t.fee)}`).join(" · ")}`
         : "The dermatology team the app shows"}
       actions={<>
-        {canManageCatalogue && tierList.length > 0 && <TierEditor tiers={tierList} onSaved={reloadAll} />}
-        {canManageCatalogue && <Btn onClick={() => setAddOpen(true)}>+ Add dermatologist</Btn>}
+        {can("dermatologists.manage") && tierList.length > 0 && <TierEditor tiers={tierList} onSaved={reloadAll} />}
+        {can("dermatologists.manage") && <Btn onClick={() => setAddOpen(true)}>+ Add dermatologist</Btn>}
       </>}>
       <Hint id="doctors-live">The clinic sets a <B>standard fee per tier</B> under Consultation fees — that is what every dermatologist on the tier charges. A doctor who wants a different rate raises a request, and you decide here. Nothing a doctor does changes their own price.</Hint>
       <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
 
       <FeeRequestQueue
         requests={allRequests}
-        canDecide={canManageCatalogue}
+        canDecide={can("dermatologists.manage")}
         tiers={tierList}
         onDecided={reloadAll}
       />
@@ -1335,7 +1335,7 @@ export function Doctors() {
         {() => list.length === 0 ? (
           <Empty title="No dermatologists yet"
             hint="Add the dermatology team, or seed it from the clinic's profiles with `node scripts/seedDoctors.js` in the Backend folder."
-            action={canManageCatalogue ? <Btn onClick={() => setAddOpen(true)}>+ Add dermatologist</Btn> : undefined} />
+            action={can("dermatologists.manage") ? <Btn onClick={() => setAddOpen(true)}>+ Add dermatologist</Btn> : undefined} />
         ) : (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {list.map((doc) => (
@@ -1648,7 +1648,7 @@ export function DermatologistDetail() {
   const nav = useNavigate();
   const [sp] = useSearchParams();
   const id = sp.get("id") ?? "";
-  const { toast, audit, canManageCatalogue, branches, admin } = useStore();
+  const { toast, audit, can, branches, admin } = useStore();
   const [range, setRange] = useState("Last 90 days");
   const [editOpen, setEditOpen] = useState(false);
   const [pwOpen, setPwOpen] = useState(false);
@@ -1702,7 +1702,7 @@ export function DermatologistDetail() {
             <Btn kind="ghost" onClick={() => nav("/doctors")}>← All dermatologists</Btn>
             <Btn kind="ghost" onClick={() => nav(`/doctors/schedule?doctorId=${encodeURIComponent(doc.doctorId)}`)}>Working hours</Btn>
             <Btn kind="ghost" onClick={() => nav(`/bookings?scope=all`, { state: { specialistId: doc.doctorId } })}>Bookings</Btn>
-            {canManageCatalogue && <Btn onClick={() => setEditOpen(true)}>Edit profile</Btn>}
+            {can("dermatologists.manage") && <Btn onClick={() => setEditOpen(true)}>Edit profile</Btn>}
           </>}>
           <div className="grid items-start gap-3.5 xl:grid-cols-[minmax(0,1fr)_320px]">
             <div className="min-w-0">
@@ -1770,7 +1770,7 @@ export function DermatologistDetail() {
                 {!!doc.achievements?.length && <div className="mt-2"><div className="text-[10.5px] font-bold uppercase tracking-wider text-ink3">Achievements</div><ul className="text-[12px] text-ink2">{doc.achievements.map((a) => <li key={a}>• {a}</li>)}</ul></div>}
               </Card>
 
-              {canManageCatalogue && (
+              {can("dermatologists.manage") && (
                 <Card className="p-4">
                   <SecH t="Panel login" right={account.data ? <Tag kind={account.data.hasPassword ? "ok" : "warn"}>{account.data.hasPassword ? "password set" : "no password — cannot sign in"}</Tag> : undefined} />
                   <Note className="mt-0">The clinic can set or change the login email, phone and password here at any time; the dermatologist can also change their own from My profile in their panel. Sign-in is password-only for dermatologists.</Note>
@@ -2043,7 +2043,7 @@ function DoctorEditor({ open, doctor, tiers, branchNames, onClose, onSaved, onDe
  * that centre.
  */
 export function Therapists() {
-  const { toast, audit, branches, canManageStaff } = useStore();
+  const { toast, audit, branches, can } = useStore();
   const q = useApi(() => api.staff.list({ role: "therapist" }), []);
   const list = (q.data?.data ?? []) as Admin[];
 
@@ -2079,7 +2079,7 @@ export function Therapists() {
 
   return (
     <Page title="Therapists" sub={`${list.length} floor staff · they run sessions on the Therapist panel`}
-      actions={canManageStaff ? <Btn onClick={() => open(null)}>+ Add therapist</Btn> : undefined}>
+      actions={can("therapists.manage") ? <Btn onClick={() => open(null)}>+ Add therapist</Btn> : undefined}>
       <Hint id="therapists-how">
         A therapist signs in to the Therapist panel with email + password only — no emailed codes. Creating one
         here emails them their login details; the assigned centre pins their floor to that centre. Sessions,
@@ -2090,11 +2090,11 @@ export function Therapists() {
         {() => list.length === 0 ? (
           <Empty title="No therapists yet"
             hint="Add one — they'll get their login by email and can run sessions the moment a centre is assigned."
-            action={canManageStaff ? <Btn onClick={() => open(null)}>+ Add therapist</Btn> : undefined} />
+            action={can("therapists.manage") ? <Btn onClick={() => open(null)}>+ Add therapist</Btn> : undefined} />
         ) : (
           <>
             <DataTable cols={["Name", "Email", "Phone", "Centres", "Password", "Last sign-in", "Status"]}
-              onRow={canManageStaff ? (i) => open(list[i]) : undefined}
+              onRow={can("therapists.manage") ? (i) => open(list[i]) : undefined}
               rows={list.map((a) => [
                 <B key={a._id}>{a.name}</B>,
                 a.email,
@@ -2104,7 +2104,7 @@ export function Therapists() {
                 a.lastLogin ? fmtAgo(a.lastLogin) : "never",
                 a.isActive ? <Tag key={`${a._id}s`} kind="ok">active</Tag> : <Tag key={`${a._id}s`} kind="mute">inactive</Tag>,
               ])} />
-            {canManageStaff && <div className="mt-2 text-[11.5px] text-ink3">Click a therapist to open their details — password, centres, status and delete live there.</div>}
+            {can("therapists.manage") && <div className="mt-2 text-[11.5px] text-ink3">Click a therapist to open their details — password, centres, status and delete live there.</div>}
           </>
         )}
       </Async>

@@ -2,11 +2,11 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { ReactNode } from "react";
 import api from "./lib/api";
 import { clearSession, hasLiveSession, onSessionExpired, setSession, storedAdmin } from "./lib/http";
-import type { Admin, AdminRole, Branch } from "./lib/types";
+import type { Admin, AdminRole, Branch, PermissionKey } from "./lib/types";
 
 /**
- * This build is the standalone Admin panel. Only super-admin accounts can
- * sign in here; dermatologists and therapists have their own panels.
+ * This build is the standalone Admin panel. Super admins and granular 'staff'
+ * accounts sign in here; dermatologists and therapists have their own panels.
  */
 export type Role = "admin" | "doctor" | "therapist";
 
@@ -14,7 +14,7 @@ export type Role = "admin" | "doctor" | "therapist";
 export const PANEL: Role = "admin";
 
 /** Server-side roles allowed to sign in to this panel. */
-const ACCEPTED_ROLES: AdminRole[] = ["super_admin"];
+const ACCEPTED_ROLES: AdminRole[] = ["super_admin", "staff"];
 
 export const panelAccepts = (role: AdminRole | null | undefined): boolean =>
   !!role && ACCEPTED_ROLES.includes(role);
@@ -30,6 +30,7 @@ export const ROLE_LABEL: Record<AdminRole, string> = {
   super_admin: "Super Admin",
   doctor: "Dermatologist",
   therapist: "Therapist",
+  staff: "Staff",
 };
 
 type Store = {
@@ -39,6 +40,14 @@ type Store = {
   adminRole: AdminRole | null;
   admin: Admin | null;
   isSuperAdmin: boolean;
+  /** The account's effective permission keys (super admins hold everything). */
+  permissions: Set<PermissionKey>;
+  /**
+   * The one gate the whole panel uses. Pass a permission key (or several, "any
+   * of") and it returns whether the signed-in account may do it. Super admins
+   * always pass. Nav visibility, page guards and every action button call this.
+   */
+  can: (perm: PermissionKey | PermissionKey[]) => boolean;
   /** Catalogue, pricing and stock edits. */
   canManageCatalogue: boolean;
   /** Staff accounts and roles. Mirrors requireRole on /api/admin/staff. */
@@ -241,13 +250,29 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const adminRole = admin?.role ?? null;
   const role: Role = PANEL;
 
+  const isSuperAdmin = adminRole === "super_admin" || admin?.isSuperAdmin === true;
+  const permissions = useMemo(
+    () => new Set<PermissionKey>(isSuperAdmin ? [] : admin?.permissions ?? []),
+    [isSuperAdmin, admin?.permissions],
+  );
+  const can = useCallback(
+    (perm: PermissionKey | PermissionKey[]) => {
+      if (isSuperAdmin) return true;
+      const list = Array.isArray(perm) ? perm : [perm];
+      return list.some((p) => permissions.has(p));
+    },
+    [isSuperAdmin, permissions],
+  );
+
   const value: Store = {
     role,
     adminRole,
     admin,
-    isSuperAdmin: adminRole === "super_admin",
-    canManageCatalogue: adminRole === "super_admin",
-    canManageStaff: adminRole === "super_admin",
+    isSuperAdmin,
+    permissions,
+    can,
+    canManageCatalogue: can("services.manage"),
+    canManageStaff: can("staff.manage"),
     branch: branchName,
     branchId,
     branches,

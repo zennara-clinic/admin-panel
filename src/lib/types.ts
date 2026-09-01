@@ -3,8 +3,12 @@
 export type Id = string;
 
 /* ---------------- auth ---------------- */
-/** Three roles, three panels. Finer-grained admin permissions come later. */
-export type AdminRole = "super_admin" | "doctor" | "therapist";
+/**
+ * Server-side roles. 'super_admin' holds every permission; 'doctor'/'therapist'
+ * back their own panels; 'staff' is a general admin-panel account whose access
+ * is defined by an assigned custom role + direct permission grants.
+ */
+export type AdminRole = "super_admin" | "doctor" | "therapist" | "staff";
 export type Admin = {
   _id: Id;
   email: string;
@@ -25,6 +29,36 @@ export type Admin = {
   /** False when the address is missing from the server's ADMIN_EMAILS allow-list. */
   canSignIn?: boolean;
   createdAt?: string;
+  /* ---- RBAC ---- */
+  /** Super admins implicitly hold every permission. */
+  isSuperAdmin?: boolean;
+  /** Assigned custom role (staff accounts only). */
+  customRoleId?: Id | null;
+  roleKey?: string | null;
+  roleName?: string | null;
+  /** Effective permission keys the server resolved for this account. */
+  permissions?: string[];
+};
+
+/** A permission key like `bookings.manage`. */
+export type PermissionKey = string;
+/** One permission in the catalog. */
+export type CatalogPermission = { key: PermissionKey; label: string; sensitive?: boolean };
+/** A sidebar-aligned group of permissions. */
+export type PermissionGroup = { key: string; label: string; permissions: CatalogPermission[] };
+/** A custom staff role — a named bundle of permissions. */
+export type Role = {
+  _id: Id;
+  key: string;
+  name: string;
+  description?: string;
+  color?: string;
+  permissions: PermissionKey[];
+  isSystem?: boolean;
+  isActive?: boolean;
+  staffCount?: number;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 /** A deleted customer account, kept in full so staff can restore it. */

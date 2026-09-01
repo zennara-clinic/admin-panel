@@ -14,65 +14,74 @@ import { Menu } from "./ui";
 import api from "./lib/api";
 import { useApi, useDebounced, usePoll } from "./lib/useApi";
 import { fmtAgo, initials } from "./lib/format";
-import type { Admin } from "./lib/types";
+import type { Admin, PermissionKey } from "./lib/types";
 import { ApiError } from "./lib/http";
 import logo from "./assets/zennara-logo.png";
 
-type NavItem = { to: string; label: string; icon: ReactNode; badge?: "bookings" | "chat" | "orders" | "lowstock" | "reviews" };
+// `perm` is the permission that reveals the item — a key, or several ("any of").
+// Items a signed-in account lacks are hidden, and a group with no visible items
+// disappears. Super admins hold everything, so they see the full menu.
+type NavItem = { to: string; label: string; icon: ReactNode; perm?: PermissionKey | PermissionKey[]; badge?: "bookings" | "chat" | "orders" | "lowstock" | "reviews" };
 type NavGroup = { g: string; items: NavItem[] };
 const ic = "h-[16px] w-[16px]";
 
 const NAV: NavGroup[] = [
   { g: "Home", items: [
-    { to: "/overview", label: "Overview", icon: <LayoutDashboard className={ic} /> },
-    { to: "/today", label: "Today", icon: <CalendarDays className={ic} /> },
+    { to: "/overview", label: "Overview", icon: <LayoutDashboard className={ic} />, perm: "overview.view" },
+    { to: "/today", label: "Today", icon: <CalendarDays className={ic} />, perm: "today.view" },
   ]},
   { g: "Operations", items: [
-    { to: "/bookings", label: "Bookings", icon: <BookOpenCheck className={ic} />, badge: "bookings" },
-    { to: "/patients", label: "Patients", icon: <Users className={ic} /> },
-    { to: "/deleted-accounts", label: "Deleted accounts", icon: <UserCog className={ic} /> },
-    { to: "/contact-changes", label: "Contact changes", icon: <UserCog className={ic} /> },
-    { to: "/chat", label: "Chat", icon: <MessagesSquare className={ic} />, badge: "chat" },
-    { to: "/support", label: "Support inbox", icon: <LifeBuoy className={ic} /> },
+    { to: "/bookings", label: "Bookings", icon: <BookOpenCheck className={ic} />, badge: "bookings", perm: "bookings.view" },
+    { to: "/patients", label: "Patients", icon: <Users className={ic} />, perm: "patients.view" },
+    { to: "/deleted-accounts", label: "Deleted accounts", icon: <UserCog className={ic} />, perm: "patients.delete" },
+    { to: "/contact-changes", label: "Contact changes", icon: <UserCog className={ic} />, perm: "contactChanges.view" },
+    { to: "/chat", label: "Chat", icon: <MessagesSquare className={ic} />, badge: "chat", perm: "chat.view" },
+    { to: "/support", label: "Support inbox", icon: <LifeBuoy className={ic} />, perm: "support.view" },
   ]},
   { g: "Care", items: [
-    { to: "/services", label: "Services", icon: <Sparkles className={ic} /> },
-    { to: "/categories", label: "Categories", icon: <FolderTree className={ic} /> },
-    { to: "/packages", label: "Packages", icon: <Package className={ic} /> },
-    { to: "/doctors", label: "Dermatologists", icon: <UserCog className={ic} /> },
-    { to: "/therapists", label: "Therapists", icon: <Users className={ic} /> },
+    { to: "/services", label: "Services", icon: <Sparkles className={ic} />, perm: "services.view" },
+    { to: "/categories", label: "Categories", icon: <FolderTree className={ic} />, perm: "categories.view" },
+    { to: "/packages", label: "Packages", icon: <Package className={ic} />, perm: "packages.view" },
+    { to: "/doctors", label: "Dermatologists", icon: <UserCog className={ic} />, perm: "dermatologists.view" },
+    { to: "/therapists", label: "Therapists", icon: <Users className={ic} />, perm: "therapists.view" },
   ]},
   { g: "Commerce", items: [
-    { to: "/products", label: "Products", icon: <ShoppingBag className={ic} /> },
-    { to: "/brands", label: "Brands & formulations", icon: <Tags className={ic} /> },
-    { to: "/coupons", label: "Coupons", icon: <TicketPercent className={ic} /> },
-    { to: "/orders", label: "Orders", icon: <Truck className={ic} />, badge: "orders" },
+    { to: "/products", label: "Products", icon: <ShoppingBag className={ic} />, perm: "products.view" },
+    { to: "/brands", label: "Brands & formulations", icon: <Tags className={ic} />, perm: "brands.view" },
+    { to: "/coupons", label: "Coupons", icon: <TicketPercent className={ic} />, perm: "coupons.view" },
+    { to: "/orders", label: "Orders", icon: <Truck className={ic} />, badge: "orders", perm: "orders.view" },
   ]},
   { g: "Stock", items: [
-    { to: "/inventory", label: "Inventory", icon: <Boxes className={ic} />, badge: "lowstock" },
-    { to: "/stock-ledger", label: "Stock ledger", icon: <ScrollText className={ic} /> },
-    { to: "/vendors", label: "Vendors", icon: <Store className={ic} /> },
+    { to: "/inventory", label: "Inventory", icon: <Boxes className={ic} />, badge: "lowstock", perm: "inventory.view" },
+    { to: "/stock-ledger", label: "Stock ledger", icon: <ScrollText className={ic} />, perm: "stockLedger.view" },
+    { to: "/vendors", label: "Vendors", icon: <Store className={ic} />, perm: "vendors.view" },
   ]},
   { g: "App Studio", items: [
-    { to: "/studio/home", label: "App home", icon: <Smartphone className={ic} /> },
-    { to: "/studio/app-control", label: "App control", icon: <Smartphone className={ic} /> },
-    { to: "/studio/banners", label: "Banners", icon: <Smartphone className={ic} /> },
-    { to: "/studio/consultation", label: "Consultation page", icon: <MessageSquareText className={ic} /> },
-    { to: "/studio/membership", label: "Membership card", icon: <CreditCard className={ic} /> },
-    { to: "/studio/announcements", label: "Announcements", icon: <BellRing className={ic} /> },
-    { to: "/studio/toggles", label: "Screen copy", icon: <ToggleRight className={ic} /> },
-    { to: "/studio/legal", label: "Terms & privacy", icon: <ScrollText className={ic} /> },
+    { to: "/studio/home", label: "App home", icon: <Smartphone className={ic} />, perm: "appStudio.view" },
+    { to: "/studio/app-control", label: "App control", icon: <Smartphone className={ic} />, perm: "appStudio.view" },
+    { to: "/studio/banners", label: "Banners", icon: <Smartphone className={ic} />, perm: "banners.manage" },
+    { to: "/studio/consultation", label: "Consultation page", icon: <MessageSquareText className={ic} />, perm: "appStudio.view" },
+    { to: "/studio/membership", label: "Membership card", icon: <CreditCard className={ic} />, perm: "appStudio.view" },
+    { to: "/studio/announcements", label: "Announcements", icon: <BellRing className={ic} />, perm: "announcements.manage" },
+    { to: "/studio/toggles", label: "Screen copy", icon: <ToggleRight className={ic} />, perm: "appStudio.view" },
+    { to: "/studio/legal", label: "Terms & privacy", icon: <ScrollText className={ic} />, perm: "appContent.manage" },
   ]},
   { g: "Organisation", items: [
-    { to: "/branches", label: "Branches", icon: <Building2 className={ic} /> },
-    { to: "/reviews", label: "Reviews", icon: <Star className={ic} />, badge: "reviews" },
-    { to: "/analytics", label: "Analytics", icon: <BarChart3 className={ic} /> },
-    { to: "/roles", label: "Staff & roles", icon: <ShieldCheck className={ic} /> },
-    { to: "/audit", label: "Audit log", icon: <ScrollText className={ic} /> },
+    { to: "/branches", label: "Branches", icon: <Building2 className={ic} />, perm: "branches.view" },
+    { to: "/reviews", label: "Reviews", icon: <Star className={ic} />, badge: "reviews", perm: "reviews.view" },
+    { to: "/analytics", label: "Analytics", icon: <BarChart3 className={ic} />, perm: "analytics.view" },
+    { to: "/roles", label: "Staff & roles", icon: <ShieldCheck className={ic} />, perm: ["staff.view", "roles.view"] },
+    { to: "/audit", label: "Audit log", icon: <ScrollText className={ic} />, perm: "audit.view" },
   ]},
 ];
 
 export const HOME = "/overview";
+
+/** The first nav route the account may open — its landing page after login. */
+export function firstAllowedRoute(can: (p: PermissionKey | PermissionKey[]) => boolean): string {
+  for (const grp of NAV) for (const it of grp.items) if (!it.perm || can(it.perm)) return it.to;
+  return HOME;
+}
 
 /* ================= live sidebar badges ================= */
 function useNavBadges(role: Role, branchId: string) {
@@ -321,11 +330,16 @@ function NotificationBell() {
 export function Shell({ children }: { children: ReactNode }) {
   const {
     role, admin, adminRole, branch, branchId, branches, setBranchById,
-    toast, setSearchOpen, loggedIn, booting, signIn, logout,
+    toast, setSearchOpen, loggedIn, booting, signIn, logout, can,
   } = useStore();
   const loc = useLocation();
   const nav = useNavigate();
   const badges = useNavBadges(role, branchId);
+
+  // Show only the sections this account may open; hide groups left empty.
+  const visibleNav = NAV
+    .map((grp) => ({ ...grp, items: grp.items.filter((it) => !it.perm || can(it.perm)) }))
+    .filter((grp) => grp.items.length > 0);
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -366,7 +380,7 @@ export function Shell({ children }: { children: ReactNode }) {
         </div>
 
         <div data-tour="nav" className="min-h-0 flex-1 overflow-y-auto pb-1 [scrollbar-color:var(--color-gold-dark)_transparent] [scrollbar-width:thin]">
-          {NAV.map((grp) => (
+          {visibleNav.map((grp) => (
             <div key={grp.g}>
               <div className="px-4 pb-0.5 pt-2.5 font-mono text-[9px] font-bold uppercase tracking-[0.16em] text-side-mut">{grp.g}</div>
               {grp.items.map((it) => {

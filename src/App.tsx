@@ -1,7 +1,8 @@
 import { Routes, Route, Navigate, useLocation, useSearchParams } from "react-router-dom";
 import { Banners, LegalEditor, DeletedAccounts, StockLedger } from "./pages/content";
-import { StoreProvider } from "./store";
-import { Shell, HOME } from "./shell";
+import { StoreProvider, useStore } from "./store";
+import { Shell, firstAllowedRoute } from "./shell";
+import type { PermissionKey } from "./lib/types";
 import { Tours } from "./tours";
 import { ErrorBoundary } from "./lib/ErrorBoundary";
 import { Overview, Today, Bookings, Patients, PatientDetail, Chat, SupportInbox } from "./pages/reception";
@@ -35,7 +36,39 @@ function Guarded({ children }: { children: React.ReactNode }) {
   return <ErrorBoundary key={loc.pathname}>{children}</ErrorBoundary>;
 }
 
+/**
+ * Blocks a route the account lacks the permission for — a defence-in-depth
+ * layer behind the hidden nav item, so a hand-typed URL can't reach a screen
+ * whose data the server would refuse anyway. Super admins pass everything.
+ */
+function RequirePermission({ perm, children }: { perm?: PermissionKey | PermissionKey[]; children: React.ReactNode }) {
+  const { can } = useStore();
+  if (perm && !can(perm)) {
+    return (
+      <div className="grid min-h-[60vh] place-items-center p-8 text-center">
+        <div className="max-w-sm">
+          <div className="text-[15px] font-bold text-ink">You don't have access to this page</div>
+          <div className="mt-1 text-[12.5px] text-ink3">
+            Ask a super admin to grant the matching permission on your role, then reload.
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return <>{children}</>;
+}
+
 const page = (el: React.ReactNode) => <Guarded>{el}</Guarded>;
+/** A guarded, permission-gated route element. */
+const gated = (perm: PermissionKey | PermissionKey[], el: React.ReactNode) => (
+  <Guarded><RequirePermission perm={perm}>{el}</RequirePermission></Guarded>
+);
+
+/** Sends "/" and unknown paths to the first page the account may actually open. */
+function Landing() {
+  const { can } = useStore();
+  return <Navigate to={firstAllowedRoute(can)} replace />;
+}
 
 export default function App() {
   return (
@@ -43,54 +76,54 @@ export default function App() {
       <Tours />
       <Shell>
         <Routes>
-          <Route path="/" element={<Navigate to={HOME} replace />} />
+          <Route path="/" element={<Landing />} />
 
-          <Route path="/overview" element={page(<Overview />)} />
-          <Route path="/today" element={page(<Today />)} />
-          <Route path="/bookings" element={page(<Bookings />)} />
-          <Route path="/patients" element={page(<Patients />)} />
-          <Route path="/patient" element={page(<PatientDetail />)} />
-          <Route path="/deleted-accounts" element={page(<DeletedAccounts />)} />
+          <Route path="/overview" element={gated("overview.view", <Overview />)} />
+          <Route path="/today" element={gated("today.view", <Today />)} />
+          <Route path="/bookings" element={gated("bookings.view", <Bookings />)} />
+          <Route path="/patients" element={gated("patients.view", <Patients />)} />
+          <Route path="/patient" element={gated("patients.view", <PatientDetail />)} />
+          <Route path="/deleted-accounts" element={gated("patients.delete", <DeletedAccounts />)} />
           <Route path="/consultations" element={<Navigate to="/bookings?kind=consultation" replace />} />
-          <Route path="/zenoti" element={page(<ClinicData />)} />
-          <Route path="/contact-changes" element={page(<ContactChanges />)} />
-          <Route path="/chat" element={page(<Chat />)} />
-          <Route path="/support" element={page(<SupportInbox />)} />
+          <Route path="/zenoti" element={gated("zenoti.view", <ClinicData />)} />
+          <Route path="/contact-changes" element={gated("contactChanges.view", <ContactChanges />)} />
+          <Route path="/chat" element={gated("chat.view", <Chat />)} />
+          <Route path="/support" element={gated("support.view", <SupportInbox />)} />
 
-          <Route path="/services" element={page(<Services />)} />
-          <Route path="/service-editor" element={page(<ServiceEditor />)} />
-          <Route path="/categories" element={page(<Categories />)} />
-          <Route path="/packages" element={page(<Packages />)} />
-          <Route path="/doctors" element={page(<Doctors />)} />
-          <Route path="/dermatologist" element={page(<DermatologistDetail />)} />
-          <Route path="/doctors/schedule" element={page(<AdminDoctorSchedule />)} />
-          <Route path="/therapists" element={page(<Therapists />)} />
+          <Route path="/services" element={gated("services.view", <Services />)} />
+          <Route path="/service-editor" element={gated("services.manage", <ServiceEditor />)} />
+          <Route path="/categories" element={gated("categories.view", <Categories />)} />
+          <Route path="/packages" element={gated("packages.view", <Packages />)} />
+          <Route path="/doctors" element={gated("dermatologists.view", <Doctors />)} />
+          <Route path="/dermatologist" element={gated("dermatologists.view", <DermatologistDetail />)} />
+          <Route path="/doctors/schedule" element={gated("dermatologists.manage", <AdminDoctorSchedule />)} />
+          <Route path="/therapists" element={gated("therapists.view", <Therapists />)} />
 
-          <Route path="/products" element={page(<Products />)} />
-          <Route path="/brands" element={page(<Brands />)} />
-          <Route path="/coupons" element={page(<Coupons />)} />
-          <Route path="/orders" element={page(<Orders />)} />
+          <Route path="/products" element={gated("products.view", <Products />)} />
+          <Route path="/brands" element={gated("brands.view", <Brands />)} />
+          <Route path="/coupons" element={gated("coupons.view", <Coupons />)} />
+          <Route path="/orders" element={gated("orders.view", <Orders />)} />
 
-          <Route path="/inventory" element={page(<Inventory />)} />
-          <Route path="/stock-ledger" element={page(<StockLedger />)} />
-          <Route path="/vendors" element={page(<Vendors />)} />
+          <Route path="/inventory" element={gated("inventory.view", <Inventory />)} />
+          <Route path="/stock-ledger" element={gated("stockLedger.view", <StockLedger />)} />
+          <Route path="/vendors" element={gated("vendors.view", <Vendors />)} />
 
-          <Route path="/studio/home" element={page(<AppHome />)} />
-          <Route path="/studio/app-control" element={page(<AppControl />)} />
-          <Route path="/studio/banners" element={page(<Banners />)} />
-          <Route path="/studio/legal" element={page(<LegalEditor />)} />
-          <Route path="/studio/consultation" element={page(<ConsultPage />)} />
-          <Route path="/studio/membership" element={page(<MembershipCard />)} />
-          <Route path="/studio/announcements" element={page(<Announcements />)} />
-          <Route path="/studio/toggles" element={page(<ScreenCopy />)} />
+          <Route path="/studio/home" element={gated("appStudio.view", <AppHome />)} />
+          <Route path="/studio/app-control" element={gated("appStudio.view", <AppControl />)} />
+          <Route path="/studio/banners" element={gated("banners.manage", <Banners />)} />
+          <Route path="/studio/legal" element={gated("appContent.manage", <LegalEditor />)} />
+          <Route path="/studio/consultation" element={gated("appStudio.view", <ConsultPage />)} />
+          <Route path="/studio/membership" element={gated("appStudio.view", <MembershipCard />)} />
+          <Route path="/studio/announcements" element={gated("announcements.manage", <Announcements />)} />
+          <Route path="/studio/toggles" element={gated("appStudio.view", <ScreenCopy />)} />
 
-          <Route path="/branches" element={page(<Branches />)} />
-          <Route path="/reviews" element={page(<Reviews />)} />
-          <Route path="/analytics" element={page(<Analytics />)} />
-          <Route path="/roles" element={page(<Roles />)} />
-          <Route path="/audit" element={page(<AuditLog />)} />
+          <Route path="/branches" element={gated("branches.view", <Branches />)} />
+          <Route path="/reviews" element={gated("reviews.view", <Reviews />)} />
+          <Route path="/analytics" element={gated("analytics.view", <Analytics />)} />
+          <Route path="/roles" element={gated(["staff.view", "roles.view"], <Roles />)} />
+          <Route path="/audit" element={gated("audit.view", <AuditLog />)} />
 
-          <Route path="*" element={<Navigate to={HOME} replace />} />
+          <Route path="*" element={<Landing />} />
         </Routes>
       </Shell>
     </StoreProvider>

@@ -229,7 +229,7 @@ function DermPicker({ booking, value, onChange }: { booking: Booking; value: Der
 function BookingDrawer({ id, onClose, onChanged }: {
   id: string | null; onClose: () => void; onChanged: () => void;
 }) {
-  const { toast, audit, admin } = useStore();
+  const { toast, audit, admin, can } = useStore();
   const nav = useNavigate();
   const route = useLocation();
   const [cancelOpen, setCancelOpen] = useState(false);
@@ -460,7 +460,7 @@ function BookingDrawer({ id, onClose, onChanged }: {
         {revealed && <div className="mt-2 text-[12px] text-ink3">Current {revealed.kind === "checkout" ? "check-out" : "check-in"} code: <B>{revealed.code}</B>{revealed.sentAt ? ` · sent ${fmtAgo(revealed.sentAt)}` : " · not sent yet"}</div>}
         {act.error && <Note kind="crit" className="mt-3">{act.error}</Note>}
         <div className="mt-4 flex items-center justify-between gap-2">
-          {admin?.role === "super_admin" ? (
+          {can("bookings.manage") ? (
             <button className="text-[11.5px] text-ink3 underline-offset-2 hover:underline" onClick={async () => {
               if (!bk) return;
               try { setRevealed(await api.bookings.revealVisitCode(bk._id)); audit("BOOKING_UPDATED", `${bk.fullName} · code revealed`, { bookingId: bk._id }); }

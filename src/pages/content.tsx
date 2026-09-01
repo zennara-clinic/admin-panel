@@ -17,7 +17,7 @@ import type { Banner, DeletedAccount, StockMovement } from "../lib/types";
 const SCREENS = ["", "consultations", "treatments", "appointments", "orders", "profile", "offers"];
 
 export function Banners() {
-  const { toast, audit, canManageCatalogue } = useStore();
+  const { toast, audit, can } = useStore();
   const [edit, setEdit] = useState<Banner | null>(null);
   const [creating, setCreating] = useState(false);
   const [del, setDel] = useState<Banner | null>(null);
@@ -36,13 +36,13 @@ export function Banners() {
 
   return (
     <Page title="Banners" sub="The carousel at the top of the app's home screen — images or short videos, each with an optional link"
-      actions={canManageCatalogue ? <Btn onClick={() => { setCreating(true); setEdit(null); }}>+ New banner</Btn> : undefined}>
+      actions={can("banners.manage") ? <Btn onClick={() => { setCreating(true); setEdit(null); }}>+ New banner</Btn> : undefined}>
       <Hint id="banners-live">Banners publish the moment they are saved. Order here is the order in the app; only active banners are shown.</Hint>
       <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
       <Async q={q} label="Loading banners…" rows={4}>
         {() => list.length === 0 ? (
           <Empty title="No banners yet" hint="Add an image or a short video for the home carousel."
-            action={canManageCatalogue ? <Btn onClick={() => setCreating(true)}>+ New banner</Btn> : undefined} />
+            action={can("banners.manage") ? <Btn onClick={() => setCreating(true)}>+ New banner</Btn> : undefined} />
         ) : (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {list.map((b, i) => (
@@ -58,7 +58,7 @@ export function Banners() {
                   <div className="mt-1 text-[11px] text-ink3">
                     {b.mediaType} · {b.linkType === "internal" ? `opens ${b.internalScreen}` : b.linkType === "external" ? "opens a link" : "no link"}
                   </div>
-                  {canManageCatalogue && (
+                  {can("banners.manage") && (
                     <div className="mt-3 flex flex-wrap items-center gap-1.5">
                       <button onClick={() => move(i, -1)} disabled={i === 0} className="rounded border border-border px-2 py-0.5 text-[11px] disabled:opacity-30">↑</button>
                       <button onClick={() => move(i, 1)} disabled={i === list.length - 1} className="rounded border border-border px-2 py-0.5 text-[11px] disabled:opacity-30">↓</button>
@@ -173,7 +173,7 @@ function BannerEditor({ open, banner, onClose, onSaved }: {
  * LEGAL — terms of service & privacy policy (AppCustomization root fields)
  * =================================================================== */
 export function LegalEditor() {
-  const { toast, audit, canManageCatalogue } = useStore();
+  const { toast, audit, can } = useStore();
   const q = useApi(() => api.appStudio.get(), []);
   const [terms, setTerms] = useState("");
   const [privacy, setPrivacy] = useState("");
@@ -202,7 +202,7 @@ export function LegalEditor() {
 
   return (
     <Page title="Terms & privacy" sub="The legal documents the app shows under Profile and at sign-up"
-      actions={canManageCatalogue ? <Btn kind="gold" disabled={!dirty || busy} onClick={save}>{busy ? "Publishing…" : "Publish"}</Btn> : undefined}>
+      actions={can("appContent.manage") ? <Btn kind="gold" disabled={!dirty || busy} onClick={save}>{busy ? "Publishing…" : "Publish"}</Btn> : undefined}>
       <Hint id="legal-live">Plain text. Start a section with a numbered heading on its own line ("1. INFORMATION WE COLLECT"), sub-sections as "1.1 Personal Information", and keep a "Last Updated:" line at the top — the app formats those.</Hint>
       <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
       <Async q={q} label="Loading documents…" rows={6}>
@@ -227,7 +227,7 @@ export function LegalEditor() {
  * DELETED ACCOUNTS — restorable archive
  * =================================================================== */
 export function DeletedAccounts() {
-  const { toast, audit, canManageStaff } = useStore();
+  const { toast, audit, can } = useStore();
   const nav = useNavigate();
   const [search, setSearch] = useState("");
   const [showRestored, setShowRestored] = useState(false);
@@ -292,7 +292,7 @@ export function DeletedAccounts() {
             </div>
             {sel.restoredAt ? (
               <Note className="mt-3">Restored on {fmtWhen(sel.restoredAt)}.</Note>
-            ) : canManageStaff ? (
+            ) : can("patients.delete") ? (
               <>
                 <Note className="mt-3"><B>Restoring</B> re-creates the login and every archived record. The guest can sign in again with the same email and phone.</Note>
                 <Btn kind="gold" className="w-full" disabled={busy} onClick={() => restore(sel)}>{busy ? "Restoring…" : "Restore this account"}</Btn>

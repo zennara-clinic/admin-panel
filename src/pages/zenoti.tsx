@@ -364,13 +364,13 @@ function runLabel(r: ZenotiSyncRun | null | undefined) {
 
 export function ClinicData() {
   const nav = useNavigate();
-  const { toast, admin } = useStore();
+  const { toast, can } = useStore();
   const [tab, setTab] = useQueryNumber("tab", 0, { min: 0, max: 5 });
   const status = useApi(() => api.zenoti.status(), []);
   const s = status.data;
   const busy = !!(s?.fullImportRunning || s?.rosterRunning || s?.detailsRunning);
   usePoll(status.reload, busy ? 5000 : 60000, true);
-  const isAdmin = admin?.role === "super_admin";
+  const isAdmin = can("zenoti.manage");
 
   const kinds = useMemo(() => ["packages", "appointments", "memberships", "orders", "notes", "forms"] as const, []);
   const pct = s && s.linkedUsers > 0 ? Math.round((s.freshWithin24h / s.linkedUsers) * 100) : 0;
