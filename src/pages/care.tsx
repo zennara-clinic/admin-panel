@@ -1657,6 +1657,9 @@ export function DermatologistDetail() {
   const [acctEmail, setAcctEmail] = useState("");
   const [acctPhone, setAcctPhone] = useState("");
   const [busy, setBusy] = useState(false);
+  // undefined = hidden; null = set before passwords could be shown; string = the password.
+  const [shownPw, setShownPw] = useState<string | null | undefined>(undefined);
+  const [pwLookupBusy, setPwLookupBusy] = useState(false);
 
   const win = useMemo(() => {
     const e = new Date(); const s = new Date();
@@ -1776,6 +1779,32 @@ export function DermatologistDetail() {
                     <In label="Phone" value={acctPhone} onChange={setAcctPhone} placeholder="10-digit mobile" />
                     <Btn kind="ghost" disabled={busy} onClick={saveAccount}>Save login details</Btn>
                     <Btn kind="gold" onClick={() => { setPw(""); setPw2(""); setPwOpen(true); }}>{account.data?.hasPassword ? "Reset password" : "Set password"}</Btn>
+                    {account.data?.hasPassword && shownPw === undefined && (
+                      <Btn kind="ghost" disabled={pwLookupBusy} onClick={async () => {
+                        setPwLookupBusy(true);
+                        try {
+                          const r = await api.doctors.revealPassword(doc._id);
+                          audit("DOCTOR_UPDATED", `${doc.name} · password viewed`, { doctorId: doc._id });
+                          setShownPw(r.password);
+                        } catch (e) { toast((e as Error).message); } finally { setPwLookupBusy(false); }
+                      }}>{pwLookupBusy ? "Looking up…" : "Show current password"}</Btn>
+                    )}
+                    {account.data?.hasPassword && shownPw !== undefined && (
+                      <div className="rounded-xl border border-border bg-ivory px-3.5 py-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="text-[10.5px] font-bold uppercase tracking-wider text-ink3">Current password</div>
+                            {shownPw
+                              ? <code className="block truncate font-mono text-[13px] font-bold">{shownPw}</code>
+                              : <div className="text-[12px] text-ink2">Set before passwords could be shown — reset it to see it here.</div>}
+                          </div>
+                          <div className="flex shrink-0 gap-1.5">
+                            {shownPw && <Btn kind="ghost" onClick={() => { void navigator.clipboard.writeText(shownPw); toast("Password copied"); }}>Copy</Btn>}
+                            <Btn kind="ghost" onClick={() => setShownPw(undefined)}>Hide</Btn>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                     {account.data?.lastLogin && <div className="text-[11px] text-ink3">Last signed in {fmtAgo(account.data.lastLogin)}</div>}
                   </div>
                 </Card>
@@ -1796,7 +1825,7 @@ export function DermatologistDetail() {
               <Btn kind="ghost" onClick={() => setPwOpen(false)}>Cancel</Btn>
               <Btn disabled={busy || pw.length < 8 || pw !== pw2} onClick={async () => {
                 setBusy(true);
-                try { await api.doctors.setPassword(doc._id, pw); audit("DOCTOR_UPDATED", `${doc.name} · password set`, { doctorId: doc._id }); toast("Password set"); setPwOpen(false); account.reload(); }
+                try { await api.doctors.setPassword(doc._id, pw); audit("DOCTOR_UPDATED", `${doc.name} · password set`, { doctorId: doc._id }); toast("Password set"); setPwOpen(false); setShownPw(undefined); account.reload(); }
                 catch (e) { toast((e as Error).message); } finally { setBusy(false); }
               }}>Save password</Btn>
             </div>
@@ -2138,6 +2167,9 @@ function TherapistEditor({ open, therapist, branches, onClose, onSaved, onPasswo
   const [pw2, setPw2] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // undefined = hidden; null = set before passwords could be shown; string = the password.
+  const [shownPw, setShownPw] = useState<string | null | undefined>(undefined);
+  const [pwLookupBusy, setPwLookupBusy] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -2145,7 +2177,7 @@ function TherapistEditor({ open, therapist, branches, onClose, onSaved, onPasswo
     setEmail(therapist?.email ?? "");
     setPhone(therapist?.phone ?? "");
     setBranchIds(((therapist?.branchIds?.length ? therapist.branchIds : therapist?.branchId ? [therapist.branchId] : []) as string[]) ?? []);
-    setPw(""); setPw2(""); setErr(null);
+    setPw(""); setPw2(""); setErr(null); setShownPw(undefined);
   }, [open, therapist?._id]);
 
   const save = async () => {
@@ -2221,8 +2253,36 @@ function TherapistEditor({ open, therapist, branches, onClose, onSaved, onPasswo
                     {therapist.lastLogin ? ` · last sign-in ${fmtAgo(therapist.lastLogin)}` : ""}
                   </div>
                 </div>
-                <Btn kind="gold" onClick={onPassword}>{therapist.hasPassword ? "Reset" : "Set"}</Btn>
+                <div className="flex shrink-0 gap-1.5">
+                  {therapist.hasPassword && shownPw === undefined && (
+                    <Btn kind="ghost" disabled={pwLookupBusy} onClick={async () => {
+                      setPwLookupBusy(true);
+                      try {
+                        const r = await api.staff.revealPassword(therapist._id);
+                        audit("SETTINGS_UPDATED", `${therapist.name} · therapist password viewed`, { staffId: therapist._id });
+                        setShownPw(r.password);
+                      } catch (e) { toast((e as Error).message); } finally { setPwLookupBusy(false); }
+                    }}>{pwLookupBusy ? "Looking up…" : "Show"}</Btn>
+                  )}
+                  <Btn kind="gold" onClick={onPassword}>{therapist.hasPassword ? "Reset" : "Set"}</Btn>
+                </div>
               </div>
+              {therapist.hasPassword && shownPw !== undefined && (
+                <div className="rounded-xl border border-border bg-ivory px-3.5 py-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-[10.5px] font-bold uppercase tracking-wider text-ink3">Current password</div>
+                      {shownPw
+                        ? <code className="block truncate font-mono text-[13px] font-bold">{shownPw}</code>
+                        : <div className="text-[12px] text-ink2">Set before passwords could be shown — reset it to see it here.</div>}
+                    </div>
+                    <div className="flex shrink-0 gap-1.5">
+                      {shownPw && <Btn kind="ghost" onClick={() => { void navigator.clipboard.writeText(shownPw); toast("Password copied"); }}>Copy</Btn>}
+                      <Btn kind="ghost" onClick={() => setShownPw(undefined)}>Hide</Btn>
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="flex items-center justify-between rounded-xl border border-border bg-ivory px-3.5 py-2.5">
                 <div>
                   <div className="text-[12.5px] font-bold">{therapist.isActive ? "Active" : "Deactivated"}</div>

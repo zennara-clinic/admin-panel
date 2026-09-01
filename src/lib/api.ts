@@ -262,6 +262,8 @@ export type DoctorStats = {
   feedback: { guest: string; rating: number; feedback: string; date: string }[];
 };
 export type DoctorAccount = { _id: Id; email: string; phone?: string | null; role: string; isActive: boolean; lastLogin?: string | null; hasPassword: boolean; passwordSetAt?: string | null; placeholderEmail: boolean };
+/** Audited password lookup — `password` is null when none is set or it predates the plaintext copy. */
+export type RevealedPassword = { hasPassword: boolean; password: string | null; passwordSetAt?: string | null };
 
 export const doctors = {
   list: (q?: Query) => requestRaw<Doctor[]>("/doctors", { query: q }),
@@ -274,6 +276,8 @@ export const doctors = {
   /** Panel login behind the profile (admin only). */
   account: (id: string) => request<DoctorAccount | null>(`/doctors/${id}/account`),
   setPassword: (id: string, password: string) => request<unknown>(`/doctors/${id}/account/password`, { method: "PUT", body: { password } }),
+  /** Current password, plaintext (super admins only; audited). Null = set before reveal existed — reset to see it. */
+  revealPassword: (id: string) => request<RevealedPassword>(`/doctors/${id}/account/password`),
   remove: (id: string) => requestRaw(`/doctors/${id}`, { method: "DELETE" }),
   toggle: (id: string) => request<Doctor>(`/doctors/${id}/toggle-status`, { method: "PATCH" }),
   /** The Doctor profile behind the signed-in staff login (role doctor). */
@@ -735,6 +739,8 @@ export const staff = {
   /** Set / reset a staff password — the new details are emailed to them. */
   setPassword: (id: Id, password: string) =>
     requestRaw(`/admin/staff/${id}/password`, { method: "PUT", body: { password } }),
+  /** Current password, plaintext (super admins only; audited). Null = set before reveal existed — reset to see it. */
+  revealPassword: (id: Id) => request<RevealedPassword>(`/admin/staff/${id}/password`),
   toggle: (id: Id) => request<Admin>(`/admin/staff/${id}/toggle-status`, { method: "PATCH" }),
   remove: (id: Id) => requestRaw(`/admin/staff/${id}`, { method: "DELETE" }),
 };
