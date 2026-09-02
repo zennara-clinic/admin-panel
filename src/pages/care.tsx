@@ -1772,14 +1772,35 @@ export function DermatologistDetail() {
 
               {can("dermatologists.manage") && (
                 <Card className="p-4">
-                  <SecH t="Panel login" right={account.data ? <Tag kind={account.data.hasPassword ? "ok" : "warn"}>{account.data.hasPassword ? "password set" : "no password — cannot sign in"}</Tag> : undefined} />
+                  <SecH t="Panel login" right={account.data ? (
+                    <Tag kind={!account.data.hasPassword ? "warn" : account.data.canRevealPassword === false ? "info" : "ok"}>
+                      {!account.data.hasPassword
+                        ? "no password — cannot sign in"
+                        : account.data.canRevealPassword === false ? "password set · cannot be shown" : "password set"}
+                    </Tag>
+                  ) : undefined} />
                   <Note className="mt-0">The clinic can set or change the login email, phone and password here at any time; the dermatologist can also change their own from My profile in their panel. Sign-in is password-only for dermatologists.</Note>
                   <div className="grid gap-2">
                     <In label="Login email" type="email" value={acctEmail} onChange={setAcctEmail} hint={account.data?.placeholderEmail ? "Placeholder — replace with their real address" : undefined} />
                     <In label="Phone" value={acctPhone} onChange={setAcctPhone} placeholder="10-digit mobile" />
                     <Btn kind="ghost" disabled={busy} onClick={saveAccount}>Save login details</Btn>
-                    <Btn kind="gold" onClick={() => { setPw(""); setPw2(""); setPwOpen(true); }}>{account.data?.hasPassword ? "Reset password" : "Set password"}</Btn>
-                    {account.data?.hasPassword && shownPw === undefined && (
+                    {/* Setting and viewing a password is its own sensitive
+                        permission, so a role that manages dermatologists can
+                        still be kept away from their credentials. */}
+                    {!can("dermatologists.password") && (
+                      <Note className="my-0 text-[11.5px]">Your role can edit these details but not their password. Ask someone with the “set / view dermatologist passwords” permission.</Note>
+                    )}
+                    {can("dermatologists.password") && (
+                      <Btn kind="gold" onClick={() => { setPw(""); setPw2(""); setPwOpen(true); }}>{account.data?.hasPassword ? "Reset password" : "Set password"}</Btn>
+                    )}
+                    {can("dermatologists.password") && account.data?.hasPassword && account.data.canRevealPassword === false && (
+                      <Note className="my-0 text-[11.5px]">
+                        This password was set before the panel kept a readable copy, so it cannot be shown — only a
+                        bcrypt hash is stored and that cannot be turned back into the password. Reset it to set a new
+                        one you can see, or it becomes viewable here by itself the next time they sign in with it.
+                      </Note>
+                    )}
+                    {can("dermatologists.password") && account.data?.hasPassword && account.data.canRevealPassword !== false && shownPw === undefined && (
                       <Btn kind="ghost" disabled={pwLookupBusy} onClick={async () => {
                         setPwLookupBusy(true);
                         try {
@@ -1789,7 +1810,7 @@ export function DermatologistDetail() {
                         } catch (e) { toast((e as Error).message); } finally { setPwLookupBusy(false); }
                       }}>{pwLookupBusy ? "Looking up…" : "Show current password"}</Btn>
                     )}
-                    {account.data?.hasPassword && shownPw !== undefined && (
+                    {can("dermatologists.password") && account.data?.hasPassword && shownPw !== undefined && (
                       <div className="rounded-xl border border-border bg-ivory px-3.5 py-2.5">
                         <div className="flex items-center justify-between gap-2">
                           <div className="min-w-0">
@@ -2158,7 +2179,7 @@ function TherapistEditor({ open, therapist, branches, onClose, onSaved, onPasswo
   onClose: () => void; onSaved: () => void;
   onPassword?: () => void; onToggle?: () => void; onDelete?: () => void;
 }) {
-  const { toast, audit } = useStore();
+  const { toast, audit, can } = useStore();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
@@ -2249,12 +2270,20 @@ function TherapistEditor({ open, therapist, branches, onClose, onSaved, onPasswo
                 <div>
                   <div className="text-[12.5px] font-bold">Password</div>
                   <div className="text-[11px] text-ink3">
-                    {therapist.hasPassword ? "Set — they sign in with it" : "Not set — they cannot sign in yet"}
+                    {!therapist.hasPassword
+                      ? "Not set — they cannot sign in yet"
+                      : therapist.canRevealPassword === false
+                        ? "Set before the panel kept a readable copy — it can be reset, not shown"
+                        : "Set — they sign in with it"}
                     {therapist.lastLogin ? ` · last sign-in ${fmtAgo(therapist.lastLogin)}` : ""}
                   </div>
                 </div>
+                {/* Credentials are a separate permission from managing the
+                    therapist record, so show the controls only to a role that
+                    actually holds it. */}
                 <div className="flex shrink-0 gap-1.5">
-                  {therapist.hasPassword && shownPw === undefined && (
+                  {!can("therapists.password") && <span className="text-[11px] text-ink3">Not your permission</span>}
+                  {can("therapists.password") && therapist.hasPassword && therapist.canRevealPassword !== false && shownPw === undefined && (
                     <Btn kind="ghost" disabled={pwLookupBusy} onClick={async () => {
                       setPwLookupBusy(true);
                       try {
@@ -2264,10 +2293,10 @@ function TherapistEditor({ open, therapist, branches, onClose, onSaved, onPasswo
                       } catch (e) { toast((e as Error).message); } finally { setPwLookupBusy(false); }
                     }}>{pwLookupBusy ? "Looking up…" : "Show"}</Btn>
                   )}
-                  <Btn kind="gold" onClick={onPassword}>{therapist.hasPassword ? "Reset" : "Set"}</Btn>
+                  {can("therapists.password") && <Btn kind="gold" onClick={onPassword}>{therapist.hasPassword ? "Reset" : "Set"}</Btn>}
                 </div>
               </div>
-              {therapist.hasPassword && shownPw !== undefined && (
+              {can("therapists.password") && therapist.hasPassword && shownPw !== undefined && (
                 <div className="rounded-xl border border-border bg-ivory px-3.5 py-2.5">
                   <div className="flex items-center justify-between gap-2">
                     <div className="min-w-0">

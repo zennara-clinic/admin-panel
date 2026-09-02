@@ -21,6 +21,8 @@ export type Admin = {
   branchIds?: Id[];
   /** True once a password is set. */
   hasPassword?: boolean;
+  /** False when a password is set but only as a hash — it can be reset, not shown. */
+  canRevealPassword?: boolean;
   passwordSetAt?: string | null;
   isActive: boolean;
   lastLogin?: string;

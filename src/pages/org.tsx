@@ -10,7 +10,8 @@ import api from "../lib/api";
 import { useApi, useDebounced } from "../lib/useApi";
 import { useQueryNumber, useQueryPage, useQueryString } from "../lib/useListState";
 import {
-  fmtCompactINR, fmtDate, fmtDateFull, fmtINR, fmtWhen, initials, isoDay, mapToRows, nameOf, pct,
+  addClinicDays, clinicWeekday, fmtCompactINR, fmtDate, fmtDateFull, fmtDayKey, fmtINR, fmtWhen,
+  initials, isoDay, mapToRows, nameOf, pct,
 } from "../lib/format";
 import type { Admin, AdminRole, AuditEntry, Branch, ConsultationReview, PermissionGroup, PermissionKey, ProductReview, Role, ServiceReview } from "../lib/types";
 import { SESSION_SLOT_MINUTES } from "../lib/scheduling";
@@ -20,7 +21,7 @@ import { RolesManager, StaffAccessFields, RoleChip, useCatalog } from "./access"
 const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
 
 const DAY_LABEL: Record<string, string> = { monday: "Mon", tuesday: "Tue", wednesday: "Wed", thursday: "Thu", friday: "Fri", saturday: "Sat", sunday: "Sun" };
-const dayKeyOf = (iso: string) => DAYS[(new Date(`${iso}T00:00:00+05:30`).getUTCDay() + 6) % 7]; // Monday-first
+const dayKeyOf = (iso: string) => DAYS[(clinicWeekday(iso) + 6) % 7]; // Monday-first
 
 /** Today's status for a centre — closure first, then the weekly hours. */
 function branchToday(b: Branch, iso = isoDay()) {
@@ -433,7 +434,9 @@ function BranchEditor({ open, branch, onClose, onSaved, onDelete }: {
 type ReviewKind = "products" | "consultations" | "services";
 
 export function Reviews() {
-  const { toast, audit } = useStore();
+  const { toast, audit, can } = useStore();
+  // The page is revealed by `reviews.view`; moderating is `reviews.manage`.
+  const canModerate = can("reviews.manage");
   const [kind, setKind] = useState<ReviewKind>("consultations");
   const [pending, setPending] = useState(false);
   const [sel, setSel] = useState<string | null>(null);
@@ -544,10 +547,16 @@ export function Reviews() {
               </Note>
             )}
 
-            {selected.isApproved
-              ? <Btn kind="ghost" onClick={() => approve(selected._id, false)}>Hide from the app</Btn>
-              : <Btn onClick={() => approve(selected._id, true)}>Publish to the app</Btn>}
-            <Btn kind="danger" onClick={() => remove(selected._id)}>Delete review</Btn>
+            {canModerate ? (
+              <>
+                {selected.isApproved
+                  ? <Btn kind="ghost" onClick={() => approve(selected._id, false)}>Hide from the app</Btn>
+                  : <Btn onClick={() => approve(selected._id, true)}>Publish to the app</Btn>}
+                <Btn kind="danger" onClick={() => remove(selected._id)}>Delete review</Btn>
+              </>
+            ) : (
+              <Note className="my-0">You can read reviews, but only someone with the “moderate reviews” permission can publish, hide or delete them.</Note>
+            )}
           </div>
         )}
       </Drawer>
@@ -574,7 +583,7 @@ function bucketSeries<T>(rows: T[], n: number, pick: (r: T) => number): number[]
 function bucketLabels(rows: { date: string }[], n: number): string[] {
   const size = Math.max(1, Math.ceil(rows.length / n));
   const out: string[] = [];
-  for (let i = 0; i < rows.length; i += size) out.push(new Date(rows[i].date).toLocaleDateString("en-IN", { day: "numeric", month: "short" }));
+  for (let i = 0; i < rows.length; i += size) out.push(fmtDayKey(rows[i].date.slice(0, 10), { day: "numeric", month: "short" }));
   return out;
 }
 
@@ -587,10 +596,11 @@ export function Analytics() {
 
   const window = useMemo(() => {
     if (custom) return custom;
-    const end = new Date(); const start = new Date();
-    if (range === "This year") start.setMonth(0, 1);
-    else start.setDate(end.getDate() - (ANALYTICS_RANGES[range] ?? 90) + 1);
-    return { startDate: isoDay(start), endDate: isoDay(end) };
+    const end = isoDay();
+    const start = range === "This year"
+      ? `${end.slice(0, 4)}-01-01`
+      : addClinicDays(end, -(ANALYTICS_RANGES[range] ?? 90) + 1);
+    return { startDate: start, endDate: end };
   }, [range, custom]);
   const scope = { ...window, branchId: branchId || undefined };
 
@@ -652,7 +662,7 @@ export function Analytics() {
         {({ dash: d, financial, appointments, patients, services, inventory, monthly, acquisition, demographics, sources, top, orders, products, pkgStats }) => {
           const a = appointments.overview;
           const growth = d.revenue.growthPercent;
-          const dailyLabels = d.daily.map((x) => new Date(x.date).toLocaleDateString("en-IN", { day: "numeric", month: "short" }));
+          const dailyLabels = d.daily.map((x) => fmtDayKey(x.date.slice(0, 10), { day: "numeric", month: "short" }));
           const streams = d.revenue.streams;
           const consultTrend = bucketSeries(d.daily, 10, (x) => x.consultations);
           const treatTrend = bucketSeries(d.daily, 10, (x) => x.treatments);
@@ -963,7 +973,24 @@ const Row = ({ k, v }: { k: string; v: string }) => (
 );
 
 /* ================= STAFF & ROLES ================= */
-type StaffRow = Admin & { canSignIn?: boolean; isVerified?: boolean };
+type StaffRow = Admin & {
+  canSignIn?: boolean;
+  isVerified?: boolean;
+  /** How the server lets this account in: an emailed code, or a password. */
+  loginMethod?: "otp" | "password";
+  hasPassword?: boolean;
+  onAllowList?: boolean;
+};
+
+/**
+ * Which accounts have a password at all.
+ *
+ * The admin panel is email + emailed code only, so super admins and granular
+ * staff never get one. Dermatologists and therapists sign into their own panels
+ * with email + password. The server enforces the same split — setting a
+ * password on an admin-panel account is refused there too.
+ */
+const usesPassword = (role: AdminRole) => role === "doctor" || role === "therapist";
 
 export function Roles() {
   const { can } = useStore();
@@ -991,7 +1018,7 @@ export function Roles() {
 }
 
 function StaffTab({ roles }: { roles: Role[] }) {
-  const { toast, audit, canManageStaff, admin } = useStore();
+  const { toast, audit, canManageStaff, admin, can } = useStore();
   const [invOpen, setInvOpen] = useState(false);
   const [sel, setSel] = useState<StaffRow | null>(null);
   const [del, setDel] = useState<StaffRow | null>(null);
@@ -1080,20 +1107,40 @@ function StaffTab({ roles }: { roles: Role[] }) {
 
             {sel.canSignIn === false && (
               <Note kind="crit" className="my-0">
-                <B>{sel.email}</B> is not on the server's <code>ADMIN_EMAILS</code> allow-list, so sign-in will be
-                refused. Add it to that environment variable and restart the API.
+                <B>{sel.email}</B> has no password yet, so they cannot sign into the{" "}
+                {sel.role === "doctor" ? "dermatologist" : "floor"} panel. Set one from the{" "}
+                {sel.role === "doctor" ? "Dermatologists" : "Therapists"} page.
               </Note>
             )}
+            <Note className="my-0 text-[11.5px]">
+              {usesPassword(sel.role)
+                ? <>Signs into the {sel.role === "doctor" ? "dermatologist" : "floor"} panel with <B>{sel.email}</B> and a password.</>
+                : <>Signs into the admin panel with <B>{sel.email}</B> and a 6-digit code emailed at sign-in — admin panel accounts have no password.</>}
+            </Note>
 
             {canManageStaff ? (
               <>
                 <In label="Display name" value={sel.name ?? ""} onChange={(v) => setSel({ ...sel, name: v })} />
-                <Sel label="Role" value={ROLE_LABEL[sel.role]}
-                  onChange={(v) => {
-                    const role = (Object.keys(ROLE_LABEL) as AdminRole[]).find((r) => ROLE_LABEL[r] === v);
-                    if (role) setSel({ ...sel, role });
-                  }}
-                  options={ROLES.map((r) => ROLE_LABEL[r])} />
+                {/*
+                  * Account type is shown, not chosen. Each kind is created and
+                  * retired where it belongs — super admins in ADMIN_EMAILS,
+                  * dermatologists and therapists on their own pages — so a
+                  * dropdown here would be a second, contradictory way to mint
+                  * one. What a Staff account may do is the role below.
+                  */}
+                <div>
+                  <div className="mb-1.5 text-[11px] font-bold text-ink2">Account type</div>
+                  <div className="flex items-center gap-2 rounded-(--radius-btn) border border-border bg-ivory px-3 py-2.5">
+                    <Tag kind={sel.role === "super_admin" ? "gold" : sel.role === "staff" ? "ok" : "info"}>{ROLE_LABEL[sel.role]}</Tag>
+                    <span className="text-[11.5px] text-ink3">
+                      {sel.role === "super_admin"
+                        ? <>Set by the server's <code>ADMIN_EMAILS</code> list</>
+                        : sel.role === "doctor" ? "Managed on the Dermatologists page"
+                        : sel.role === "therapist" ? "Managed on the Therapists page"
+                        : "Admin panel access, defined by the role below"}
+                    </span>
+                  </div>
+                </div>
                 {sel.role === "doctor" && (
                   <Sel label="Dermatologist profile" value={doctorLabel(sel.doctorId)}
                     onChange={(v) => setSel({ ...sel, doctorId: doctorByLabel(v) })}
@@ -1117,17 +1164,19 @@ function StaffTab({ roles }: { roles: Role[] }) {
                 <Btn onClick={async () => {
                   try {
                     await api.staff.update(sel._id, {
-                      name: sel.name, role: sel.role,
+                      name: sel.name,
                       doctorId: sel.role === "doctor" ? (sel.doctorId ?? null) : null,
                       ...(sel.role === "staff" ? { customRoleId: sel.customRoleId ?? null, permissions: sel.permissions ?? [] } : {}),
                     });
-                    audit("SETTINGS_UPDATED", `Staff ${sel.email} → ${ROLE_LABEL[sel.role]}`, { staffId: sel._id });
+                    audit("SETTINGS_UPDATED", `Staff ${sel.email} updated`, { staffId: sel._id });
                     toast("Staff account updated"); q.reload(); setSel(null);
                   } catch (e) { toast((e as Error).message); }
                 }}>Save changes</Btn>
 
-                {sel.role === "staff" && (
-                  <Btn kind="ghost" onClick={() => setPwFor(sel)}>Set / reset password</Btn>
+                {usesPassword(sel.role) && (
+                  can(sel.role === "therapist" ? ["staff.password", "therapists.password"] : ["staff.password", "dermatologists.password"])
+                    ? <Btn kind="ghost" onClick={() => setPwFor(sel)}>Set / reset password</Btn>
+                    : <Note className="my-0 text-[11.5px]">Setting their password is a separate permission your role does not hold.</Note>
                 )}
 
                 {sel._id !== admin?._id && (
@@ -1174,7 +1223,10 @@ function StaffTab({ roles }: { roles: Role[] }) {
   );
 }
 
-/** Set / reset a staff member's panel password (staff sign in with a password). */
+/**
+ * Set / reset the password for a clinical account. Only dermatologists and
+ * therapists have one — the admin panel signs in with an emailed code.
+ */
 function StaffPasswordModal({ staff, onClose, onSaved }: { staff: StaffRow | null; onClose: () => void; onSaved: () => void }) {
   const { toast, audit } = useStore();
   const [pw, setPw] = useState("");
@@ -1184,7 +1236,10 @@ function StaffPasswordModal({ staff, onClose, onSaved }: { staff: StaffRow | nul
   if (!staff) return null;
   return (
     <Modal open onClose={onClose} title={`${staff.hasPassword ? "Reset" : "Set"} password — ${staff.name || staff.email}`}>
-      <Note>They sign in at the admin panel with <B>{staff.email}</B> and this password. At least 8 characters.</Note>
+      <Note>
+        They sign in at the {staff.role === "doctor" ? "dermatologist" : "floor"} panel with <B>{staff.email}</B> and
+        this password — we email them the details. At least 8 characters.
+      </Note>
       <div className="mt-3 grid gap-2.5">
         <In label="New password" type="password" value={pw} onChange={setPw} />
         <In label="Confirm" type="password" value={pw2} onChange={setPw2} />
@@ -1205,41 +1260,39 @@ function StaffPasswordModal({ staff, onClose, onSaved }: { staff: StaffRow | nul
   );
 }
 
+/**
+ * Add an admin-panel staff account — the only kind this screen creates.
+ *
+ * The other three account types are not made here, so there is no account-type
+ * picker to get wrong:
+ *   · Super admins come from the server's ADMIN_EMAILS environment variable and
+ *     are created on first sign-in. Nobody can mint one from the panel.
+ *   · Dermatologists are created on the Dermatologists page, alongside the
+ *     clinical profile the login belongs to.
+ *   · Therapists are created on the Therapists page, with their centres.
+ * Those two also get a password there; a staff account never has one.
+ */
 function AddStaffForm({ roles, groups, onDone }: { roles: Role[]; groups: PermissionGroup[]; onDone: () => void }) {
   const { toast, audit } = useStore();
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
-  const [role, setRole] = useState<AdminRole>("staff");
-  const [doctorId, setDoctorId] = useState<string | null>(null);
   const [customRoleId, setCustomRoleId] = useState<string | null>(roles[0]?._id ?? null);
   const [perms, setPerms] = useState<Set<PermissionKey>>(new Set());
-  const [pw, setPw] = useState("");
-  const [pw2, setPw2] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
-  const doctors = useApi(() => api.doctors.list({ includeInactive: "true" }).then((r) => r.data ?? []), []);
-  const doctorOptions = ["— not linked —", ...(doctors.data ?? []).map((d) => `${d.name} (${d.email || "no email"})`)];
-
-  // 'staff' is the default — the new granular admin-panel account.
-  const ROLES: AdminRole[] = ["staff", "super_admin", "doctor", "therapist"];
-  const needsPassword = role === "staff";
 
   const submit = async () => {
     setBusy(true); setErr(null);
     try {
-      if (needsPassword) {
-        if (pw.length < 8) { setErr("Set a password of at least 8 characters"); setBusy(false); return; }
-        if (pw !== pw2) { setErr("The passwords don't match"); setBusy(false); return; }
-      }
+      // Always 'staff', and never a password: they sign in with a code emailed
+      // to this address. The server refuses any other account type here.
       const res = await api.staff.create({
-        email: email.trim().toLowerCase(), name: name.trim() || undefined, role,
-        doctorId: role === "doctor" ? doctorId : null,
-        ...(role === "staff" ? { customRoleId, permissions: [...perms], password: pw } : {}),
+        email: email.trim().toLowerCase(), name: name.trim() || undefined, role: "staff",
+        customRoleId, permissions: [...perms],
       });
       const created = res.data as Admin;
-      audit("SETTINGS_UPDATED", `Created staff ${created.email} as ${ROLE_LABEL[role]}`, { staffId: created._id });
-      toast(`${created.email} added as ${ROLE_LABEL[role]}`);
+      audit("SETTINGS_UPDATED", `Created staff ${created.email}`, { staffId: created._id });
+      toast(`${created.email} added`);
       onDone();
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
@@ -1248,40 +1301,24 @@ function AddStaffForm({ roles, groups, onDone }: { roles: Role[]; groups: Permis
     <>
       <div className="grid gap-3">
         <In label="Work email" type="email" value={email} onChange={setEmail} placeholder="name@zennara.in"
-          hint={needsPassword ? "Their sign-in address for the admin panel." : "A one-time code goes to this address at sign-in."} />
+          hint="Their sign-in address. A 6-digit code goes to it at every sign-in." />
         <In label="Display name" value={name} onChange={setName} placeholder="Leave blank to use the email prefix" />
-        <Sel label="Account type" value={ROLE_LABEL[role]}
-          onChange={(v) => setRole((Object.keys(ROLE_LABEL) as AdminRole[]).find((r) => ROLE_LABEL[r] === v) ?? "staff")}
-          options={ROLES.map((r) => ROLE_LABEL[r])} />
-
-        {role === "staff" && (
-          <>
-            <StaffAccessFields
-              roles={roles} groups={groups}
-              customRoleId={customRoleId} permissions={perms}
-              onRole={setCustomRoleId} onPermissions={setPerms}
-            />
-            <div className="grid grid-cols-2 gap-2">
-              <In label="Password" type="password" value={pw} onChange={setPw} hint="At least 8 characters" />
-              <In label="Confirm" type="password" value={pw2} onChange={setPw2} />
-            </div>
-          </>
-        )}
-
-        {role === "doctor" && (
-          <Sel label="Dermatologist profile (optional)" value={doctorOptions.find((o) => o.startsWith((doctors.data ?? []).find((d) => d._id === doctorId)?.name ?? "\u0000")) ?? "— not linked —"}
-            onChange={(v) => setDoctorId((doctors.data ?? []).find((d) => `${d.name} (${d.email || "no email"})` === v)?._id ?? null)}
-            options={doctorOptions} />
-        )}
+        <StaffAccessFields
+          roles={roles} groups={groups}
+          customRoleId={customRoleId} permissions={perms}
+          onRole={setCustomRoleId} onPermissions={setPerms}
+        />
       </div>
 
-      {role !== "staff" && (
-        <Note>
-          {role === "super_admin"
-            ? <>Super admins hold every permission and sign in with a one-time code — the email must be on the server's <code>ADMIN_EMAILS</code> allow-list.</>
-            : <>Dermatologists and therapists sign into their own panels; set their password from the {role === "doctor" ? "Dermatologists" : "Therapists"} page.</>}
-        </Note>
-      )}
+      <Note>
+        They sign into the admin panel with this email and a 6-digit code emailed at every sign-in — there is no
+        password to set or share. What they can see and do is the role above.
+      </Note>
+      <Note className="text-[11.5px]">
+        Adding a <B>dermatologist</B> or <B>therapist</B>? Create them on their own page instead — that is where their
+        profile, centres and password live. <B>Super admins</B> come from the server's <code>ADMIN_EMAILS</code> list
+        and appear here once they first sign in.
+      </Note>
       {err && <Note kind="crit">{err}</Note>}
       <div className="mt-3 flex justify-end gap-2">
         <Btn kind="ghost" onClick={onDone}>Cancel</Btn>

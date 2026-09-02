@@ -84,16 +84,23 @@ export function firstAllowedRoute(can: (p: PermissionKey | PermissionKey[]) => b
 }
 
 /* ================= live sidebar badges ================= */
-function useNavBadges(role: Role, branchId: string) {
+/**
+ * Only ask for the counts this account is allowed to see. A badge belongs to a
+ * nav item that is already hidden without its permission, so requesting it
+ * anyway achieved nothing except a 403 and a PERMISSION_DENIED row in the audit
+ * log on every page load.
+ */
+function useNavBadges(role: Role, branchId: string, can: (p: PermissionKey | PermissionKey[]) => boolean) {
   return useApi(async () => {
     if (role !== "admin") return {} as Record<string, number>;
 
+    const skip = Promise.resolve(undefined);
     const settled = await Promise.allSettled([
-      api.bookings.list({ status: "Awaiting Confirmation", limit: 1 }),
-      api.chat.stats(branchId || undefined),
-      api.orders.stats(),
-      api.analytics.inventory(),
-      api.reviews.products({ isApproved: "false", limit: 1 }),
+      can("bookings.view") ? api.bookings.list({ status: "Awaiting Confirmation", limit: 1 }) : skip,
+      can("chat.view") ? api.chat.stats(branchId || undefined) : skip,
+      can("orders.view") ? api.orders.stats() : skip,
+      can("inventory.view") ? api.analytics.inventory() : skip,
+      can("reviews.view") ? api.reviews.products({ isApproved: "false", limit: 1 }) : skip,
     ]);
 
     const val = <T,>(i: number): T | undefined =>
@@ -117,7 +124,7 @@ function useNavBadges(role: Role, branchId: string) {
       lowstock: inv?.summary?.lowStockCount ?? 0,
       reviews: rev?.pagination?.total ?? rev?.count ?? 0,
     } as Record<string, number>;
-  }, [role, branchId]);
+  }, [role, branchId, can]);
 }
 
 /* ================= global search ================= */
@@ -129,17 +136,20 @@ function SearchOverlay() {
 
   useEffect(() => { if (searchOpen) setQ(""); }, [searchOpen]);
 
-  const { role } = useStore();
+  const { role, can } = useStore();
   const isAdmin = role === "admin";
   const results = useApi(async () => {
     const term = debounced.trim();
     if (!searchOpen || term.length < 2) return { patients: [], services: [], products: [], bookings: [] };
 
+    // Search only the sections this account may open — otherwise it becomes a
+    // side door into records the rest of the panel keeps hidden from them.
+    const none = Promise.resolve({ data: [] });
     const settled = await Promise.allSettled([
-      api.patients.list({ search: term, limit: 4 }),
-      api.services.list({ search: term, limit: 4, includeInactive: "true" }),
-      isAdmin ? api.products.list({ search: term }) : Promise.resolve({ data: [] }),
-      isAdmin ? api.bookings.list({ search: term, limit: 5 }) : Promise.resolve({ data: [] }),
+      can("patients.view") ? api.patients.list({ search: term, limit: 4 }) : none,
+      can("services.view") ? api.services.list({ search: term, limit: 4, includeInactive: "true" }) : none,
+      isAdmin && can("products.view") ? api.products.list({ search: term }) : none,
+      isAdmin && can("bookings.view") ? api.bookings.list({ search: term, limit: 5 }) : none,
     ]);
     const ok = <T,>(i: number, fallback: T): T =>
       settled[i].status === "fulfilled" ? ((settled[i] as PromiseFulfilledResult<T>).value) : fallback;
@@ -334,7 +344,7 @@ export function Shell({ children }: { children: ReactNode }) {
   } = useStore();
   const loc = useLocation();
   const nav = useNavigate();
-  const badges = useNavBadges(role, branchId);
+  const badges = useNavBadges(role, branchId, can);
 
   // Show only the sections this account may open; hide groups left empty.
   const visibleNav = NAV
@@ -474,15 +484,15 @@ const SLIDES = [
 ];
 
 /**
- * Sign-in is the backend's admin OTP flow: the address is checked against the
- * server's allow-list, a 6-digit code is emailed, and verifying it returns the
- * bearer token. Which panel you land on comes from your account's role.
+ * Sign-in is the backend's admin OTP flow, and only that: the address is checked
+ * against the server's staff list, a 6-digit code is emailed, and verifying it
+ * returns the bearer token. Admin-panel accounts — super admins and granular
+ * staff — have no password at all; the dermatologist and floor panels are the
+ * ones that sign in with email + password, on their own login screens.
  */
 function LoginPage({ onSignedIn }: { onSignedIn: (token: string, admin: Admin, expiresAt?: string) => void }) {
   const [slide, setSlide] = useState(0);
   const [step, setStep] = useState<"email" | "otp">("email");
-  const [mode, setMode] = useState<"code" | "password">("code");
-  const [password, setPassword] = useState("");
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [busy, setBusy] = useState(false);
@@ -503,18 +513,6 @@ function LoginPage({ onSignedIn }: { onSignedIn: (token: string, admin: Admin, e
 
   const fail = (err: unknown) =>
     setError(err instanceof ApiError ? err.message : (err as Error)?.message ?? "Something went wrong");
-
-  const loginWithPassword = async () => {
-    const addr = email.trim().toLowerCase();
-    if (!/^\S+@\S+\.\S+$/.test(addr)) { setError("Enter a valid email address"); return; }
-    if (!password) { setError("Enter your password"); return; }
-    setBusy(true); setError(null); setNotice(null);
-    try {
-      const r = await api.auth.loginPassword(addr, password);
-      if (!panelAccepts(r.admin.role)) { setError(wrongPanelMessage(r.admin.role)); return; }
-      onSignedIn(r.token, r.admin, r.expiresAt);
-    } catch (err) { fail(err); } finally { setBusy(false); }
-  };
 
   const sendOtp = async () => {
     const addr = email.trim().toLowerCase();
@@ -593,7 +591,7 @@ function LoginPage({ onSignedIn }: { onSignedIn: (token: string, admin: Admin, e
             <div>
               <h1 className="text-[22px] font-extrabold leading-tight tracking-tight">Zennara Admin</h1>
               <div className="text-[12.5px] text-ink3">
-                {step === "email" ? (mode === "password" ? "Sign in with your email and password" : "Sign in with your Zennara email") : "Enter the code we emailed you"}
+                {step === "email" ? "Sign in with your Zennara email" : "Enter the code we emailed you"}
               </div>
             </div>
           </div>
@@ -608,21 +606,9 @@ function LoginPage({ onSignedIn }: { onSignedIn: (token: string, admin: Admin, e
                     placeholder="you@zennara.in"
                     className="rounded-lg border border-border bg-ivory px-3 py-2.5 text-[13.5px] outline-none focus:border-gold-dark" />
                 </div>
-                {mode === "password" && (
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[11px] font-bold text-ink2" htmlFor="login-password">Password</label>
-                    <input id="login-password" value={password} type="password" autoComplete="current-password"
-                      onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && !busy && loginWithPassword()}
-                      placeholder="••••••••"
-                      className="rounded-lg border border-border bg-ivory px-3 py-2.5 text-[13.5px] outline-none focus:border-gold-dark" />
-                  </div>
-                )}
-                <button onClick={mode === "password" ? loginWithPassword : sendOtp} disabled={busy}
+                <button onClick={sendOtp} disabled={busy}
                   className="mt-1 flex items-center justify-center gap-2 rounded-(--radius-btn) bg-primary py-3 text-[14px] font-bold text-white transition-colors hover:bg-primary-hover disabled:bg-dis-bg disabled:text-dis">
-                  {busy && <Loader2 className="h-4 w-4 animate-spin" />} {mode === "password" ? "Sign in" : "Send code"}
-                </button>
-                <button onClick={() => { setMode(mode === "password" ? "code" : "password"); setError(null); }} className="text-center text-[12px] text-ink3 hover:text-primary">
-                  {mode === "password" ? "Use an emailed code instead" : "Have a password? Sign in with it"}
+                  {busy && <Loader2 className="h-4 w-4 animate-spin" />} Send code
                 </button>
               </>
             ) : (
@@ -657,7 +643,7 @@ function LoginPage({ onSignedIn }: { onSignedIn: (token: string, admin: Admin, e
 
           <p className="mt-4 text-center text-[11.5px] leading-relaxed text-ink3">
             Access is limited to addresses the clinic has authorised.<br />
-            This panel is for clinic super-admin accounts.
+            Dermatologists and therapists sign in on their own panels, with a password.
           </p>
         </div>
       </div>

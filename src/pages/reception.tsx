@@ -14,19 +14,20 @@ import { useQueryNumber, useQueryPage, useQueryString } from "../lib/useListStat
 import {
   ageFrom, bookingProvider, bookingServiceName, bookingSlotDate, bookingSlotLabel, bookingSource, fmtAgo, fmtCompactINR,
   fmtDate, fmtDateFull, fmtINR, fmtWhen, idOf, initials, isoDay, isVip, nameOf, patientFlags, pct,
-  statusKey, mapToRows, isConsultationBooking, clinicHM,
+  statusKey, mapToRows, isConsultationBooking, clinicHM, addClinicDays, clinicMonthEnd,
+  clinicMonthStart, clinicWeekday, dayKeyDate, fmtDayKey,
 } from "../lib/format";
 import type { Booking, Branch, Chat as ChatThread, ChatMessage, Consultation, Doctor, User } from "../lib/types";
 
 /* ================= OVERVIEW ================= */
 const RANGE_PRESETS: [string, () => { startDate: string; endDate: string }][] = [
-  ["Today", () => ({ startDate: isoDay(new Date()), endDate: isoDay(new Date()) })],
-  ["Last 7 days", () => { const e = new Date(); const s = new Date(); s.setDate(e.getDate() - 6); return { startDate: isoDay(s), endDate: isoDay(e) }; }],
-  ["Last 30 days", () => { const e = new Date(); const s = new Date(); s.setDate(e.getDate() - 29); return { startDate: isoDay(s), endDate: isoDay(e) }; }],
-  ["This month", () => { const e = new Date(); return { startDate: isoDay(new Date(e.getFullYear(), e.getMonth(), 1)), endDate: isoDay(e) }; }],
-  ["Last month", () => { const n = new Date(); return { startDate: isoDay(new Date(n.getFullYear(), n.getMonth() - 1, 1)), endDate: isoDay(new Date(n.getFullYear(), n.getMonth(), 0)) }; }],
-  ["Last 90 days", () => { const e = new Date(); const s = new Date(); s.setDate(e.getDate() - 89); return { startDate: isoDay(s), endDate: isoDay(e) }; }],
-  ["This year", () => { const e = new Date(); return { startDate: isoDay(new Date(e.getFullYear(), 0, 1)), endDate: isoDay(e) }; }],
+  ["Today", () => { const e = isoDay(); return { startDate: e, endDate: e }; }],
+  ["Last 7 days", () => { const e = isoDay(); return { startDate: addClinicDays(e, -6), endDate: e }; }],
+  ["Last 30 days", () => { const e = isoDay(); return { startDate: addClinicDays(e, -29), endDate: e }; }],
+  ["This month", () => { const e = isoDay(); return { startDate: clinicMonthStart(e), endDate: e }; }],
+  ["Last month", () => { const e = addClinicDays(clinicMonthStart(isoDay()), -1); return { startDate: clinicMonthStart(e), endDate: clinicMonthEnd(e) }; }],
+  ["Last 90 days", () => { const e = isoDay(); return { startDate: addClinicDays(e, -89), endDate: e }; }],
+  ["This year", () => { const e = isoDay(); return { startDate: `${e.slice(0, 4)}-01-01`, endDate: e }; }],
 ];
 
 export function Overview() {
@@ -42,7 +43,7 @@ export function Overview() {
 
   const streamRows = (d?.revenue.streams ?? []).map((s) => [s.label, s.revenue, `${s.count} · app ${fmtCompactINR(s.app)}${s.clinic ? ` · clinic ${fmtCompactINR(s.clinic)}` : ""}`] as [string, number, string]);
   const dailyPts = d?.daily.map((x) => x.total) ?? [];
-  const dailyLabels = d?.daily.map((x) => new Date(x.date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })) ?? [];
+  const dailyLabels = d?.daily.map((x) => fmtDayKey(String(x.date).slice(0, 10), { day: "numeric", month: "short" })) ?? [];
   const byKind = d ? [
     { n: "Consultations", v: d.daily.map((x) => x.consultations) },
     { n: "Treatments", v: d.daily.map((x) => x.treatments) },
@@ -799,21 +800,22 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser }: {
 }
 
 /* ================= TODAY ================= */
-/** Half-hour rows between the centre's opening and closing time on that day. */
+/** One-hour rows whose complete session fits inside the centre's hours. */
 function slotTimesFor(hours: Branch["operatingHours"] | undefined, day: string): string[] {
-  const weekday = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"][new Date(day).getDay()];
+  const weekday = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"][clinicWeekday(day)];
   const h = hours?.[weekday] as { open?: string; openTime?: string; close?: string; closeTime?: string; isOpen?: boolean } | undefined;
   const open = h?.open ?? h?.openTime ?? "09:00";
   const close = h?.close ?? h?.closeTime ?? "19:00";
   const toMin = (t: string) => { const [a, b] = t.split(":").map(Number); return a * 60 + (b || 0); };
   const out: string[] = [];
-  for (let m = toMin(open); m <= toMin(close); m += 30) out.push(`${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`);
+  for (let m = toMin(open); m + 60 <= toMin(close); m += 60) out.push(`${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`);
   return out.length ? out : ["09:00"];
 }
 
 export function Today() {
   const { branch, branchId, branches } = useStore();
   const [day, setDay] = useState(isoDay());
+  const liveDay = useRef(isoDay());
   const [view, setView] = useState<"day" | "list">("day");
   const [newOpen, setNewOpen] = useState(false);
   const [sel, setSel] = useState<string | null>(null);
@@ -821,6 +823,17 @@ export function Today() {
   const [provF, setProvF] = useState("All dermatologists");
   const [stF, setStF] = useState("All statuses");
   const [kind, setKind] = useQueryString("kind", "");
+
+  // Follow the clinic calendar across midnight unless staff deliberately
+  // selected another day in the date control.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const current = isoDay();
+      setDay((selected) => selected === liveDay.current ? current : selected);
+      liveDay.current = current;
+    }, 60000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const bookingsQ = useApi(
     () => api.bookings.list({ date: day, location: branch && branch !== "All branches" ? branch : undefined }),
@@ -1033,8 +1046,8 @@ function bookingQuery(f: BookingFilters): Record<string, string | number> {
 }
 
 const isoOf = (d: Date) => isoDay(d);
-const startOfWeek = (d: Date) => { const x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; }; // Monday
-const addDays = (d: Date, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+const startOfWeek = (d: Date) => { const x = new Date(d); x.setUTCDate(x.getUTCDate() - ((x.getUTCDay() + 6) % 7)); return x; }; // Monday
+const addDays = (d: Date, n: number) => { const x = new Date(d); x.setUTCDate(x.getUTCDate() + n); return x; };
 
 export function Bookings() {
   const { branch, branches } = useStore();
@@ -1048,7 +1061,7 @@ export function Bookings() {
   const [viewParam, setView] = useQueryString("view", "list");
   const view: "list" | "week" | "month" = viewParam === "week" ? "week" : viewParam === "month" ? "month" : "list";
   const [anchorParam, setAnchor] = useQueryString("at", "");
-  const anchor = useMemo(() => { const d = anchorParam ? new Date(anchorParam) : new Date(); return Number.isNaN(d.getTime()) ? new Date() : d; }, [anchorParam]);
+  const anchor = useMemo(() => dayKeyDate(/^\d{4}-\d{2}-\d{2}$/.test(anchorParam) ? anchorParam : isoDay()), [anchorParam]);
   const scope: "branch" | "all" = scopeParam === "all" ? "all" : "branch";
   const debounced = useDebounced(search);
   const [kindParam, setKindParam] = useQueryString("kind", "");
@@ -1089,7 +1102,7 @@ export function Bookings() {
   // Calendar views pin the date range to the visible week/month.
   const calRange = useMemo(() => {
     if (view === "week") { const s = startOfWeek(anchor); return { from: isoOf(s), to: isoOf(addDays(s, 6)) }; }
-    if (view === "month") { const s = new Date(anchor.getFullYear(), anchor.getMonth(), 1); const e = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0); return { from: isoOf(s), to: isoOf(e) }; }
+    if (view === "month") { const key = isoOf(anchor); return { from: clinicMonthStart(key), to: clinicMonthEnd(key) }; }
     return null;
   }, [view, anchor]);
 
@@ -1135,10 +1148,12 @@ export function Bookings() {
   const kindLabel = applied.kind === "consultation" ? "Dermatologist consultations" : applied.kind === "treatment" ? "Treatments" : "All services";
   const sortLabel = BOOKING_SORTS.find(([v]) => v === applied.sortBy)?.[1] ?? "Appointment date";
   const fmtAnchor = view === "week"
-    ? `${startOfWeek(anchor).toLocaleDateString("en-IN", { day: "numeric", month: "short" })} – ${addDays(startOfWeek(anchor), 6).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}`
-    : anchor.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+    ? `${fmtDayKey(isoOf(startOfWeek(anchor)), { day: "numeric", month: "short" })} – ${fmtDayKey(isoOf(addDays(startOfWeek(anchor), 6)), { day: "numeric", month: "short", year: "numeric" })}`
+    : fmtDayKey(isoOf(anchor), { month: "long", year: "numeric" });
   const shift = (n: number) => {
-    const d = view === "week" ? addDays(anchor, 7 * n) : new Date(anchor.getFullYear(), anchor.getMonth() + n, 1);
+    const d = new Date(anchor);
+    if (view === "week") d.setUTCDate(d.getUTCDate() + 7 * n);
+    else d.setUTCMonth(d.getUTCMonth() + n, 1);
     setAnchor(isoOf(d));
   };
 
@@ -1242,8 +1257,8 @@ export function Bookings() {
               return (
                 <div key={k} className={`min-h-[320px] rounded-lg border p-1.5 ${k === todayIso ? "border-gold bg-gold/5" : "border-border bg-ivory/60"}`}>
                   <div className="mb-1.5 flex items-baseline justify-between px-0.5">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-ink3">{d.toLocaleDateString("en-IN", { weekday: "short" })}</span>
-                    <span className={`text-[13px] font-bold ${k === todayIso ? "text-gold-dark" : ""}`}>{d.getDate()}</span>
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-ink3">{fmtDayKey(k, { weekday: "short" })}</span>
+                    <span className={`text-[13px] font-bold ${k === todayIso ? "text-gold-dark" : ""}`}>{d.getUTCDate()}</span>
                   </div>
                   <div className="flex flex-col gap-1">{list.map(calendarCell)}</div>
                   {list.length === 0 && <div className="px-0.5 text-[10.5px] text-ink3">—</div>}
@@ -1253,7 +1268,7 @@ export function Bookings() {
           </div>
         ) : (
           (() => {
-            const first = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+            const first = dayKeyDate(clinicMonthStart(isoOf(anchor)));
             const gridStart = startOfWeek(first);
             const cells = Array.from({ length: 42 }, (_, i) => addDays(gridStart, i));
             return (
@@ -1263,11 +1278,11 @@ export function Bookings() {
                 </div>
                 <div className="grid grid-cols-7 gap-1">
                   {cells.map((d) => {
-                    const k = isoOf(d); const list = byDay.get(k) ?? []; const inMonth = d.getMonth() === anchor.getMonth();
+                    const k = isoOf(d); const list = byDay.get(k) ?? []; const inMonth = d.getUTCMonth() === anchor.getUTCMonth();
                     return (
                       <div key={k} className={`min-h-[96px] rounded-lg border p-1 ${k === todayIso ? "border-gold bg-gold/5" : "border-border"} ${inMonth ? "bg-surface" : "bg-ivory/40 opacity-60"}`}>
                         <div className="flex items-center justify-between px-0.5">
-                          <span className={`text-[11.5px] font-bold ${k === todayIso ? "text-gold-dark" : ""}`}>{d.getDate()}</span>
+                          <span className={`text-[11.5px] font-bold ${k === todayIso ? "text-gold-dark" : ""}`}>{d.getUTCDate()}</span>
                           {list.length > 0 && (
                             <button onClick={() => { setView("week"); setAnchor(k); }} className="rounded-full bg-primary px-1.5 text-[10px] font-bold text-white">{list.length}</button>
                           )}
@@ -1390,7 +1405,7 @@ function patientQuery(f: PatientFilters): Record<string, string | number> {
 
 export function Patients() {
   const nav = useNavigate();
-  const { toast, branch, branches } = useStore();
+  const { toast, branch, branches, can } = useStore();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [newOpen, setNewOpen] = useState(false);
@@ -1467,7 +1482,7 @@ export function Patients() {
           Filters{chips.length ? ` (${chips.length})` : ""}
         </Btn>
         <Btn kind="ghost" disabled={!total} onClick={() => setExportOpen(true)}>Export CSV</Btn>
-        <Btn onClick={() => setNewOpen(true)}>+ New patient</Btn>
+        {can("patients.manage") && <Btn onClick={() => setNewOpen(true)}>+ New patient</Btn>}
       </>}>
       <Hint id="patients-live">Click any row to open the full record — visits, packages, forms, orders and consents. Use Filters to slice by centre, age, membership, visits, spend, treatments had, or lapsed guests; Export honours the same filters.</Hint>
 
@@ -1481,7 +1496,7 @@ export function Patients() {
       <Async q={q} label="Loading patients…" rows={8}>
         {() => users.length === 0 ? (
           <Empty title="No patients here" hint={debounced || chips.length ? "Nothing matched the current search/filters." : "Add the first patient to get started."}
-            action={chips.length ? <Btn kind="ghost" onClick={() => clear(EMPTY_PF)}>Clear filters</Btn> : <Btn onClick={() => setNewOpen(true)}>+ New patient</Btn>} />
+            action={chips.length ? <Btn kind="ghost" onClick={() => clear(EMPTY_PF)}>Clear filters</Btn> : can("patients.manage") ? <Btn onClick={() => setNewOpen(true)}>+ New patient</Btn> : undefined} />
         ) : (
           <>
             <DataTable
@@ -1643,7 +1658,10 @@ function NewPatientModal({ open, onClose, onCreated }: {
 export function PatientDetail() {
   const loc = useLocation();
   const nav = useNavigate();
-  const { toast, audit, role } = useStore();
+  const { toast, audit, role, can } = useStore();
+  // Viewing a record is `patients.view`; changing membership or account status
+  // is `patients.manage`, so those controls are hidden without it.
+  const canManagePatient = can("patients.manage");
   const [tab, setTab] = useQueryNumber("tab", 0, { min: 0, max: 4 });
   const [bookOpen, setBookOpen] = useState(false);
   const [pkgOpen, setPkgOpen] = useState(false);
@@ -2030,19 +2048,22 @@ export function PatientDetail() {
                           <div className="mt-2 text-[11px] text-ink3"><Tag kind={p.zenotiMembershipSyncStatus === "failed" ? "err" : "warn"}>Zenoti {p.zenotiMembershipSyncStatus}</Tag> {p.zenotiMembershipSyncError}</div>
                         )}
                         <div className="mt-3 grid gap-2">
-                          {p.zenMembershipPaymentStatus === "pending" && (
+                          {/* Membership is money and eligibility — editing it is
+                              `patients.manage`, not merely viewing the record. */}
+                          {!canManagePatient && <Note className="mb-0">Your role can view this membership but not change it.</Note>}
+                          {canManagePatient && p.zenMembershipPaymentStatus === "pending" && (
                             <Btn kind="gold" onClick={() => setPayOpen(true)}>Mark as paid</Btn>
                           )}
                           {/* Zenoti and pre-2026 desk memberships carry no amount, so they
                               count but add ₹0 to revenue until someone records the price. */}
-                          {p.zenMembershipPaymentStatus !== "pending" && !(Number(p.zenMembershipAmount) > 0) && (
+                          {canManagePatient && p.zenMembershipPaymentStatus !== "pending" && !(Number(p.zenMembershipAmount) > 0) && (
                             <>
                               <Note kind="crit" className="mb-0">No amount is recorded for this membership, so it contributes ₹0 to revenue reports.</Note>
                               <Btn kind="gold" onClick={() => setPayOpen(true)}>Record payment details</Btn>
                             </>
                           )}
-                          <Btn kind="ghost" onClick={() => setGrantOpen(true)}>Extend membership</Btn>
-                          {zHasActiveMembership ? (
+                          {canManagePatient && <Btn kind="ghost" onClick={() => setGrantOpen(true)}>Extend membership</Btn>}
+                          {canManagePatient && (zHasActiveMembership ? (
                             <Note className="mb-0">Active in Zenoti — change it there; the next sync would otherwise restore it.</Note>
                           ) : <Btn kind="ghost" onClick={async () => {
                             if (!window.confirm(`Cancel ${p.fullName}'s Zen membership now?`)) return;
@@ -2051,14 +2072,14 @@ export function PatientDetail() {
                               audit("USER_DEACTIVATED", `Cancelled Zen membership for ${p.fullName}`, { userId: p._id });
                               toast("Membership cancelled"); q.reload();
                             } catch (e) { toast((e as Error).message); }
-                          }}>Cancel membership</Btn>}
+                          }}>Cancel membership</Btn>)}
                         </div>
                       </>
                     );
                   })() : (
                     <>
                       <div className="text-[12px] text-ink3">Regular member{p.zenMembershipExpiryDate ? ` · previous membership ended ${fmtDateFull(p.zenMembershipExpiryDate)}` : ""}.</div>
-                      <Btn kind="gold" className="mt-2 w-full" onClick={() => setGrantOpen(true)}>Grant Zen membership</Btn>
+                      {canManagePatient && <Btn kind="gold" className="mt-2 w-full" onClick={() => setGrantOpen(true)}>Grant Zen membership</Btn>}
                     </>
                   )}
                 </Card>
@@ -2076,13 +2097,13 @@ export function PatientDetail() {
                     Joined {fmtDateFull(p.createdAt)}<br />
                     {p.lastLogin ? `Last app login ${fmtAgo(p.lastLogin)} ago` : "Never signed into the app"}
                   </div>
-                  <Btn kind="ghost" className="mt-2 w-full" onClick={async () => {
+                  {canManagePatient && <Btn kind="ghost" className="mt-2 w-full" onClick={async () => {
                     try {
                       await api.patients.toggleStatus(p._id, !(p.isActive !== false));
                       audit(p.isActive !== false ? "USER_DEACTIVATED" : "USER_ACTIVATED", p.fullName, { userId: p._id });
                       toast(p.isActive !== false ? "Account deactivated — their app sessions were signed out" : "Account reactivated"); q.reload();
                     } catch (e) { toast((e as Error).message); }
-                  }}>{p.isActive !== false ? "Deactivate account" : "Reactivate account"}</Btn>
+                  }}>{p.isActive !== false ? "Deactivate account" : "Reactivate account"}</Btn>}
                 </Card>
               </div>
             </div>
@@ -2595,7 +2616,10 @@ const chatFileSize = (bytes = 0) => bytes < 1024
 
 export function Chat() {
   const nav = useNavigate();
-  const { toast, branchId, branches, branch, admin } = useStore();
+  const { toast, branchId, branches, branch, admin, can } = useStore();
+  // Reading the inbox is `chat.view`; assigning, taking and closing a thread
+  // (and replying) are `chat.manage`.
+  const canWorkChat = can("chat.manage");
   const [activeId, setActiveId] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
   const [sending, setSending] = useState(false);
@@ -2869,18 +2893,20 @@ export function Chat() {
                     <Btn kind="ghost" className="!px-2.5 !py-1 !text-[11.5px]"
                       onClick={() => nav("/patient", { state: { id: idOf(cur.userId) } })}>Open patient ↗</Btn>
                     {cur.status === "active" && (
-                      <>
-                        <Btn kind="ghost" className="!px-2.5 !py-1 !text-[11.5px]" onClick={() => setAssignOpen(true)}>
-                          {assignedName ? "Reassign" : "Assign"}
-                        </Btn>
-                        {!assignedName && myId && (
-                          <Btn kind="ghost" className="!px-2.5 !py-1 !text-[11.5px]" onClick={() => assign(myId)}>Take</Btn>
-                        )}
-                        <Btn kind="ghost" className="!px-2.5 !py-1 !text-[11.5px]" onClick={async () => {
-                          try { await api.chat.close(cur._id); toast("Conversation closed"); threads.reload(); }
-                          catch (e) { toast((e as Error).message); }
-                        }}>Close</Btn>
-                      </>
+                      canWorkChat && (
+                        <>
+                          <Btn kind="ghost" className="!px-2.5 !py-1 !text-[11.5px]" onClick={() => setAssignOpen(true)}>
+                            {assignedName ? "Reassign" : "Assign"}
+                          </Btn>
+                          {!assignedName && myId && (
+                            <Btn kind="ghost" className="!px-2.5 !py-1 !text-[11.5px]" onClick={() => assign(myId)}>Take</Btn>
+                          )}
+                          <Btn kind="ghost" className="!px-2.5 !py-1 !text-[11.5px]" onClick={async () => {
+                            try { await api.chat.close(cur._id); toast("Conversation closed"); threads.reload(); }
+                            catch (e) { toast((e as Error).message); }
+                          }}>Close</Btn>
+                        </>
+                      )
                     )}
                   </div>
                 </div>
@@ -2986,7 +3012,9 @@ const SUPPORT_TABS: { label: string; status?: string }[] = [
 ];
 
 export function SupportInbox() {
-  const { toast, audit } = useStore();
+  const { toast, audit, can } = useStore();
+  // Reading the inbox is `support.view`; changing a ticket is `support.manage`.
+  const canRespond = can("support.manage");
   const [tab, setTab] = useState(0);
   const [open, setOpen] = useState<string | null>(null);
   const [note, setNote] = useState("");
@@ -3056,9 +3084,10 @@ export function SupportInbox() {
 
             <div className="mt-3"><Area label="Add a note (optional)" value={note} onChange={setNote} rows={3} /></div>
             <div className="mt-3 grid gap-2">
-              {sel.status === "pending" && <Btn onClick={() => setStatus(sel._id, "in-progress")}>Start working on it</Btn>}
-              {sel.status !== "resolved" && <Btn kind="gold" onClick={() => setStatus(sel._id, "resolved")}>Mark resolved</Btn>}
-              {sel.status !== "closed" && <Btn kind="ghost" onClick={() => setStatus(sel._id, "closed")}>Close ticket</Btn>}
+              {!canRespond && <Note className="my-0">You can read support tickets, but only someone with the “respond to support messages” permission can change their status.</Note>}
+              {canRespond && sel.status === "pending" && <Btn onClick={() => setStatus(sel._id, "in-progress")}>Start working on it</Btn>}
+              {canRespond && sel.status !== "resolved" && <Btn kind="gold" onClick={() => setStatus(sel._id, "resolved")}>Mark resolved</Btn>}
+              {canRespond && sel.status !== "closed" && <Btn kind="ghost" onClick={() => setStatus(sel._id, "closed")}>Close ticket</Btn>}
               <Btn kind="ghost" onClick={() => window.open(`mailto:${sel.email}?subject=Re: ${encodeURIComponent(sel.subject)}`)}>
                 Reply by email
               </Btn>

@@ -952,11 +952,16 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
                     () => api.orders.completeReturn(selOrder._id).then(() => audit("ORDER_STATUS_UPDATED", `Return received for ${selOrder.orderNumber}`, { orderId: selOrder._id })),
                     "Return received — stock restored and refund started")}>Mark return received</Btn>
                 )}
-                {["Cancelled", "Returned"].includes(selOrder.orderStatus) && selOrder.paymentStatus === "Paid" && !["Processing", "Completed"].includes(selOrder.refundDetails?.status || "") && (
+                {/* Moving money is its own permission — a role can work the
+                    order book without ever being able to refund. */}
+                {can("orders.refund") && ["Cancelled", "Returned"].includes(selOrder.orderStatus) && selOrder.paymentStatus === "Paid" && !["Processing", "Completed"].includes(selOrder.refundDetails?.status || "") && (
                   <Btn kind="gold" disabled={busy} onClick={() => setRefundOpen(true)}>Refund {fmtINR(selOrder.pricing?.total)}…</Btn>
                 )}
-                {selOrder.refundDetails?.status === "Processing" && selOrder.refundDetails.method !== "Razorpay" && (
+                {can("orders.refund") && selOrder.refundDetails?.status === "Processing" && selOrder.refundDetails.method !== "Razorpay" && (
                   <CompleteRefund order={selOrder} busy={busy} act={act} audit={audit} />
+                )}
+                {!can("orders.refund") && selOrder.paymentStatus === "Paid" && ["Cancelled", "Returned"].includes(selOrder.orderStatus) && (
+                  <Note className="my-0">This order is refundable, but issuing refunds is a separate permission your role does not hold.</Note>
                 )}
               </>
             )}

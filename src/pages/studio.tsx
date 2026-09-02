@@ -30,6 +30,11 @@ const pick = (d: Draft): Draft => {
 };
 
 function useCustomization() {
+  const { can } = useStore();
+  // Every App Studio screen is revealed by `appStudio.view` so a role can see
+  // what the app is showing; changing it is `appStudio.manage`. One flag here
+  // keeps that split consistent across all four editors.
+  const canEdit = can("appStudio.manage");
   const q = useApi(() => api.appStudio.get(), []);
   const prevServer = useRef<Draft | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -84,13 +89,16 @@ function useCustomization() {
   const get = (name: keyof Draft, key: string, fallback = "") =>
     String(((draft?.[name] as Record<string, unknown>) ?? {})[key] ?? fallback);
 
-  return { q, draft, setDraft, dirty, save, busy, err, section, get };
+  return { q, draft, setDraft, dirty, save, busy, err, section, get, canEdit };
 }
 
-function SaveBar({ dirty, busy, err, onSave, onReset }: {
-  dirty: boolean; busy: boolean; err: string | null; onSave: () => void; onReset: () => void;
+function SaveBar({ dirty, busy, err, onSave, onReset, canEdit = true }: {
+  dirty: boolean; busy: boolean; err: string | null; onSave: () => void; onReset: () => void; canEdit?: boolean;
 }) {
   if (err) return <Note kind="crit">{err}</Note>;
+  if (!canEdit) {
+    return <Note className="mb-3">You can see what the app is showing, but publishing changes needs the “edit app home, control &amp; content” permission.</Note>;
+  }
   if (!dirty) return null;
   return (
     <div className="sticky top-[52px] z-30 mb-3 flex flex-wrap items-center justify-between gap-3 rounded-(--radius-card) border border-gold-dark bg-cream px-4 py-2.5">
@@ -229,7 +237,7 @@ export function AppHome() {
       <Async q={c.q} label="Loading app settings…" rows={6}>
         {() => !c.draft ? <Loading /> : (
           <>
-            <SaveBar dirty={c.dirty} busy={c.busy} err={c.err}
+            <SaveBar canEdit={c.canEdit} dirty={c.dirty} busy={c.busy} err={c.err}
               onSave={() => c.save(() => { audit("APP_CUSTOMIZATION_UPDATED", "App home"); toast("Published"); })}
               onReset={() => c.setDraft(c.q.data ?? null)} />
 
@@ -270,7 +278,7 @@ export function AppHome() {
                     Instagram embed inside the app cannot be relied on to play on iPhone. Paste the reel's
                     Instagram link too so "View on Instagram" still works. Newest first.
                   </Note>
-                  <ReelUploader onAdded={c.q.reload} />
+                  {c.canEdit && <ReelUploader onAdded={c.q.reload} />}
                   {reelVideos.length > 0 && (
                     <div className="mt-3 grid gap-2">
                       {reelVideos.map((r, i) => (
@@ -282,9 +290,11 @@ export function AppHome() {
                             <b className="truncate text-[12.5px]">{r.title || `Reel ${reelVideos.length - i}`}</b>
                             <div className={`truncate text-[10.5px] ${r.permalink ? "text-ink3" : "font-semibold text-warn"}`}>{r.permalink || "No Instagram link — 'View on Instagram' hidden for this reel"}</div>
                           </div>
-                          <button onClick={() => { const link = window.prompt("Instagram link for this reel (instagram.com URL, empty to remove):", r.permalink ?? ""); if (link === null || !r._id) return; api.appStudio.updateReelVideo(r._id, { permalink: link.trim() }).then(() => { toast("Reel link saved"); c.q.reload(); }).catch((e) => toast((e as Error).message)); }}
-                            className="text-[11.5px] font-semibold text-primary">{r.permalink ? "Edit link" : "Add link"}</button>
-                          <button onClick={() => setDelReel(r)} className="text-[12px] font-bold text-err">×</button>
+                          {c.canEdit && (
+                            <button onClick={() => { const link = window.prompt("Instagram link for this reel (instagram.com URL, empty to remove):", r.permalink ?? ""); if (link === null || !r._id) return; api.appStudio.updateReelVideo(r._id, { permalink: link.trim() }).then(() => { toast("Reel link saved"); c.q.reload(); }).catch((e) => toast((e as Error).message)); }}
+                              className="text-[11.5px] font-semibold text-primary">{r.permalink ? "Edit link" : "Add link"}</button>
+                          )}
+                          {c.canEdit && <button onClick={() => setDelReel(r)} className="text-[12px] font-bold text-err">×</button>}
                         </div>
                       ))}
                     </div>
@@ -443,7 +453,7 @@ export function ConsultPage() {
       <Async q={c.q} label="Loading screen settings…" rows={4}>
         {() => !c.draft ? <Loading /> : (
           <>
-            <SaveBar dirty={c.dirty} busy={c.busy} err={c.err}
+            <SaveBar canEdit={c.canEdit} dirty={c.dirty} busy={c.busy} err={c.err}
               onSave={() => c.save(() => { audit("APP_CUSTOMIZATION_UPDATED", "Consultation screen"); toast("Published"); })}
               onReset={() => c.setDraft(c.q.data ?? null)} />
 
@@ -515,12 +525,15 @@ export function ConsultPage() {
 
 /* ================= MEMBERSHIP CARD ================= */
 export function MembershipCard() {
-  const { toast, audit } = useStore();
+  const { toast, audit, can } = useStore();
   const c = useCustomization();
   const setHome = c.section("homeScreen");
   const home = () => ((c.draft?.homeScreen ?? {}) as Record<string, unknown>);
 
-  const members = useApi(() => api.analytics.patients().catch(() => undefined), []);
+  // Member counts are a nicety on this editor, and the endpoint belongs to the
+  // Analytics page. Ask only when the account may actually read it, so a
+  // content-only role does not generate a denial on every visit.
+  const members = useApi(() => (can("analytics.view") ? api.analytics.patients().catch(() => undefined) : Promise.resolve(undefined)), []);
 
   return (
     <Page title="Zen membership card" sub="The membership card as guests see it on the app's home screen"
@@ -533,7 +546,7 @@ export function MembershipCard() {
       <Async q={c.q} label="Loading card settings…" rows={4}>
         {() => !c.draft ? <Loading /> : (
           <>
-            <SaveBar dirty={c.dirty} busy={c.busy} err={c.err}
+            <SaveBar canEdit={c.canEdit} dirty={c.dirty} busy={c.busy} err={c.err}
               onSave={() => c.save(() => { audit("APP_CUSTOMIZATION_UPDATED", "Membership card"); toast("Published"); })}
               onReset={() => c.setDraft(c.q.data ?? null)} />
 
@@ -711,7 +724,7 @@ export function ScreenCopy() {
   return (
     <Page title="Screen copy" sub="Every heading, sub-heading and label the mobile app renders"
       actions={<>
-        <Btn kind="ghost" onClick={() => setResetOpen(true)}>Reset to defaults</Btn>
+        {c.canEdit && <Btn kind="ghost" onClick={() => setResetOpen(true)}>Reset to defaults</Btn>}
         <Btn kind="gold" disabled={!c.dirty || c.busy}
           onClick={() => c.save(() => { audit("APP_CUSTOMIZATION_UPDATED", "Screen copy"); toast("Published"); })}>
           {c.busy ? "Publishing…" : "Publish"}
@@ -722,7 +735,7 @@ export function ScreenCopy() {
       <Async q={c.q} label="Loading screen copy…" rows={6}>
         {() => !c.draft ? <Loading /> : (
           <>
-            <SaveBar dirty={c.dirty} busy={c.busy} err={c.err}
+            <SaveBar canEdit={c.canEdit} dirty={c.dirty} busy={c.busy} err={c.err}
               onSave={() => c.save(() => { audit("APP_CUSTOMIZATION_UPDATED", "Screen copy"); toast("Published"); })}
               onReset={() => c.setDraft(c.q.data ?? null)} />
 
@@ -983,7 +996,10 @@ function FaqEditor({ value, onChange }: { value: { q: string; a: string }[]; onC
  * it live for mounted screens and app-wide from the next launch.
  */
 export function AppControl() {
-  const { toast, audit } = useStore();
+  const { toast, audit, can } = useStore();
+  // Same split as the other App Studio screens: `appStudio.view` shows what the
+  // app looks like, `appStudio.manage` publishes a change to it.
+  const canEdit = can("appStudio.manage");
   const [tab, setTab] = useQueryNumber("tab", 0, { min: 0, max: 2 });
   const q = useApi(() => api.appStudio.get(), []);
   const [colors, setColors] = useState<Record<string, string>>({});
@@ -1060,7 +1076,9 @@ export function AppControl() {
     <Page title="App control" sub="The app's design system and wording — colours, type scale and every registered copy string"
       actions={<>
         <Btn kind="ghost" onClick={resetAll}>Reset to defaults</Btn>
-        <Btn disabled={!dirty || busy} onClick={save}>{busy ? "Saving…" : "Save & publish"}</Btn>
+        {canEdit
+          ? <Btn disabled={!dirty || busy} onClick={save}>{busy ? "Saving…" : "Save & publish"}</Btn>
+          : <span className="text-[11.5px] text-ink3">Publishing needs the “edit app home, control &amp; content” permission.</span>}
       </>}>
       <Hint id="app-control">Changes publish to every install: screens that are open re-style on their next refresh, and the whole app picks the theme up on its next launch. Colours cascade — pressed states, overlays and links follow the primary automatically.</Hint>
       <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />

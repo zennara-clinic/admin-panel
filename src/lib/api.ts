@@ -262,9 +262,13 @@ export type DoctorStats = {
   recent: { _id: string; guest: string; userId?: string; service?: string | null; kind: "consultation" | "treatment"; date: string; time: string; status: string; amount: number; paymentStatus?: string; rating?: number | null; source?: string }[];
   feedback: { guest: string; rating: number; feedback: string; date: string }[];
 };
-export type DoctorAccount = { _id: Id; email: string; phone?: string | null; role: string; isActive: boolean; lastLogin?: string | null; hasPassword: boolean; passwordSetAt?: string | null; placeholderEmail: boolean };
-/** Audited password lookup — `password` is null when none is set or it predates the plaintext copy. */
-export type RevealedPassword = { hasPassword: boolean; password: string | null; passwordSetAt?: string | null };
+export type DoctorAccount = { _id: Id; email: string; phone?: string | null; role: string; isActive: boolean; lastLogin?: string | null; hasPassword: boolean; canRevealPassword?: boolean; passwordSetAt?: string | null; placeholderEmail: boolean };
+/**
+ * Audited password lookup. `password` is null both when none is set and when
+ * the one on file predates the readable copy — `canReveal` tells the two apart
+ * so the panel can say which it is.
+ */
+export type RevealedPassword = { hasPassword: boolean; canReveal?: boolean; password: string | null; passwordSetAt?: string | null };
 
 export const doctors = {
   list: (q?: Query) => requestRaw<Doctor[]>("/doctors", { query: q }),
