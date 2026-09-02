@@ -8,7 +8,7 @@ import { useStore } from "../store";
 import api from "../lib/api";
 import { useApi, useDebounced } from "../lib/useApi";
 import { useQueryNumber, useQueryPage, useQueryString } from "../lib/useListState";
-import { fmtDate, fmtDateFull, fmtINR, fmtCompactINR, idOf, nameOf } from "../lib/format";
+import { fmtDate, fmtDateFull, fmtINR, fmtCompactINR, idOf, isoDay, nameOf } from "../lib/format";
 import type { Brand, Coupon, Formulation, OrderStatus, Product, ProductOrder } from "../lib/types";
 
 /* ================= PRODUCTS ================= */
@@ -566,7 +566,9 @@ function CouponEditor({ open, coupon, onClose, onSaved, onDelete }: {
   }, [open, coupon?._id]);
 
   const set = <K extends keyof Coupon>(k: K) => (v: Coupon[K]) => setF((s) => ({ ...s, [k]: v }));
-  const dateVal = (v?: string) => (v ? new Date(v).toISOString().slice(0, 10) : "");
+  // isoDay reads the instant back in clinic time. toISOString() is UTC, so an
+  // IST-midnight date (18:30Z the day before) showed as the previous day.
+  const dateVal = (v?: string) => (v ? isoDay(new Date(v)) : "");
   // "Valid until 20 Nov" means the whole of the 20th, local time — not 00:00 UTC.
   const startOfDay = (d: string) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x.toISOString(); };
   const endOfDay = (d: string) => { const x = new Date(d); x.setHours(23, 59, 59, 999); return x.toISOString(); };

@@ -7,7 +7,7 @@ import {
 import { useStore } from "../store";
 import api from "../lib/api";
 import { useApi, useDebounced } from "../lib/useApi";
-import { fmtCompactINR, fmtDate, fmtINR, toDate } from "../lib/format";
+import { fmtCompactINR, fmtDate, fmtINR, isoDay, toDate } from "../lib/format";
 import type { Inventory as Item, Product, Vendor } from "../lib/types";
 
 /* ================= INVENTORY ================= */
@@ -31,7 +31,7 @@ const generatedItemCode = (name: string) => {
   return `${prefix}-${Date.now().toString(36).slice(-5).toUpperCase()}-${randomSuffix(4)}`;
 };
 const generatedBatchNumber = () => {
-  const day = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const day = isoDay().replace(/-/g, "");
   return `BAT-${day}-${randomSuffix(5)}`;
 };
 
@@ -294,7 +294,9 @@ function ItemEditor({ open, item, onClose, onSaved, onDelete }: {
   }, [open, formNames.join("|"), vendorNames.join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const set = <K extends keyof Item>(k: K) => (v: Item[K]) => setF((s) => ({ ...s, [k]: v }));
-  const dateVal = (v?: string) => (v ? new Date(v).toISOString().slice(0, 10) : "");
+  // isoDay reads the instant back in clinic time. toISOString() is UTC, so an
+  // IST-midnight date (18:30Z the day before) showed as the previous day.
+  const dateVal = (v?: string) => (v ? isoDay(new Date(v)) : "");
   const selectProduct = (product: Product) => setF((current) => ({
     ...current,
     inventoryName: product.name,
