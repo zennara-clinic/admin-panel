@@ -2133,7 +2133,7 @@ function TherapistEditor({ open, therapist, branches, onClose, onSaved, onToggle
     setBusy(true);
     try {
       if (therapist) {
-        await api.staff.update(therapist._id, { name: name.trim(), phone: phone.trim() || null, branchIds } as Partial<Admin>);
+        await api.staff.update(therapist._id, { name: name.trim(), email: addr, phone: phone.trim() || null, branchIds } as Partial<Admin>);
         audit("SETTINGS_UPDATED", `${name.trim()} · therapist updated`, { staffId: therapist._id });
         toast("Therapist updated");
       } else {
@@ -2153,9 +2153,9 @@ function TherapistEditor({ open, therapist, branches, onClose, onSaved, onToggle
     <Drawer open={open} onClose={onClose} title={therapist ? therapist.name : "Add therapist"}>
       <div className="grid gap-3">
         <In label="Full name" value={name} onChange={setName} placeholder="Asha Verma" />
-        <In label="Work email" type="email" value={email} onChange={setEmail} readOnly={!!therapist}
+        <In label="Work email" type="email" value={email} onChange={setEmail}
           placeholder="therapist@zennara.in"
-          hint={therapist ? "Their sign-in address — fixed once created" : "Their sign-in address — a 6-digit code is emailed here each time they sign in"} />
+          hint="Their sign-in address — a 6-digit code is emailed here each time they sign in. Changing it signs them out everywhere." />
         <In label="Phone (staff only — never shown to guests)" value={phone} onChange={setPhone} />
         <div>
           <div className="mb-1.5 text-[11px] font-bold text-ink2">Centres — their floor tablet is pinned to these</div>
