@@ -535,6 +535,28 @@ export function ConsultPage() {
   );
 }
 
+
+/** Pick the Zenoti membership the app's Zen membership is sold as. */
+function ZenotiMembershipPick({ value, onChange }: { value: string; onChange: (versionId: string, name: string) => void }) {
+  const q = useApi(() => api.zenoti.catalogMemberships().catch(() => []), []);
+  const rows = q.data ?? [];
+  const current = rows.find((m) => (m.versionId ?? m.id) === value);
+  return (
+    <div className="grid gap-1">
+      <select value={value} onChange={(e) => { const m = rows.find((r) => (r.versionId ?? r.id) === e.target.value); onChange(e.target.value, m?.name ?? ""); }}
+        className="rounded-lg border border-border bg-ivory px-2.5 py-2 text-[12.5px] text-ink outline-none focus:border-gold-dark">
+        <option value="">— not linked (uses the server's default membership) —</option>
+        {rows.map((m) => (
+          <option key={m.id} value={m.versionId ?? m.id}>{m.name}{m.price != null ? ` · ₹${m.price}` : ""}</option>
+        ))}
+      </select>
+      <div className="text-[10.5px] text-ink3">
+        {q.loading ? "Loading Zenoti memberships…" : current ? `Zenoti price ₹${current.price ?? "—"}${current.discountedPrice != null ? ` (offer ₹${current.discountedPrice})` : ""} — the app charges the price below regardless.` : `${rows.length} membership(s) in Zenoti`}
+      </div>
+    </div>
+  );
+}
+
 /* ================= MEMBERSHIP CARD ================= */
 export function MembershipCard() {
   const { toast, audit, can } = useStore();
@@ -601,6 +623,10 @@ export function MembershipCard() {
               <Card className="min-w-[280px] flex-1 p-4">
                 {/* Pricing and merchandising. priceInr is what Razorpay charges;
                     base/sale are the struck-through and offer figures on the card. */}
+                <SecH t="Zenoti membership" em="· what a purchase is recorded as in Zenoti" />
+                <ZenotiMembershipPick value={String(mem().zenotiMembershipVersionId ?? "")}
+                  onChange={(id, name) => { setMem("zenotiMembershipVersionId")(id); setMem("zenotiMembershipName")(name); }} />
+                <div className="mb-3" />
                 <SecH t="Pricing" em="· the member is charged the price below" />
                 <div className="grid gap-3 sm:grid-cols-2">
                   <In label="Membership name" value={String(mem().name ?? "")} onChange={setMem("name")} />

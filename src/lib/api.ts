@@ -949,6 +949,8 @@ export type ReportingPractitioner = {
 };
 
 export const zenoti = {
+  /** Zenoti's membership products — name, price, images — for the membership card to pick from. */
+  catalogMemberships: () => request<{ id: string; versionId: string | null; name: string; price: number | null; discountedPrice: number | null; description: string | null; imagePaths: string[] }[]>("/admin/zenoti/catalog/memberships"),
   /** Mirror Zenoti products (attributes only; stock is not in the feed). */
   syncProducts: () => request<Record<string, unknown>>("/admin/zenoti/products/sync", { method: "POST" }),
   /** Mirror the clinics' address, phone, email and map pin from Zenoti. */

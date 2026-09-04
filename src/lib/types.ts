@@ -1106,6 +1106,9 @@ export type AppCustomization = {
    * prices are presentation only (see AppCustomization.membership on the API).
    */
   membership?: {
+    /** The Zenoti membership this card sells (invoiced in Zenoti on purchase). */
+    zenotiMembershipVersionId?: string;
+    zenotiMembershipName?: string;
     name?: string;
     tagline?: string;
     description?: string;
