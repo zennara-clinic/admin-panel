@@ -13,7 +13,6 @@ import { PurchaseOrders } from "./pages/procurement";
 import { BulkTools, Forms } from "./pages/tools";
 import { AppHome, ConsultPage, MembershipCard, Announcements, ScreenCopy, AppControl } from "./pages/studio";
 import { Branches, Reviews, Analytics, Roles, AuditLog } from "./pages/org";
-import { ClinicData } from "./pages/zenoti";
 import { ContactChanges } from "./pages/contact-change";
 import { Schedule as DermatologistSchedule } from "./pages/availability";
 
@@ -87,7 +86,6 @@ export default function App() {
           <Route path="/patient" element={gated("patients.view", <PatientDetail />)} />
           <Route path="/deleted-accounts" element={gated("patients.delete", <DeletedAccounts />)} />
           <Route path="/consultations" element={<Navigate to="/bookings?kind=consultation" replace />} />
-          <Route path="/zenoti" element={gated("zenoti.view", <ClinicData />)} />
           <Route path="/contact-changes" element={gated("contactChanges.view", <ContactChanges />)} />
           <Route path="/chat" element={gated("chat.view", <Chat />)} />
           <Route path="/support" element={gated("support.view", <SupportInbox />)} />
