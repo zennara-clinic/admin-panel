@@ -30,6 +30,8 @@ export type Admin = {
   doctorId?: Id | null;
   /** False when the address is missing from the server's ADMIN_EMAILS allow-list. */
   canSignIn?: boolean;
+  /** Walkthroughs this account has already completed (server-held, not per-browser). */
+  toursSeen?: string[];
   createdAt?: string;
   /* ---- RBAC ---- */
   /** Super admins implicitly hold every permission. */
@@ -143,6 +145,9 @@ export type User = {
   /** 'app' = registered in the app; 'zenoti' = mirrored from the clinic CRM. Both are app users. */
   source?: "app" | "zenoti" | "reception";
   zenotiGuestId?: string | null;
+  /** Whether Zenoti holds this patient; 'review' = phone matched but the name did not. */
+  zenotiSyncStatus?: "pending" | "synced" | "failed" | "review" | "skipped" | "dryrun" | null;
+  zenotiSyncError?: string | null;
   zenotiSyncedAt?: string | null;
   zenMembershipStartDate?: string | null;
   zenMembershipExpiryDate?: string | null;
@@ -191,6 +196,11 @@ export type BookingStatus =
 export type VisitCodeLog = { kind: "checkin" | "checkout"; channels: string[]; failed?: string[]; at: string; byName?: string | null };
 export type ManualCheck = { reason: string; byName?: string | null; at: string };
 
+export type ConsultationStage =
+  | "booked" | "confirmed" | "checked_in" | "waiting" | "consultation_started"
+  | "consultation_completed" | "prescription_created" | "treatment_recommended"
+  | "follow_up_required" | "no_follow_up";
+
 export type Booking = {
   /** Therapist reception assigned to run this session (Admin login id + name). */
   assignedTherapistId?: Id | null;
@@ -221,6 +231,17 @@ export type Booking = {
   specialistTier?: string;
   status: BookingStatus;
   confirmedDate?: string;
+  /** The appointment's own instant (confirmed → preferred, with time of day). Sort history on this. */
+  eventAt?: string | null;
+  /**
+   * Clinical lifecycle, separate from `status` (see the API's Booking model):
+   * waiting → consultation_started → consultation_completed → prescription_created
+   * → treatment_recommended → follow_up_required | no_follow_up.
+   */
+  consultationStage?: ConsultationStage | null;
+  consultationStageHistory?: { stage: ConsultationStage; at: string; byName?: string }[];
+  followUp?: { required?: boolean; dueDate?: string | null; notes?: string; bookingId?: Id | null };
+
   confirmedTime?: string;
   checkInTime?: string;
   checkOutTime?: string;
@@ -239,6 +260,14 @@ export type Booking = {
   zenotiAppointmentGroupId?: string | null;
   zenotiSyncStatus?: "pending" | "synced" | "failed" | "skipped" | "dryrun" | null;
   zenotiSyncError?: string | null;
+  zenotiInvoiceId?: string | null;
+  zenotiTherapistName?: string;
+  zenotiLastInboundAt?: string | null;
+  /** Snapshot of the Zenoti diary row at the last read. */
+  zenotiSource?: {
+    status?: number | string | null; progress?: number | null; invoiceNumber?: string | null;
+    packageName?: string | null; startTime?: string | null; endTime?: string | null; vanishedAt?: string | null;
+  } | null;
   therapistId?: Id | null;
   therapistName?: string;
   room?: string;
@@ -290,6 +319,8 @@ export type Consultation = {
   rating?: number | null;
   reviews?: number;
   isActive: boolean;
+  /** Zenoti service this is booked as when an app/panel booking is written to Zenoti. */
+  zenotiServiceId?: string | null;
   showPriceInApp?: boolean;
   chargeOnlineBooking?: boolean;
   isPopular?: boolean;
@@ -349,6 +380,8 @@ export type Package = {
   id: string;
   name: string;
   description: string;
+  /** Months a customer has to use the package after it is assigned (12 = one year). */
+  validityMonths?: number;
   benefits?: string[];
   services?: PackageService[];
   consultationServices?: PackageService[];
@@ -360,6 +393,8 @@ export type Package = {
   isActive: boolean;
   isPopular?: boolean;
   bookingsCount?: number;
+  /** Zenoti series package sold when this package is assigned. */
+  zenotiPackageId?: string | null;
   createdAt?: string;
 };
 
@@ -386,7 +421,7 @@ export type PackageAssignment = {
   assignedByName?: string;
   zenotiPackageId?: string | null;
   zenotiInvoiceId?: string | null;
-  zenotiSyncStatus?: "pending" | "synced" | "dryrun" | "skipped" | "failed" | null;
+  zenotiSyncStatus?: "pending" | "synced" | "dryrun" | "skipped" | "failed" | "review" | null;
   zenotiSyncError?: string | null;
   completedServices?: { serviceId: string; completedAt: string; prescriptions?: string[] }[];
   createdAt?: string;
@@ -504,6 +539,168 @@ export type Product = {
   reviews?: number;
   isActive: boolean;
   isPopular?: boolean;
+  createdAt?: string;
+};
+
+/**
+ * A product as a dermatologist may see it — availability, never money.
+ * Served by GET /api/inventory/availability, which does not select the price
+ * columns at all, so no price is present to leak.
+ */
+export type ProductAvailability = {
+  _id: Id;
+  source: "product" | "inventory";
+  name: string;
+  sku: string | null;
+  category: string | null;
+  productType: string | null;
+  formulation: string | null;
+  brand: string | null;
+  image?: string;
+  /** Across the business. */
+  totalQuantity: number;
+  /** At the selected branch; null when no branch was requested. */
+  branchQuantity: number | null;
+  quantity: number;
+  status: "in_stock" | "low_stock" | "out_of_stock";
+  syncedFromZenoti: boolean;
+  zenotiSyncedAt?: string | null;
+};
+
+/** A clinical photograph in a patient's timeline (before / during / after). */
+export type PatientPhoto = {
+  _id: Id;
+  userId: Id;
+  bookingId?: (Booking & { referenceNumber?: string }) | Id | null;
+  consultationNoteId?: Id | null;
+  branchId?: Id | null;
+  phase: "before" | "during" | "after";
+  bodyArea?: string;
+  note?: string;
+  url: string;
+  takenAt: string;
+  takenByName?: string;
+  takenByRole?: string;
+  createdAt?: string;
+};
+
+/** One item on a purchase order, with its delivery history. */
+export type PurchaseOrderLine = {
+  _id: Id;
+  productId?: Id | null;
+  inventoryId?: Id | null;
+  name: string;
+  sku?: string;
+  requestedQuantity: number;
+  receivedQuantity: number;
+  rejectedQuantity: number;
+  pendingQuantity?: number;
+  unitCost?: number;
+  taxPercent?: number;
+  note?: string;
+  receipts?: {
+    quantity: number;
+    rejectedQuantity?: number;
+    rejectionReason?: string;
+    batchNo?: string;
+    expiryDate?: string | null;
+    receivedAt?: string;
+    receivedByName?: string;
+    note?: string;
+  }[];
+};
+
+export type PurchaseOrderStatus =
+  | "draft" | "raised" | "approved" | "ordered"
+  | "partially_received" | "fully_received" | "cancelled";
+
+export type PurchaseOrder = {
+  _id: Id;
+  poNumber: string;
+  vendorId?: (Vendor & { _id: Id }) | Id | null;
+  vendorName?: string;
+  branchId?: (Branch & { _id: Id }) | Id | null;
+  branchName?: string;
+  lines: PurchaseOrderLine[];
+  status: PurchaseOrderStatus;
+  statusHistory?: { status: string; at: string; byName?: string; note?: string }[];
+  raisedAt?: string | null;
+  expectedDeliveryDate?: string | null;
+  receivedAt?: string | null;
+  fullyReceivedAt?: string | null;
+  approvedByName?: string;
+  approvedAt?: string | null;
+  createdByName?: string;
+  notes?: string;
+  totals?: { requested: number; received: number; rejected: number; pending: number; estimatedValue: number };
+  createdAt?: string;
+};
+
+/** A row as the bulk-import preview classifies it. */
+export type BulkPreviewRow = {
+  row: number;
+  key: string;
+  data: Record<string, string>;
+  action: "create" | "update" | "error";
+  existingId?: Id | null;
+  existingName?: string | null;
+  errors: string[];
+};
+
+export type BulkPreview = {
+  total: number;
+  creates: number;
+  updates: number;
+  errors: number;
+  rows: BulkPreviewRow[];
+};
+
+export type BulkResult = {
+  created: number;
+  updated: number;
+  failed: number;
+  skipped: number;
+  errors: { row: number; name: string; errors: string[] }[];
+};
+
+/** An admin-built consultation form. */
+export type FormTemplateField = {
+  key: string;
+  label: string;
+  helpText?: string;
+  placeholder?: string;
+  type: "text" | "textarea" | "number" | "date" | "select" | "multiselect" | "checkbox" | "radio" | "photo";
+  options?: { label: string; value: string }[];
+  required?: boolean;
+  order?: number;
+  sensitive?: boolean;
+};
+
+export type FormTemplate = {
+  _id: Id;
+  name: string;
+  slug: string;
+  description?: string;
+  fields: FormTemplateField[];
+  consultationCategories?: string[];
+  treatmentIds?: Id[];
+  branchIds?: Id[];
+  isActive: boolean;
+  displayOrder?: number;
+  version: number;
+  submissionCount: number;
+  createdAt?: string;
+};
+
+export type FormSubmissionRow = {
+  _id: Id;
+  templateId: Id;
+  templateVersion: number;
+  userId?: { fullName?: string; email?: string; phone?: string; patientId?: string } | Id | null;
+  bookingId?: { referenceNumber?: string; eventAt?: string } | Id | null;
+  answers: Record<string, unknown>;
+  status: "draft" | "submitted";
+  submittedAt?: string | null;
   createdAt?: string;
 };
 
@@ -767,6 +964,13 @@ export type DoctorAvailability = {
 };
 
 export type PreConsultForm = {
+  /** Presenting complaint, added 2026-09. Free text in the patient's own words. */
+  symptomDuration?: string | null;
+  previousTreatments?: string | null;
+  currentMedications?: string | null;
+  patientNotes?: string | null;
+  pregnancyStatus?: "not_applicable" | "not_pregnant" | "pregnant" | "breastfeeding" | "planning" | "prefer_not_to_say";
+  photos?: { url: string; caption?: string; uploadedAt?: string }[];
   _id: Id;
   userId: Id | User;
   bookingId?: Id | Booking;
@@ -810,14 +1014,34 @@ export type ConsentForm = {
 
 export type PrescriptionItem = {
   medicine: string;
+  /** "500 mg", "0.1%" — strength, kept apart from the dose. */
+  strength?: string | null;
+  /** Tablet, cream, serum — as the clinic dispenses it. */
+  formulation?: string | null;
   dosage?: string | null;
   frequency?: string | null;
   duration?: string | null;
+  /** Morning / night / after food. */
+  timing?: string | null;
   instructions?: string | null;
+  /** Set when the line is a Zennara retail product rather than a drug. */
+  productId?: Id | null;
+  /** Availability when it was prescribed. Never a price. */
+  availableQuantity?: number | null;
   isScheduleH?: boolean;
 };
 
 export type ConsultationNote = {
+  /* Diagnosis and advice — the 2026-09 prescription builder. */
+  primaryDiagnosis?: string;
+  secondaryDiagnosis?: string;
+  skinCareAdvice?: string;
+  lifestyleAdvice?: string;
+  precautions?: string;
+  /** True only once a dermatologist has signed; sending requires it. */
+  prescriptionSigned?: boolean;
+  prescriptionSignedAt?: string | null;
+  prescriptionSignedByName?: string | null;
   _id: Id;
   bookingId: Id | Booking;
   userId: Id | User;
@@ -877,7 +1101,33 @@ export type AppCustomization = {
     typography?: { fontScale?: number; sizeOverrides?: Record<string, number> };
   } | null;
   copy?: Record<string, string> | null;
-  membership?: { discountPercent?: number; priceInr?: number; durationMonths?: number; benefits?: { title: string; copy?: string }[] } | null;
+  /**
+   * The Zen membership card. `priceInr` is the authoritative charge; base/sale
+   * prices are presentation only (see AppCustomization.membership on the API).
+   */
+  membership?: {
+    name?: string;
+    tagline?: string;
+    description?: string;
+    discountPercent?: number;
+    priceInr?: number;
+    basePriceInr?: number;
+    salePriceInr?: number;
+    renewalPriceInr?: number;
+    currency?: string;
+    taxPercent?: number;
+    durationMonths?: number;
+    image?: string;
+    icon?: string;
+    ctaText?: string;
+    ctaDestination?: string;
+    featured?: boolean;
+    isActive?: boolean;
+    displayOrder?: number;
+    terms?: string;
+    branchAvailability?: string[];
+    benefits?: { title: string; copy?: string }[];
+  } | null;
   helpScreen?: { faqs?: { q: string; a: string }[] } | null;
   appLogo?: string;
   homeScreen?: Record<string, unknown>;

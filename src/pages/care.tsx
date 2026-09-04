@@ -18,6 +18,32 @@ import type { AuditAction } from "../store";
 type ServiceFilters = { status: string; popular: string; content: string; priceMin: string; priceMax: string; pricing: string; sort: string };
 const EMPTY_SF: ServiceFilters = { status: "", popular: "", content: "", priceMin: "", priceMax: "", pricing: "", sort: "order" };
 
+/** Pick the Zenoti catalogue record a local service/package is written to Zenoti as. */
+function ZenotiPick({ label, value, onChange, kind, hint }: { label: string; value: string | null | undefined; onChange: (v: string | null) => void; kind: "services" | "packages"; hint?: string }) {
+  const q = useApi(() => (kind === "services" ? api.zenoti.catalogServices() : api.zenoti.catalogPackages()).catch(() => [] as { id: string; name: string; code?: string | null }[]), [kind]);
+  const rows = (q.data ?? []) as { id: string; name: string; code?: string | null; canBook?: boolean | null; price?: number | null }[];
+  const [search, setSearch] = useState("");
+  const query = search.trim().toLowerCase();
+  const visible = rows.filter((r) => !query || r.name.toLowerCase().includes(query) || (r.code ?? "").toLowerCase().includes(query));
+  const current = rows.find((r) => r.id === (value ?? "").toLowerCase());
+  return (
+    <div className="flex flex-col gap-1 col-span-full">
+      <label className="text-[11px] font-bold tracking-[0.02em] text-ink2">{label}</label>
+      <div className="flex flex-wrap items-center gap-2">
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={`Search Zenoti ${kind}…`}
+          className="w-56 rounded-lg border border-border bg-ivory px-2.5 py-2 text-[12.5px] outline-none focus:border-gold-dark" />
+        <select value={value ?? ""} onChange={(e) => onChange(e.target.value || null)}
+          className="min-w-64 flex-1 rounded-lg border border-border bg-ivory px-2.5 py-2 text-[12.5px] text-ink outline-none focus:border-gold-dark">
+          <option value="">— not mapped (nothing is written to Zenoti) —</option>
+          {current && !visible.some((r) => r.id === current.id) && <option value={current.id}>{current.name}{current.code ? ` · ${current.code}` : ""}</option>}
+          {visible.map((r) => <option key={r.id} value={r.id}>{r.name}{r.code ? ` · ${r.code}` : ""}{"price" in r && r.price != null ? ` · ₹${r.price}` : ""}{"canBook" in r && r.canBook === false ? " · not bookable online" : ""}</option>)}
+        </select>
+      </div>
+      <div className="text-[10.5px] text-ink3">{q.loading ? "Loading the Zenoti catalogue…" : hint ?? `${rows.length} in Zenoti`}</div>
+    </div>
+  );
+}
+
 export function Services() {
   const nav = useNavigate();
   const { can, toast, audit } = useStore();
@@ -374,6 +400,8 @@ export function ServiceEditor() {
                   : <In label="Treatment category" value={f.category ?? ""} onChange={set("category")} hint="No categories for this type yet" />}
                 <In label="Price (₹)" type="number" value={String(f.price ?? 0)} onChange={(v) => set("price")(Number(v) || 0)} hint="Hidden in the app when 'Show price' is off" />
                 <In label="Call-to-action label" value={f.cta_label ?? ""} onChange={set("cta_label")} placeholder="Book your appointment" hint="The button text under the service in the app" />
+                <ZenotiPick kind="services" label="Zenoti service — what an app or panel booking of this is created as in Zenoti" value={f.zenotiServiceId} onChange={(v) => set("zenotiServiceId")(v)}
+                  hint="Unmapped services still work here; they just cannot be written into Zenoti's diary." />
               </div>
               <div className="mt-3 grid gap-3">
                 <Area label="Short summary — shown on app cards and under the title" value={f.summary ?? ""} onChange={set("summary")} rows={2} />
@@ -908,7 +936,7 @@ function PackageEditor({ open, pkg, onClose, onSaved, onDelete }: {
   useEffect(() => {
     if (!open) return;
     setF(pkg ?? {
-      name: "", description: "", price: 0, originalPrice: 0, discount: 0, image: "",
+      name: "", description: "", price: 0, originalPrice: 0, discount: 0, image: "", validityMonths: 12,
       benefits: [], services: [], consultationServices: [], isActive: true, isPopular: false,
     });
     setErr(null);
@@ -965,7 +993,11 @@ function PackageEditor({ open, pkg, onClose, onSaved, onDelete }: {
           <div className="min-w-0">
             <div className="grid gap-3 md:grid-cols-2">
               <In label="Package name" value={f.name ?? ""} onChange={set("name")} placeholder="e.g. Glow Ritual · 6 sessions" />
+              <ZenotiPick kind="packages" label="Zenoti package — sold in Zenoti when this package is assigned to a guest" value={f.zenotiPackageId} onChange={(v) => set("zenotiPackageId")(v)} />
               <In label="Package price (₹)" type="number" value={String(f.price ?? 0)} onChange={(v) => set("price")(Number(v) || 0)} hint={listPrice ? `List value ${fmtINR(listPrice)}` : undefined} />
+              <In label="Validity (months)" type="number" value={String(f.validityMonths ?? 12)}
+                onChange={(v) => set("validityMonths")(Math.max(1, Number(v) || 12))}
+                hint="How long a customer has to use it after it is assigned — 12 = one year, 6 = six months" />
             </div>
             <div className="mt-3"><Area label="Description — shown in the app" value={f.description ?? ""} onChange={set("description")} rows={3} /></div>
             <div className="mt-3">
@@ -1259,7 +1291,8 @@ function AssignmentDrawer({ a, onClose, onChanged, canEdit, toast, audit }: {
       {canEdit && (
         <>
           <div className="mt-2 grid gap-2">
-            <In label="Valid until" type="date" value={validUntil} onChange={setValidUntil} />
+            <In label="Valid until" type="date" value={validUntil} onChange={setValidUntil}
+              hint="Leave blank to use the package's validity. Sessions cannot be booked after this date; the package is marked Expired the night it passes." />
             <Area label="Notes" value={notes} onChange={setNotes} rows={2} />
           </div>
           {err && <Note kind="crit">{err}</Note>}
@@ -1310,7 +1343,23 @@ export function Doctors() {
   const feeFor = (d: Doctor) => d.fee || tierList.find((t) => t.id === d.tier)?.fee || 0;
   const onStandard = (d: Doctor) => !d.fee || d.fee <= 0;
 
-  const reloadAll = () => { q.reload(); tiers.reload(); requests.reload(); };
+  const reloadAll = () => { q.reload(); tiers.reload(); requests.reload(); practitioners.reload(); };
+
+  // Zenoti's doctor roster, for "in Zenoti but not in the app" and centre hints.
+  const practitioners = useApi(() => api.zenoti.practitioners().catch(() => []), []);
+  const zenotiRows = practitioners.data ?? [];
+  const notOnboarded = zenotiRows.filter((p) => p.source === "zenoti" && !p.onboarded && !p.historical);
+  const zenotiCentresFor = (d: Doctor) => zenotiRows.find((p) => p.doctorId === d.doctorId)?.centers ?? null;
+  const [onboarding, setOnboarding] = useState<string | null>(null);
+  const onboard = async (employeeId: string, name: string) => {
+    setOnboarding(employeeId);
+    try {
+      await api.zenoti.onboardPractitioner(employeeId);
+      toast(`${name} added as an app dermatologist — set working hours and a panel login next`);
+      audit("DOCTOR_CREATED", `${name} onboarded from Zenoti`, {});
+      reloadAll();
+    } catch (e) { toast((e as Error).message); } finally { setOnboarding(null); }
+  };
 
   return (
     <Page title="Dermatologists"
@@ -1318,6 +1367,22 @@ export function Doctors() {
         ? `${list.length} practitioner${list.length === 1 ? "" : "s"} · ${tierList.map((t) => `${t.title} ${fmtINR(t.fee)}`).join(" · ")}`
         : "The dermatology team the app shows"}
       actions={<>
+      {notOnboarded.length > 0 && (
+        <Card className="mb-3 p-4">
+          <div className="mb-1 text-[12px] font-bold text-ink2">In Zenoti, not yet in the app ({notOnboarded.length})</div>
+          <div className="mb-2 text-[11.5px] text-ink3">Doctors on the clinic's Zenoti roster with no dermatologist profile here. Their clinic visits are mirrored, but they cannot be booked in the app or sign in to the doctor panel until onboarded.</div>
+          <div className="flex flex-wrap gap-2">
+            {notOnboarded.map((p) => (
+              <div key={p.filterValue} className="flex items-center gap-2 rounded-lg bg-ivory px-3 py-2 text-[12px]">
+                <B>{p.name}</B><span className="text-ink3">{p.centers.join(" / ")}</span>
+                {can("dermatologists.manage") && p.zenotiEmployeeId && (
+                  <Btn kind="ghost" disabled={onboarding === p.zenotiEmployeeId} onClick={() => onboard(p.zenotiEmployeeId!, p.name)}>{onboarding === p.zenotiEmployeeId ? "Adding…" : "Add to app"}</Btn>
+                )}
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
         {can("dermatologists.manage") && tierList.length > 0 && <TierEditor tiers={tierList} onSaved={reloadAll} />}
         {can("dermatologists.manage") && <Btn onClick={() => setAddOpen(true)}>+ Add dermatologist</Btn>}
       </>}>
@@ -1389,6 +1454,7 @@ export function Doctors() {
                   </span>
                   <Tag kind={doc.isActive ? "ok" : "mute"}>{doc.isActive ? "Live" : "Hidden"}</Tag>
                 </div>
+                {(() => { const z = zenotiCentresFor(doc); if (!z) return <div className="mt-1.5 text-[10.5px] text-warn">Not linked to a Zenoti doctor — clinic visits cannot be attributed and app bookings cannot name them in Zenoti.</div>; const extra = z.filter((c) => !(doc.availableCentres ?? []).includes(c)); return extra.length ? <div className="mt-1.5 text-[10.5px] text-ink3">Zenoti also rosters them at {extra.join(", ")} — add the centre here if they take app bookings there.</div> : null; })()}
               </Card>
             ))}
           </div>

@@ -9,6 +9,8 @@ import { Overview, Today, Bookings, Patients, PatientDetail, Chat, SupportInbox 
 import { Services, ServiceEditor, Categories, Packages, Doctors, DermatologistDetail, Therapists } from "./pages/care";
 import { Products, Brands, Coupons, Orders } from "./pages/commerce";
 import { Inventory, Vendors } from "./pages/stock";
+import { PurchaseOrders } from "./pages/procurement";
+import { BulkTools, Forms } from "./pages/tools";
 import { AppHome, ConsultPage, MembershipCard, Announcements, ScreenCopy, AppControl } from "./pages/studio";
 import { Branches, Reviews, Analytics, Roles, AuditLog } from "./pages/org";
 import { ClinicData } from "./pages/zenoti";
@@ -107,6 +109,9 @@ export default function App() {
           <Route path="/inventory" element={gated("inventory.view", <Inventory />)} />
           <Route path="/stock-ledger" element={gated("stockLedger.view", <StockLedger />)} />
           <Route path="/vendors" element={gated("vendors.view", <Vendors />)} />
+          <Route path="/purchase-orders" element={gated("purchaseOrders.view", <PurchaseOrders />)} />
+          <Route path="/bulk" element={gated(["bulk.import", "bulk.export"], <BulkTools />)} />
+          <Route path="/forms" element={gated("forms.view", <Forms />)} />
 
           <Route path="/studio/home" element={gated("appStudio.view", <AppHome />)} />
           <Route path="/studio/app-control" element={gated("appStudio.view", <AppControl />)} />

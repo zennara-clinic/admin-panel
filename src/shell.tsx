@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useStore, ROLE_LABEL, panelAccepts, wrongPanelMessage, type Role } from "./store";
+import { replayTour } from "./tours";
 import { Menu } from "./ui";
 import api from "./lib/api";
 import { useApi, useDebounced, usePoll } from "./lib/useApi";
@@ -33,6 +34,7 @@ const NAV: NavGroup[] = [
   { g: "Operations", items: [
     { to: "/bookings", label: "Bookings", icon: <BookOpenCheck className={ic} />, badge: "bookings", perm: "bookings.view" },
     { to: "/patients", label: "Patients", icon: <Users className={ic} />, perm: "patients.view" },
+    { to: "/zenoti", label: "Clinic data (Zenoti)", icon: <Building2 className={ic} />, perm: "zenoti.view" },
     { to: "/deleted-accounts", label: "Deleted accounts", icon: <UserCog className={ic} />, perm: "patients.delete" },
     { to: "/contact-changes", label: "Contact changes", icon: <UserCog className={ic} />, perm: "contactChanges.view" },
     { to: "/chat", label: "Chat", icon: <MessagesSquare className={ic} />, badge: "chat", perm: "chat.view" },
@@ -44,17 +46,20 @@ const NAV: NavGroup[] = [
     { to: "/packages", label: "Packages", icon: <Package className={ic} />, perm: "packages.view" },
     { to: "/doctors", label: "Dermatologists", icon: <UserCog className={ic} />, perm: "dermatologists.view" },
     { to: "/therapists", label: "Therapists", icon: <Users className={ic} />, perm: "therapists.view" },
+    { to: "/forms", label: "Consultation forms", icon: <ClipboardList className={ic} />, perm: "forms.view" },
   ]},
   { g: "Commerce", items: [
     { to: "/products", label: "Products", icon: <ShoppingBag className={ic} />, perm: "products.view" },
     { to: "/brands", label: "Brands & formulations", icon: <Tags className={ic} />, perm: "brands.view" },
     { to: "/coupons", label: "Coupons", icon: <TicketPercent className={ic} />, perm: "coupons.view" },
     { to: "/orders", label: "Orders", icon: <Truck className={ic} />, badge: "orders", perm: "orders.view" },
+    { to: "/bulk", label: "Bulk import / export", icon: <FolderTree className={ic} />, perm: ["bulk.import", "bulk.export"] },
   ]},
   { g: "Stock", items: [
     { to: "/inventory", label: "Inventory", icon: <Boxes className={ic} />, badge: "lowstock", perm: "inventory.view" },
     { to: "/stock-ledger", label: "Stock ledger", icon: <ScrollText className={ic} />, perm: "stockLedger.view" },
     { to: "/vendors", label: "Vendors", icon: <Store className={ic} />, perm: "vendors.view" },
+    { to: "/purchase-orders", label: "Purchase orders", icon: <ClipboardList className={ic} />, perm: "purchaseOrders.view" },
   ]},
   { g: "App Studio", items: [
     { to: "/studio/home", label: "App home", icon: <Smartphone className={ic} />, perm: "appStudio.view" },
@@ -455,6 +460,7 @@ export function Shell({ children }: { children: ReactNode }) {
               items={[
                 { label: <span><b>{who.name}</b><br /><span className="text-[11px] text-ink3">{who.role}{branch ? ` · ${branch}` : ""}</span></span> },
                 { label: "My profile", onClick: () => nav(role === "doctor" ? "/doctor/profile" : role === "therapist" ? "/floor/schedule" : "/roles") },
+                { label: "View tutorial again", onClick: () => { replayTour(); toast("Starting the walkthrough"); } },
                 { label: "Sign out", onClick: () => { logout(); toast("Signed out"); } },
               ]}
             />

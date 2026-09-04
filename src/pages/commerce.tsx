@@ -10,6 +10,7 @@ import { useApi, useDebounced } from "../lib/useApi";
 import { useQueryNumber, useQueryPage, useQueryString } from "../lib/useListState";
 import { fmtDate, fmtDateFull, fmtINR, fmtCompactINR, idOf, isoDay, nameOf } from "../lib/format";
 import type { Brand, Coupon, Formulation, OrderStatus, Product, ProductOrder } from "../lib/types";
+import { ZenotiList } from "./zenoti";
 
 /* ================= PRODUCTS ================= */
 export function Products() {
@@ -684,7 +685,7 @@ const statusTone = (s: string) =>
 export function Orders() {
   const { toast, audit, can } = useStore();
   const loc = useLocation();
-  const [tab, setTab] = useQueryNumber("tab", 0, { min: 0, max: ORDER_STATUSES.length });
+  const [tab, setTab] = useQueryNumber("tab", 0, { min: 0, max: ORDER_STATUSES.length + 1 });
   const [sel, setSel] = useState<string | null>(null);
   const [page, setPage] = useQueryPage();
   const [search, setSearch] = useQueryString("q");
@@ -693,8 +694,11 @@ export function Orders() {
   const PAGE = 15;
 
   const tabs = ["All", ...ORDER_STATUSES];
+  // Retail sales rung up at the clinic counter live in Zenoti; the last tab
+  // lists them next to app orders so product history is complete in one place.
+  const CLINIC_TAB = tabs.length;
   const q = useApi(
-    () => api.orders.list({ status: tab === 0 ? undefined : tabs[tab], paymentStatus: payFilter || undefined, search: debounced || undefined, page, limit: PAGE }),
+    () => api.orders.list({ status: tab === 0 || tab === CLINIC_TAB ? undefined : tabs[tab], paymentStatus: payFilter || undefined, search: debounced || undefined, page, limit: PAGE }),
     [tab, payFilter, debounced, page],
   );
   const stats = useApi(() => api.orders.stats().catch(() => undefined), []);
@@ -781,6 +785,15 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
     a.download = `invoice-${o.orderNumber}.html`; a.click();
   };
 
+  if (tab === CLINIC_TAB) {
+    return (
+      <Page title="Orders" sub="Products bought at the clinic counter (Zenoti) — synced automatically, per customer">
+        <Tabs active={tab} onChange={setTab} items={[...tabs, "Clinic purchases"].map((t) => [t]) as [string][]} />
+        <ZenotiList kind="orders" embedded />
+      </Page>
+    );
+  }
+
   return (
     <Page title="Orders" sub="Product orders placed in the app — fulfilment, returns and refunds"
       actions={<Btn kind="ghost" disabled={!rows.length} onClick={() => exportCsv("zennara-orders",
@@ -804,7 +817,7 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
           items={[{ label: "Any payment", onClick: () => setPayFilter("") },
             ...["Pending", "Paid", "Failed", "Refunded"].map((p) => ({ label: p, onClick: () => setPayFilter(p) }))]} />
       </div>
-      <Tabs active={tab} onChange={setTab} items={tabs.map((t) => [t]) as [string][]} />
+      <Tabs active={tab} onChange={setTab} items={[...tabs, "Clinic purchases"].map((t) => [t]) as [string][]} />
 
       <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
       <Async q={q} label="Loading orders…" rows={8}>

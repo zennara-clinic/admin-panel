@@ -8,6 +8,7 @@
 import { useState } from "react";
 import { api } from "../lib/api";
 import { useApi } from "../lib/useApi";
+import { CLINIC_TZ } from "../lib/format";
 import { Page, Async, DataTable, Tag, Note, Sel, Empty } from "../ui";
 
 const FILTERS = ["All", "Scheduled", "Applied", "Verifying", "Cancelled", "Failed"];
@@ -39,7 +40,7 @@ function fmt(s: string | null): string {
   if (!s) return "—";
   const d = new Date(s);
   if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleString("en-IN", { timeZone: CLINIC_TZ, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
 export function ContactChanges() {

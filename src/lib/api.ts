@@ -8,11 +8,12 @@
 import { request, requestRaw, type Envelope, type Query } from "./http";
 import type {
   Admin, AppCustomization, AuditEntry, Banner, Booking, BookingSession, Branch, Brand, Category, Chat, ChatMessage, DeletedAccount, StockMovement,
-  Consultation, ConsentForm, ConsultationNote, ConsultationReview, Coupon, DermatologistSchedule,
+  Consultation, ConsultationStage, ConsentForm, ConsultationNote, ConsultationReview, Coupon, DermatologistSchedule,
   Doctor, DoctorAvailability, WeeklyBlock,
   DoctorFeeRequest, Formulation, MyFee, ScheduleDay, SlotDay,
   Id, Inventory, Notification, Package, PackageAssignment, PreConsultForm, Product, ProductOrder,
-  ProductReview, ServiceCard, ServiceReview, ServiceType, SupportMessage, TaxonomyTree, User, Vendor,
+  BulkPreview, BulkResult, FormTemplate, FormSubmissionRow, PatientPhoto, ProductAvailability,
+  PurchaseOrder, PurchaseOrderStatus, ProductReview, ServiceCard, ServiceReview, ServiceType, SupportMessage, TaxonomyTree, User, Vendor,
   Role, PermissionGroup, PermissionKey,
 } from "./types";
 import type { VisitCodeLog } from "./types";
@@ -38,6 +39,12 @@ export const auth = {
     }),
   me: () => request<Admin>("/admin/auth/me"),
   logout: () => requestRaw("/admin/auth/logout", { method: "POST" }),
+  /** Remember that this account finished a walkthrough. */
+  markTourSeen: (key: string) =>
+    requestRaw("/admin/auth/me/tours", { method: "PUT", body: { key } }),
+  /** "View tutorial again" — omit `key` to replay every tour. */
+  resetTours: (key?: string) =>
+    requestRaw(`/admin/auth/me/tours${key ? `?key=${encodeURIComponent(key)}` : ""}`, { method: "DELETE" }),
 };
 
 /* ============================ branches ============================ */
@@ -112,6 +119,9 @@ export type NewBooking = {
 export type DermPick = { specialistId?: string; specialistName?: string };
 
 export const bookings = {
+  /** Move the consultation through its clinical lifecycle; never touches `status`. */
+  setStage: (id: Id, body: { stage?: ConsultationStage | null; followUp?: { required?: boolean; dueDate?: string | null; notes?: string } }) =>
+    request<{ _id: Id; consultationStage: ConsultationStage | null; followUp?: Booking["followUp"] }>(`/bookings/admin/${id}/stage`, { method: "PATCH", body }),
   /** Same filters as `list`; returns labelled rows for CSV. `fields` trims columns. */
   export: (q?: Query) => request<Record<string, unknown>[]>("/bookings/admin/export", { query: q }),
   /** Staff send/resend the guest's check-in or check-out code (email / whatsapp / both). */
@@ -137,6 +147,10 @@ export const bookings = {
       Envelope<Booking[]> & { total?: number; statusCounts?: Record<string, number> }
     >,
   get: (id: Id) => request<Booking>(`/bookings/admin/${id}`),
+  /** Re-read this booking's appointment from Zenoti now (read-only towards Zenoti). */
+  zenotiRefresh: (id: Id) => request<Booking>(`/bookings/admin/${id}/zenoti-refresh`, { method: "POST" }),
+  /** Create the appointment in Zenoti (or write the desk state) now. */
+  zenotiPush: (id: Id) => request<Booking>(`/bookings/admin/${id}/zenoti-push`, { method: "POST" }),
   create: (body: NewBooking) => request<Booking>("/bookings/admin", { method: "POST", body }),
   reschedule: (id: Id, body: { preferredDate: string; confirmedTime?: string; preferredTimeSlots?: string[]; reason?: string }) =>
     request<Booking>(`/bookings/admin/${id}/reschedule`, { method: "PUT", body }),
@@ -231,6 +245,7 @@ export const packageAssignments = {
     totalRevenue?: { _id: null; total: number }[];
   }>("/package-assignments/stats"),
   get: (id: Id) => request<PackageAssignment>(`/package-assignments/${id}`),
+  zenotiPush: (id: Id) => request<PackageAssignment>(`/package-assignments/${id}/zenoti-push`, { method: "POST" }),
   create: (body: Record<string, unknown>) =>
     request<PackageAssignment>("/package-assignments", { method: "POST", body }),
   update: (id: Id, body: Record<string, unknown>) =>
@@ -433,6 +448,89 @@ export const orders = {
 };
 
 /* ============================ stock ============================ */
+/**
+ * Doctor-facing stock. Separate from `products` on purpose: that endpoint
+ * returns prices and a dermatologist account is not permitted to call it.
+ * Named `productAvailability` because `availability` already means the
+ * dermatologist-centre availability above.
+ */
+export const productAvailability = {
+  list: (q?: { search?: string; branchId?: Id; status?: string; limit?: number }) =>
+    requestRaw<ProductAvailability[]>("/inventory/availability", { query: q as Query }),
+};
+
+/**
+ * Clinical photographs. Multipart upload, because the browser must be able to
+ * hand over a file straight from the device camera (capture="environment").
+ */
+export const patientPhotos = {
+  list: (q: { userId?: Id; bookingId?: Id; phase?: string; limit?: number }) =>
+    requestRaw<PatientPhoto[]>("/patient-photos", { query: q as Query }),
+  upload: (files: File[], meta: { userId: Id; bookingId?: Id | null; phase?: string; bodyArea?: string; note?: string; takenAt?: string }) => {
+    const form = new FormData();
+    files.forEach((f) => form.append("photos", f));
+    Object.entries(meta).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== "") form.append(k, String(v)); });
+    return requestRaw<PatientPhoto[]>("/patient-photos", { method: "POST", body: form });
+  },
+  update: (id: Id, body: Partial<Pick<PatientPhoto, "phase" | "bodyArea" | "note">> & { bookingId?: Id | null }) =>
+    request<PatientPhoto>(`/patient-photos/${id}`, { method: "PATCH", body }),
+  remove: (id: Id) => requestRaw(`/patient-photos/${id}`, { method: "DELETE" }),
+};
+
+/**
+ * Purchase orders. Receiving is what raises stock — see the backend controller;
+ * nothing else on this path may increase a quantity.
+ */
+export const purchaseOrders = {
+  list: (q?: { status?: string; vendorId?: Id; branchId?: Id; productId?: Id; search?: string; page?: number; limit?: number }) =>
+    requestRaw<PurchaseOrder[]>("/purchase-orders", { query: q as Query }),
+  get: (id: Id) => request<PurchaseOrder>(`/purchase-orders/${id}`),
+  create: (body: {
+    vendorId: Id; branchId?: Id | null; expectedDeliveryDate?: string | null; notes?: string;
+    lines: { name: string; sku?: string; productId?: Id | null; inventoryId?: Id | null; requestedQuantity: number; unitCost?: number; taxPercent?: number; note?: string }[];
+  }) => request<PurchaseOrder>("/purchase-orders", { method: "POST", body }),
+  update: (id: Id, body: Record<string, unknown>) =>
+    request<PurchaseOrder>(`/purchase-orders/${id}`, { method: "PUT", body }),
+  setStatus: (id: Id, status: PurchaseOrderStatus, note?: string) =>
+    request<PurchaseOrder>(`/purchase-orders/${id}/status`, { method: "PATCH", body: { status, note } }),
+  receive: (id: Id, receipts: { lineId: Id; quantity: number; rejectedQuantity?: number; rejectionReason?: string; batchNo?: string; expiryDate?: string | null; note?: string }[]) =>
+    requestRaw<PurchaseOrder>(`/purchase-orders/${id}/receive`, { method: "POST", body: { receipts } }),
+  productHistory: (productId: Id) => request<Record<string, unknown>[]>(`/purchase-orders/history/product/${productId}`),
+  vendorHistory: (vendorId: Id) => request<{ summary: Record<string, number>; orders: PurchaseOrder[] }>(`/purchase-orders/history/vendor/${vendorId}`),
+};
+
+/**
+ * Bulk import / export. Preview writes nothing; commit re-validates the file
+ * rather than trusting the preview.
+ */
+export const bulk = {
+  preview: (entity: "services" | "categories" | "products", file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<BulkPreview>(`/bulk/${entity}/preview`, { method: "POST", body: form });
+  },
+  commit: (entity: "services" | "categories" | "products", file: File, mode: "create" | "update" | "both") => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("mode", mode);
+    return request<BulkResult>(`/bulk/${entity}/commit`, { method: "POST", body: form });
+  },
+  /** Export and template are plain downloads, so they bypass the JSON helper. */
+  downloadUrl: (entity: string, kind: "export" | "template") => `/bulk/${entity}/${kind}`,
+};
+
+/** Admin-built consultation forms. */
+export const formTemplates = {
+  list: (q?: { isActive?: boolean; search?: string }) =>
+    requestRaw<FormTemplate[]>("/form-templates", { query: q as Query }),
+  get: (id: Id) => request<FormTemplate>(`/form-templates/${id}`),
+  create: (body: Partial<FormTemplate>) => request<FormTemplate>("/form-templates", { method: "POST", body }),
+  update: (id: Id, body: Partial<FormTemplate>) => request<FormTemplate>(`/form-templates/${id}`, { method: "PUT", body }),
+  remove: (id: Id) => requestRaw(`/form-templates/${id}`, { method: "DELETE" }),
+  submissions: (id: Id, q?: { page?: number; limit?: number; status?: string }) =>
+    requestRaw<FormSubmissionRow[]>(`/form-templates/${id}/submissions`, { query: q as Query }),
+};
+
 export const inventory = {
   list: (q?: Query) => requestRaw<Inventory[]>("/admin/inventory", { query: q }),
   get: (id: Id) => request<Inventory>(`/admin/inventory/${id}`),
@@ -570,6 +668,11 @@ export const support = {
 
 /* ============================ clinical forms ============================ */
 export const preConsult = {
+  /** "Pre-consultation form: Completed" for one appointment — one cheap call. */
+  statusForBooking: (bookingId: Id) =>
+    request<{ state: "not_started" | "draft" | "completed"; label: string; formId: Id | null; linked: boolean; status?: string; updatedAt?: string }>(
+      `/pre-consult-forms/admin/by-booking/${bookingId}`,
+    ),
   list: (q?: Query) => requestRaw<PreConsultForm[]>("/pre-consult-forms/admin/all", { query: q }),
   setStatus: (id: Id, status: string) =>
     request<PreConsultForm>(`/pre-consult-forms/admin/${id}/status`, { method: "PATCH", body: { status } }),
@@ -807,8 +910,25 @@ export type ZenotiSyncRun = {
   startedAt: string; finishedAt?: string | null; total: number; processed: number; created: number;
   updated: number; skipped: number; failed: number; error?: string | null;
 };
+export type ZenotiCatalogService = { id: string; code?: string | null; name: string; canBook?: boolean | null; price?: number | null; durationMinutes?: number | null; categoryName?: string | null };
+export type ZenotiCatalogPackage = { id: string; code?: string | null; name: string; type?: number | null; active?: boolean };
+export type ZenotiReadiness = {
+  writeMode: string; lifecycleWriteback: boolean; breaker: ZenotiWriteBreaker;
+  updatedByConfigured: boolean; referralSourceConfigured: boolean;
+  unmappedServices: string[]; unmappedPackages: string[];
+  /** Active dermatologists with no Zenoti employee link — their bookings are refused. */
+  unlinkedDermatologists?: string[];
+  clinics: { centerId: string; name: string; schedulesPublished: boolean | null; shiftsWorking: number; shiftsTotal: number;
+    servicesInCatalogue: number; bookableServices: number; servicesResolved: number; servicesTotal: number;
+    packagesResolved: number; packagesTotal: number; zenotiPackages: number }[];
+  checkedAt: string;
+};
+export type ZenotiWriteBreaker = {
+  tripped: boolean; at?: string | null; reason?: string | null; lastAction?: string | null;
+  writesLast15Min: number; writesLastHour: number; limit15Min: number; limitHour: number;
+};
 export type ZenotiSyncStatus = {
-  configured: boolean; writeMode: string; linkedUsers: number; mirrored: number; freshWithin24h: number; withErrors: number;
+  configured: boolean; writeMode: string; lifecycleWriteback?: boolean; writeBreaker?: ZenotiWriteBreaker; linkedUsers: number; mirrored: number; freshWithin24h: number; withErrors: number;
   rosterRunning: boolean; detailsRunning: boolean; fullImportRunning: boolean; appointmentSyncRunning?: boolean;
   sectionCoverage: Record<string, number>; supportedDatasets: string[];
   providerLimitations: { key: string; label: string; reason: string }[];
@@ -838,9 +958,19 @@ export const zenoti = {
   /** Refresh history for the N least-recently synced customers. */
   crawl: (limit?: number) => request<unknown>("/admin/zenoti/crawl", { method: "POST", body: { limit } }),
   syncAppointments: () => request<unknown>("/admin/zenoti/appointments/sync", { method: "POST" }),
+  resetWriteBreaker: () => request<unknown>("/admin/zenoti/write-breaker/reset", { method: "POST" }),
+  catalogServices: (q?: Query) => request<ZenotiCatalogService[]>("/admin/zenoti/catalog/services", { query: q }),
+  catalogPackages: (q?: Query) => request<ZenotiCatalogPackage[]>("/admin/zenoti/catalog/packages", { query: q }),
+  readiness: () => request<ZenotiReadiness>("/admin/zenoti/readiness"),
+  /** Publish dermatologists' panel hours into Zenoti as Working shifts (dryRun returns the plan). */
+  publishDoctorHours: (body?: { days?: number; doctorId?: string; dryRun?: boolean }) =>
+    request<{ planned: number; written: number; alreadyWorking: number; failed: number; dryRun: boolean; wouldWrite?: number; errors: string[]; mode: string }>("/admin/zenoti/publish-doctor-hours", { method: "POST", body: body ?? {} }),
   /** App doctors + Zenoti-only doctors for reporting filters; never an app roster endpoint. */
   practitioners: () => request<ReportingPractitioner[]>("/admin/zenoti/practitioners"),
   syncPractitioners: () => request<unknown>("/admin/zenoti/practitioners/sync", { method: "POST" }),
+  /** Create the app dermatologist for a Zenoti doctor and link the two. */
+  onboardPractitioner: (employeeId: string, body?: { name?: string; tier?: string; availableCentres?: string[]; email?: string; password?: string }) =>
+    request<unknown>(`/admin/zenoti/practitioners/${employeeId}/onboard`, { method: "POST", body: body ?? {} }),
   user: (userId: Id, refresh?: boolean) =>
     request<ZenotiUserData>(`/admin/zenoti/users/${userId}`, { query: refresh ? { refresh: "1" } : undefined }),
   syncUser: (userId: Id) => request<ZenotiUserData>(`/admin/zenoti/users/${userId}/sync`, { method: "POST" }),
@@ -896,7 +1026,7 @@ export const roles = {
 
 export const api = {
   auth, branches, patients, bookings, services, serviceTypes, categories, packages, packageAssignments, consultationNotes,
-  doctors, availability, schedules, feeRequests, products, brands, formulations, coupons, orders, inventory, vendors,
+  doctors, availability, productAvailability, patientPhotos, purchaseOrders, bulk, formTemplates, schedules, feeRequests, products, brands, formulations, coupons, orders, inventory, vendors,
   appStudio, media, chat, notifications, reviews, support, preConsult, consentForms,
   serviceCards, analytics, audit, staff, zenoti, contactChange, banners, roles,
 };

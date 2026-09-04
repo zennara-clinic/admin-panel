@@ -1,3 +1,4 @@
+import { useState } from "react";
 /**
  * Clinic data (Zenoti CRM).
  *
@@ -358,6 +359,72 @@ function runLabel(r: ZenotiSyncRun | null | undefined) {
   return `${when}`;
 }
 
+/** Can what is created here reach Zenoti? The honest checklist. */
+function PublishHours() {
+  const { toast, can } = useStore();
+  const [busy, setBusy] = useState<"plan" | "publish" | null>(null);
+  const [result, setResult] = useState<{ planned: number; written: number; alreadyWorking: number; failed: number; dryRun: boolean; wouldWrite?: number; errors: string[]; mode: string } | null>(null);
+  if (!can("zenoti.manage")) return null;
+  const run = async (dryRun: boolean) => {
+    setBusy(dryRun ? "plan" : "publish");
+    try { const r = await api.zenoti.publishDoctorHours({ dryRun }); setResult(r); toast(dryRun ? `Would write ${r.wouldWrite ?? 0} shifts` : `${r.written} shifts written to Zenoti${r.failed ? `, ${r.failed} failed` : ""}`); }
+    catch (e) { toast((e as Error).message); } finally { setBusy(null); }
+  };
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-2 text-[12px]">
+      <Btn kind="ghost" disabled={!!busy} onClick={() => run(true)}>{busy === "plan" ? "Checking…" : "Preview shifts to publish"}</Btn>
+      <Btn disabled={!!busy} onClick={() => run(false)}>{busy === "publish" ? "Publishing…" : "Publish dermatologist hours to Zenoti"}</Btn>
+      {result && (
+        <span className="text-ink3">
+          {result.dryRun ? `Plan: ${result.planned} doctor-days, ${result.wouldWrite ?? 0} to write, ${result.alreadyWorking} already scheduled in Zenoti` : `Written ${result.written}, already scheduled ${result.alreadyWorking}, failed ${result.failed}`}
+          {result.mode !== "live" && " · write mode is not live, nothing was sent"}
+          {result.errors.length > 0 && ` · ${result.errors[0]}`}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function ReadinessCard() {
+  const q = useApi(() => api.zenoti.readiness().catch(() => null), []);
+  const r = q.data;
+  if (!r) return null;
+  const ok = (v: boolean | null) => v === null ? <Tag kind="mute">unknown</Tag> : v ? <Tag kind="ok">yes</Tag> : <Tag kind="err">no</Tag>;
+  return (
+    <Card className="mb-3 p-4">
+      <div className="mb-2 text-[12px] font-bold text-ink2">Writing to Zenoti — readiness <span className="font-normal text-ink3">(checked {fmtAgo(r.checkedAt)})</span></div>
+      <div className="grid gap-x-6 gap-y-1 text-[12px] md:grid-cols-2">
+        <div>New records (bookings, package sales) → Zenoti: {ok(r.writeMode === "live")} <span className="text-ink3">mode {r.writeMode}</span></div>
+        <div>Desk check-in / check-out → Zenoti: {ok(r.lifecycleWriteback)}</div>
+        <div>Updater employee for completions (ZENOTI_UPDATED_BY_ID): {ok(r.updatedByConfigured)} <span className="text-ink3">{r.updatedByConfigured ? "" : "falls back to the visit's own provider"}</span></div>
+        <div>Referral source for brand-new guests (ZENOTI_REFERRAL_SOURCE_ID): {ok(r.referralSourceConfigured)} <span className="text-ink3">{r.referralSourceConfigured ? "" : "new app sign-ups cannot be created in Zenoti"}</span></div>
+        <div>Safety breaker: {r.breaker.tripped ? <Tag kind="err">tripped</Tag> : <Tag kind="ok">armed</Tag>} <span className="text-ink3">{r.breaker.writesLastHour} writes in the last hour</span></div>
+      </div>
+      <div className="mt-3 grid gap-2 md:grid-cols-3">
+        {r.clinics.map((c) => (
+          <div key={c.centerId} className="rounded-lg bg-ivory px-3 py-2 text-[12px]">
+            <B>{c.name}</B>
+            <div className="mt-1">Staff shifts published in Zenoti this week: {ok(c.schedulesPublished)} <span className="text-ink3">{c.shiftsWorking}/{c.shiftsTotal} working</span></div>
+            <div>Services mapped: <B>{c.servicesResolved}</B>/{c.servicesTotal} <span className="text-ink3">· {c.bookableServices} bookable of {c.servicesInCatalogue} in Zenoti</span></div>
+            <div>Packages mapped: <B>{c.packagesResolved}</B>/{c.packagesTotal} <span className="text-ink3">· {c.zenotiPackages} in Zenoti</span></div>
+          </div>
+        ))}
+      </div>
+      {(r.unmappedServices.length > 0 || r.unmappedPackages.length > 0 || (r.unlinkedDermatologists ?? []).length > 0) && (
+        <div className="mt-2 text-[11.5px] text-ink3">
+          {r.unmappedServices.length > 0 && <div>Services without a Zenoti mapping ({r.unmappedServices.length}): {r.unmappedServices.slice(0, 12).join(", ")}{r.unmappedServices.length > 12 ? "…" : ""} — set it on each service under Care → Services.</div>}
+          {r.unmappedPackages.length > 0 && <div>Packages without a Zenoti mapping: {r.unmappedPackages.join(", ")} — set it under Care → Packages.</div>}
+          {(r.unlinkedDermatologists ?? []).length > 0 && <div>Dermatologists not linked to a Zenoti employee ({(r.unlinkedDermatologists ?? []).length}): {(r.unlinkedDermatologists ?? []).join(", ")} — link them under Practitioners on this page (Onboard), or their confirmed bookings will be refused by Zenoti.</div>}
+        </div>
+      )}
+      {r.clinics.some((c) => c.schedulesPublished === false) && (
+        <Note kind="crit" className="mt-2">Zenoti's slot engine offers nothing while staff shifts are "NotScheduled", so appointments created here cannot be written into Zenoti. Publish the dermatologists' panel hours into Zenoti below (runs nightly too); only days Zenoti has nothing scheduled are written, and shifts the clinic set are never touched.</Note>
+      )}
+      <PublishHours />
+    </Card>
+  );
+}
+
 export function ClinicData() {
   const nav = useNavigate();
   const { toast, can } = useStore();
@@ -394,6 +461,14 @@ export function ClinicData() {
         </Btn>
       </> : undefined}>
       {s && !s.configured && <Note kind="crit">Zenoti is not configured on the server (ZENOTI_API_KEY). Nothing will sync until it is.</Note>}
+      <ReadinessCard />
+      {s?.writeBreaker?.tripped && (
+        <Note kind="crit">
+          Writes to Zenoti are <B>paused by the safety breaker</B> since {fmtAgo(s.writeBreaker.at ?? undefined)}: {s.writeBreaker.reason}.
+          Nothing is being written to Zenoti until an admin resets it.
+          {isAdmin && <> <button className="underline" onClick={() => api.zenoti.resetWriteBreaker().then(() => { toast("Zenoti write breaker reset"); status.reload(); })}>Reset breaker</button></>}
+        </Note>
+      )}
       {s && (
         <Stats items={[
           { k: "Clinic customers", v: s.linkedUsers.toLocaleString("en-IN"), d: "in Patients", onClick: () => nav("/patients") },
@@ -402,7 +477,7 @@ export function ClinicData() {
           { k: "History import", v: s.detailsRunning ? `${detailRun?.processed ?? 0}/${detailRun?.total || "?"}` : runLabel(s.lastDetails), d: s.detailsRunning ? (detailRun?.mode === "full" ? "full supported record" : "rolling refresh") : "every 5 min, oldest first", hot: s.detailsRunning },
           { k: "Live appointments", v: s.appointmentSyncRunning ? "Syncing" : runLabel(s.lastAppointments), d: "every 2 min · all clinics", hot: s.appointmentSyncRunning },
           { k: "Sync errors", v: s.withErrors, d: s.withErrors ? "retried automatically" : "none", tone: s.withErrors ? "dn" : undefined },
-          { k: "Write-back", v: s.writeMode, d: s.writeMode === "live" ? "app → Zenoti on" : "not writing to Zenoti" },
+          { k: "Write-back", v: s.writeMode, d: s.writeMode === "live" ? `new records → Zenoti on · status changes ${s.lifecycleWriteback ? "ON" : "off"}` : "not writing to Zenoti", hot: !!s.writeBreaker?.tripped },
         ]} />
       )}
       {s && (

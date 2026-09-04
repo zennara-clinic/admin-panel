@@ -165,3 +165,39 @@ export async function requestRaw<T = unknown>(path: string, opts: RequestOpts = 
 export function upload<T = unknown>(path: string, form: FormData, method: "POST" | "PUT" = "POST") {
   return request<T>(path, { method, body: form });
 }
+
+/**
+ * Download a file from an authenticated endpoint.
+ *
+ * A plain `<a href>` cannot carry the bearer token, and putting the token in a
+ * query string would leak it into browser history and server logs. So the file
+ * is fetched with the header, turned into a blob, and saved from memory.
+ */
+export async function download(path: string, fallbackName: string): Promise<void> {
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(`${API_BASE}${path}`, { headers });
+  if (!res.ok) {
+    let message = `Download failed (${res.status})`;
+    try {
+      const body = await res.json();
+      if (body?.message) message = body.message;
+    } catch { /* a non-JSON error body is not worth reporting verbatim */ }
+    throw new ApiError(message, res.status);
+  }
+
+  // Prefer the filename the server chose, so exports carry their date.
+  const disposition = res.headers.get("content-disposition") ?? "";
+  const match = /filename="?([^";]+)"?/i.exec(disposition);
+  const name = match?.[1] ?? fallbackName;
+
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  // Revoking immediately can cancel the save in some browsers.
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}

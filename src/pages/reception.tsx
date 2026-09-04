@@ -11,13 +11,13 @@ import { ZenotiMembershipCard, ZenotiPackageCard, appointmentState, fmtZDate, fm
 import { getSocket, type ChatUpdate, type DeletedEvent, type PresenceEvent, type TypingEvent } from "../lib/socket";
 import { useApi, useDebounced, useMutation, usePoll } from "../lib/useApi";
 import { useQueryNumber, useQueryPage, useQueryString } from "../lib/useListState";
-import {
+import { CLINIC_TZ,
   ageFrom, bookingProvider, bookingServiceName, bookingSlotDate, bookingSlotLabel, bookingSource, fmtAgo, fmtCompactINR,
   fmtDate, fmtDateFull, fmtINR, fmtWhen, idOf, initials, isoDay, isVip, nameOf, patientFlags, pct,
   statusKey, mapToRows, isConsultationBooking, clinicHM, addClinicDays, clinicMonthEnd,
   clinicMonthStart, clinicWeekday, dayKeyDate, fmtDayKey,
 } from "../lib/format";
-import type { Booking, Branch, Chat as ChatThread, ChatMessage, Consultation, Doctor, User } from "../lib/types";
+import type { ConsultationStage, Booking, Branch, Chat as ChatThread, ChatMessage, Consultation, Doctor, User } from "../lib/types";
 
 /* ================= OVERVIEW ================= */
 const RANGE_PRESETS: [string, () => { startDate: string; endDate: string }][] = [
@@ -227,6 +227,90 @@ function DermPicker({ booking, value, onChange }: { booking: Booking; value: Der
   );
 }
 
+/** Zenoti's diary status codes, as observed live: -2 no show, -1 cancelled, 0 booked, 1 closed, 2 checked in, 4 confirmed, 21 voided. */
+function zenotiDiaryLabel(src?: Booking["zenotiSource"]): string {
+  if (!src) return "—";
+  const s = String(src.status ?? "");
+  if (s === "vanished") return "Removed from diary";
+  const base = s === "-2" ? "No show" : s === "-1" ? "Cancelled" : s === "21" ? "Voided" : s === "1" ? "Closed" : s === "2" ? "Checked in" : s === "4" ? "Confirmed" : s === "0" ? "Booked" : s || "—";
+  const p = Number(src.progress ?? 0);
+  return p === 2 ? `${base} · service completed` : p === 1 ? `${base} · service started` : base;
+}
+
+
+const STAGE_LABEL: Record<string, string> = {
+  booked: "Booked", confirmed: "Confirmed", checked_in: "Checked in", waiting: "Waiting",
+  consultation_started: "Consultation started", consultation_completed: "Consultation completed",
+  prescription_created: "Prescription created", treatment_recommended: "Treatment recommended",
+  follow_up_required: "Follow-up required", no_follow_up: "No follow-up needed",
+};
+
+/** "Pre-consultation form: Completed" — one cheap call per opened booking. */
+function FormStatusLine({ bk }: { bk: Booking }) {
+  const st = useApi(() => api.preConsult.statusForBooking(bk._id).catch(() => null), [bk._id]);
+  const [open, setOpen] = useState(false);
+  const form = useApi(
+    () => (open && st.data?.formId ? api.preConsult.list({ userId: idOf(bk.userId), limit: 1 }).then((r) => (r.data ?? [])[0] ?? null).catch(() => null) : Promise.resolve(null)),
+    [open, st.data?.formId],
+  );
+  if (!st.data) return null;
+  const kind = st.data.state === "completed" ? "ok" : st.data.state === "draft" ? "warn" : "mute";
+  return (
+    <div className="mt-2 rounded-lg bg-ivory px-2.5 py-2 text-[11.5px] text-ink2">
+      <span className="mr-2">Pre-consultation form:</span>
+      <Tag kind={kind}>{st.data.label}</Tag>
+      {st.data.formId && (
+        <button className="ml-2 underline-offset-2 hover:underline" onClick={() => setOpen((o) => !o)}>
+          {open ? "Hide" : "Open"}
+        </button>
+      )}
+      {open && form.data && (
+        <div className="mt-2 grid gap-0.5 text-[11.5px]">
+          {form.data.symptomDuration && <div><B>Duration</B> {form.data.symptomDuration}</div>}
+          {form.data.previousTreatments && <div><B>Tried already</B> {form.data.previousTreatments}</div>}
+          {form.data.currentMedications && <div><b className="font-semibold text-err">Medication</b> {form.data.currentMedications}</div>}
+          {form.data.drugAllergies && <div><b className="font-semibold text-err">Allergies</b> {form.data.drugAllergies}</div>}
+          {form.data.pregnancyStatus && !["not_applicable", "prefer_not_to_say"].includes(form.data.pregnancyStatus) && (
+            <div><b className="font-semibold text-err">Pregnancy</b> {form.data.pregnancyStatus.replace(/_/g, " ")}</div>
+          )}
+          {form.data.patientNotes && <div><B>Notes</B> {form.data.patientNotes}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Where the consultation is, and the desk's two moves: mark the guest as
+ * waiting, or as with the dermatologist. Everything after that is the
+ * dermatologist's to set from the consult room.
+ */
+function StageLine({ bk, onChanged }: { bk: Booking; onChanged: () => void }) {
+  const { toast } = useStore();
+  const [busy, setBusy] = useState(false);
+  if (["Cancelled", "No Show"].includes(bk.status)) return null;
+  const move = async (stage: ConsultationStage) => {
+    setBusy(true);
+    try { await api.bookings.setStage(bk._id, { stage }); toast(STAGE_LABEL[stage]); onChanged(); }
+    catch (e) { toast((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-ivory px-2.5 py-2 text-[11.5px] text-ink2">
+      <span>Consultation:</span>
+      <Tag kind={bk.consultationStage ? "info" : "mute"}>{bk.consultationStage ? STAGE_LABEL[bk.consultationStage] : "Not started"}</Tag>
+      {bk.followUp?.required && (
+        <Tag kind="gold">Follow-up{bk.followUp.dueDate ? ` · ${fmtDate(bk.followUp.dueDate)}` : ""}</Tag>
+      )}
+      {["In Progress", "Confirmed", "Rescheduled"].includes(bk.status) && (
+        <>
+          <button className="underline-offset-2 hover:underline" disabled={busy} onClick={() => move("waiting")}>Mark waiting</button>
+          <button className="underline-offset-2 hover:underline" disabled={busy} onClick={() => move("consultation_started")}>With dermatologist</button>
+        </>
+      )}
+    </div>
+  );
+}
+
 function BookingDrawer({ id, onClose, onChanged }: {
   id: string | null; onClose: () => void; onChanged: () => void;
 }) {
@@ -323,6 +407,44 @@ function BookingDrawer({ id, onClose, onChanged }: {
                 </div>
               )}
               <div className="mt-2 text-[12px] text-ink2">{bk.mobileNumber}{!bk.email || /@zennara\.local$|@guest\.zennara\.in$/i.test(bk.email) ? " · no email on file" : ` · ${bk.email}`}</div>
+              <FormStatusLine bk={bk} />
+              <StageLine bk={bk} onChanged={() => { q.reload(); onChanged(); }} />
+              {bk.zenotiAppointmentId && (
+                <div className="mt-2 rounded-lg bg-ivory px-2.5 py-2 text-[11.5px] text-ink2">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <Tag kind="info">Zenoti</Tag>
+                    <span>Diary status <B>{zenotiDiaryLabel(bk.zenotiSource)}</B></span>
+                    {bk.zenotiSource?.invoiceNumber && <span>· invoice <B>{bk.zenotiSource.invoiceNumber}</B></span>}
+                    {bk.zenotiTherapistName && <span>· with <B>{bk.zenotiTherapistName}</B></span>}
+                    {bk.zenotiSource?.packageName && <span>· package <B>{bk.zenotiSource.packageName}</B></span>}
+                    {bk.room && <span>· {bk.room}</span>}
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-ink3">
+                    <span>Last read from Zenoti {bk.zenotiLastInboundAt ? fmtAgo(bk.zenotiLastInboundAt) : "—"}</span>
+                    {bk.zenotiSyncStatus === "failed" && <span className="text-err">· write-back failed: {bk.zenotiSyncError}</span>}
+                    <button className="underline-offset-2 hover:underline" disabled={act.busy} onClick={() => act.mutate(
+                      () => api.bookings.zenotiRefresh(bk._id).then(() => undefined),
+                      "Re-read from Zenoti",
+                    )}>Refresh from Zenoti now</button>
+                    {(bk.zenotiSyncStatus === "failed" || bk.zenotiSyncStatus === "skipped") && (
+                      <button className="underline-offset-2 hover:underline" disabled={act.busy} onClick={() => act.mutate(
+                        () => api.bookings.zenotiPush(bk._id).then(() => undefined),
+                        "Written to Zenoti",
+                      )}>Write to Zenoti again</button>
+                    )}
+                  </div>
+                </div>
+              )}
+              {!bk.zenotiAppointmentId && bk.source !== "zenoti" && !["Cancelled", "No Show"].includes(bk.status) && (
+                <div className="mt-2 rounded-lg bg-ivory px-2.5 py-2 text-[11.5px] text-ink2">
+                  <Tag kind={bk.zenotiSyncStatus === "failed" ? "err" : "mute"}>Not in Zenoti</Tag>
+                  <span className="ml-2">{bk.zenotiSyncError || (bk.zenotiSyncStatus ? `Zenoti write ${bk.zenotiSyncStatus}` : "Not written to Zenoti yet")}</span>
+                  <button className="ml-2 underline-offset-2 hover:underline" disabled={act.busy} onClick={() => act.mutate(
+                    () => api.bookings.zenotiPush(bk._id).then(() => undefined),
+                    "Appointment created in Zenoti",
+                  )}>Create in Zenoti now</button>
+                </div>
+              )}
               {(bk.manualCheckIn?.at || bk.manualCheckOut?.at || (bk.visitCodeLog?.length ?? 0) > 0) && (
                 <div className="mt-2 rounded-lg bg-ivory px-2.5 py-2 text-[11.5px] text-ink2">
                   {bk.manualCheckIn?.at && <div>Checked in <B>without a code</B> by {bk.manualCheckIn.byName ?? "staff"} {fmtAgo(bk.manualCheckIn.at)} — “{bk.manualCheckIn.reason}”</div>}
@@ -395,7 +517,7 @@ function BookingDrawer({ id, onClose, onChanged }: {
                   </>
                 );
               })()}
-              {(bk.status === "Confirmed" || bk.status === "Awaiting Confirmation" || bk.status === "Rescheduled") && (
+              {bk.source !== "zenoti" && (bk.status === "Confirmed" || bk.status === "Awaiting Confirmation" || bk.status === "Rescheduled") && (
                 <Btn kind="ghost" disabled={act.busy} onClick={() => act.mutate(
                   () => api.bookings.noShow(bk._id).then(() => audit("BOOKING_NO_SHOW", bk.fullName, { bookingId: bk._id })),
                   "Marked as no-show",
@@ -407,10 +529,13 @@ function BookingDrawer({ id, onClose, onChanged }: {
               <Btn kind="ghost" onClick={() => nav("/patient", {
                 state: { id: idOf(bk.userId), returnTo: `${route.pathname}${route.search}` },
               })}>Open patient record</Btn>
-              {!["Cancelled", "Completed", "No Show"].includes(bk.status) && (
+              {bk.source === "zenoti" && !["Cancelled", "Completed", "No Show"].includes(bk.status) && (
+                <Note>Booked in Zenoti. Reschedule, cancel or no-show it in Zenoti — the change shows here within 2 minutes. Check-in, check-out and completion are recorded here and written to Zenoti.</Note>
+              )}
+              {bk.source !== "zenoti" && !["Cancelled", "Completed", "No Show"].includes(bk.status) && (
                 <Btn kind="ghost" onClick={() => setResOpen(true)}>Reschedule</Btn>
               )}
-              {!["Cancelled", "Completed", "No Show"].includes(bk.status) && (
+              {bk.source !== "zenoti" && !["Cancelled", "Completed", "No Show"].includes(bk.status) && (
                 <Btn kind="danger" onClick={() => { act.clearError?.(); setCancelOpen(true); }}>Cancel booking</Btn>
               )}
             </div>
@@ -1247,7 +1372,7 @@ export function Bookings() {
               bookingSlotLabel(b),
               b.paymentStatus === "paid" ? <Tag kind="ok">Paid</Tag> : <Tag kind="warn">{fmtINR(b.amount)}</Tag>,
               STATUS[statusKey(b)],
-              <Tag kind="mute">{bookingSource(b)}</Tag>,
+              <Tag kind={b.source === "zenoti" ? "info" : "mute"}>{b.source === "zenoti" ? "Clinic (Zenoti)" : bookingSource(b)}</Tag>,
             ])}
           />
         )) : view === "week" ? (
@@ -1500,7 +1625,7 @@ export function Patients() {
         ) : (
           <>
             <DataTable
-              cols={["Patient", "Patient ID", "Phone", "Centre", "Source", "Joined", "Visits", "Spend", "Membership", "Flags"]}
+              cols={["Patient", "Patient ID", "Phone", "Centre", "Source", "Zenoti", "Joined", "Visits", "Spend", "Membership", "Flags"]}
               onRow={(i) => nav("/patient", { state: { id: users[i]._id } })}
               rows={users.map((p) => {
                 const flags = patientFlags(p);
@@ -1511,6 +1636,15 @@ export function Patients() {
                   p.phone,
                   p.location ?? "—",
                   p.source === "zenoti" ? <Tag key={`${p._id}src`} kind="info">Clinic</Tag> : p.source === "reception" ? <Tag key={`${p._id}src`} kind="gold">Walk-in</Tag> : <Tag key={`${p._id}src`} kind="mute">App</Tag>,
+                  // Whether Zenoti holds this patient — the external client id is the
+                  // integration reference, so a missing one has to be visible here.
+                  p.zenotiGuestId
+                    ? (p.zenotiSyncStatus === "review"
+                        ? <Tag key={`${p._id}z`} kind="warn">Needs review</Tag>
+                        : <Tag key={`${p._id}z`} kind="ok">Synced</Tag>)
+                    : p.zenotiSyncStatus === "failed"
+                      ? <Tag key={`${p._id}z`} kind="err">Sync failed</Tag>
+                      : <Tag key={`${p._id}z`} kind="mute">{p.zenotiSyncStatus === "dryrun" ? "Dry run" : "Pending"}</Tag>,
                   fmtDate(p.createdAt),
                   p.totalVisits ?? 0,
                   fmtINR(p.totalSpent),
@@ -2170,7 +2304,7 @@ function EditPatientModal({ open, onClose, user, onSaved }: {
 function slotLabelFromLocal(dt: string): string {
   const d = new Date(dt);
   if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+  return d.toLocaleTimeString("en-US", { timeZone: CLINIC_TZ, hour: "numeric", minute: "2-digit", hour12: true });
 }
 
 type DraftSession = { serviceId: string; serviceName: string; dt: string; specialistId: string };
@@ -2570,7 +2704,10 @@ export function Consultations() {
             : null;
 
           const recent = [...inRange]
-            .sort((a, b) => new Date(b.preferredDate).getTime() - new Date(a.preferredDate).getTime())
+            // eventAt folds confirmed/preferred date and the time of day into one instant;
+            // the fallback only matters for a response from an older backend.
+            .sort((a, b) => new Date(b.eventAt ?? b.confirmedDate ?? b.preferredDate).getTime()
+              - new Date(a.eventAt ?? a.confirmedDate ?? a.preferredDate).getTime())
             .slice(0, 60);
 
           return (

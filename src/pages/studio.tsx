@@ -16,7 +16,19 @@ import type { AppCustomization } from "../lib/types";
    one loader, one save path and one "unsaved changes" state. */
 type Draft = AppCustomization;
 
-const EDITABLE = ["appLogo", "homeScreen", "consultationsScreen", "appointmentsScreen", "productsScreen", "profileScreen", "termsOfService", "privacyPolicy"] as const;
+/*
+ * The sections `save` is allowed to send back.
+ *
+ * `membership` was missing, so nothing on the Zen membership card ever
+ * persisted — pick() dropped it before the request, and the editor looked like
+ * it had saved because the draft state kept the value until a reload. The
+ * benefits list had the same problem. Anything editable on a studio screen has
+ * to be listed here or it is silently discarded.
+ */
+const EDITABLE = [
+  "appLogo", "homeScreen", "consultationsScreen", "appointmentsScreen",
+  "productsScreen", "profileScreen", "membership", "termsOfService", "privacyPolicy",
+] as const;
 const pick = (d: Draft): Draft => {
   const out: Record<string, unknown> = {};
   for (const k of EDITABLE) if (d[k] !== undefined) out[k] = d[k];
@@ -529,6 +541,10 @@ export function MembershipCard() {
   const c = useCustomization();
   const setHome = c.section("homeScreen");
   const home = () => ((c.draft?.homeScreen ?? {}) as Record<string, unknown>);
+  // The membership block lives under its own key, so it gets its own accessors
+  // rather than being threaded through homeScreen.
+  const setMem = c.section("membership");
+  const mem = () => ((c.draft?.membership ?? {}) as Record<string, unknown>);
 
   // Member counts are a nicety on this editor, and the endpoint belongs to the
   // Analytics page. Ask only when the account may actually read it, so a
@@ -580,6 +596,52 @@ export function MembershipCard() {
                     </Note>
                   </>
                 )}
+              </Card>
+
+              <Card className="min-w-[280px] flex-1 p-4">
+                {/* Pricing and merchandising. priceInr is what Razorpay charges;
+                    base/sale are the struck-through and offer figures on the card. */}
+                <SecH t="Pricing" em="· the member is charged the price below" />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <In label="Membership name" value={String(mem().name ?? "")} onChange={setMem("name")} />
+                  <In label="Tagline" value={String(mem().tagline ?? "")} onChange={setMem("tagline")} />
+                  <In label="Price charged (₹)" type="number" value={String(mem().priceInr ?? "")}
+                    onChange={(v) => setMem("priceInr")(Number(v) || 0)} />
+                  <In label="Original price (₹, optional)" type="number" value={String(mem().basePriceInr ?? "")}
+                    onChange={(v) => setMem("basePriceInr")(Number(v) || 0)} />
+                  <In label="Offer price shown (₹, optional)" type="number" value={String(mem().salePriceInr ?? "")}
+                    onChange={(v) => setMem("salePriceInr")(Number(v) || 0)} />
+                  <In label="Renewal price (₹, 0 = same)" type="number" value={String(mem().renewalPriceInr ?? "")}
+                    onChange={(v) => setMem("renewalPriceInr")(Number(v) || 0)} />
+                  <In label="Member discount (%)" type="number" value={String(mem().discountPercent ?? "")}
+                    onChange={(v) => setMem("discountPercent")(Number(v) || 0)} />
+                  <In label="Tax (%)" type="number" value={String(mem().taxPercent ?? "")}
+                    onChange={(v) => setMem("taxPercent")(Number(v) || 0)} />
+                  <In label="Validity (months)" type="number" value={String(mem().durationMonths ?? "")}
+                    onChange={(v) => setMem("durationMonths")(Number(v) || 0)} />
+                  <In label="Display order" type="number" value={String(mem().displayOrder ?? "")}
+                    onChange={(v) => setMem("displayOrder")(Number(v) || 0)} />
+                  <In label="CTA text" value={String(mem().ctaText ?? "")} onChange={setMem("ctaText")} />
+                  <In label="CTA destination" value={String(mem().ctaDestination ?? "")} onChange={setMem("ctaDestination")}
+                    hint="An app route, e.g. /profile/membership" />
+                </div>
+                <div className="mt-3 grid gap-3">
+                  <Area label="Description" value={String(mem().description ?? "")} rows={2} onChange={setMem("description")} />
+                  <Area label="Terms" value={String(mem().terms ?? "")} rows={3} onChange={setMem("terms")} />
+                  <div className="flex flex-wrap items-center gap-4">
+                    <label className="flex items-center gap-2 text-[12px] font-semibold text-ink2">
+                      <Toggle on={mem().isActive !== false} onChange={(v) => setMem("isActive")(v)} /> On sale
+                    </label>
+                    <label className="flex items-center gap-2 text-[12px] font-semibold text-ink2">
+                      <Toggle on={!!mem().featured} onChange={(v) => setMem("featured")(v)} /> Featured
+                    </label>
+                  </div>
+                  <Note className="mb-0 text-[11.5px]">
+                    Guests are charged <B>Price charged</B>. The original and offer prices are only what the card
+                    displays — they never change what Razorpay collects. Turning <B>On sale</B> off stops new
+                    purchases without affecting existing members.
+                  </Note>
+                </div>
               </Card>
 
               <Card className="min-w-[280px] flex-1 p-4">
