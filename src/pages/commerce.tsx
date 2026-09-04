@@ -696,7 +696,7 @@ export function Orders() {
   // Retail sales rung up at the clinic counter live in Zenoti; the last tab
   // lists them next to app orders so product history is complete in one place.
   const q = useApi(
-    () => api.orders.list({ status: tab === 0 || tab === CLINIC_TAB ? undefined : tabs[tab], paymentStatus: payFilter || undefined, search: debounced || undefined, page, limit: PAGE }),
+    () => api.orders.list({ status: tab === 0 ? undefined : tabs[tab], paymentStatus: payFilter || undefined, search: debounced || undefined, page, limit: PAGE }),
     [tab, payFilter, debounced, page],
   );
   const stats = useApi(() => api.orders.stats().catch(() => undefined), []);
