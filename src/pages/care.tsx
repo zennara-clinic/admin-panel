@@ -6,7 +6,6 @@ import {
 } from "../ui";
 import { useStore } from "../store";
 import api from "../lib/api";
-import { ZenotiList } from "./zenoti";
 import { AssignPackageModal, PatientPickerModal } from "./reception";
 import { useApi, useDebounced } from "../lib/useApi";
 import { useQueryNumber, useQueryPage, useQueryString } from "../lib/useListState";
@@ -823,7 +822,10 @@ export function Packages() {
   const assignments = useApi(() => api.packageAssignments.stats().catch(() => undefined), []);
   const list = q.data ?? [];
 
-  const tabs: [string, number?][] = [["Catalogue", list.length], ["Assignments"], ["Zennara clinic packages"]];
+  // Two tabs: the catalogue (every package, including those mirrored from
+  // Zenoti — one list, not two) and the assignments. Packages a customer bought
+  // at the clinic are part of that customer's record, not a third list here.
+  const tabs: [string, number?][] = [["Catalogue", list.length], ["Assignments"]];
   if (tab === 1) {
     return (
       <Page title="Packages" sub="Packages assigned to patients — sessions, payment and cancellation"
@@ -834,15 +836,6 @@ export function Packages() {
       </Page>
     );
   }
-  if (tab === 2) {
-    return (
-      <Page title="Packages" sub="Packages customers bought at the clinic (Zenoti) — synced automatically, per customer">
-        <Tabs active={tab} onChange={setTab} items={tabs} />
-        <ZenotiList kind="packages" embedded />
-      </Page>
-    );
-  }
-
   return (
     <Page title="Packages" sub="Bundles of services and consultations, assignable to any patient"
       actions={<>
