@@ -413,24 +413,34 @@ function SyncHealth() {
         </div>
         <div className="flex gap-2">
           <Btn kind="ghost" className="!px-2.5 !py-1 !text-[11.5px]" onClick={() => setNonce((n) => n + 1)}>Refresh</Btn>
-          {can("zenoti.manage") && (
-            <Btn kind="ghost" className="!px-2.5 !py-1 !text-[11.5px]" disabled={busy} onClick={async () => {
-              setBusy(true);
-              try { await api.zenoti.syncCatalog(); toast("Services & packages mirrored from Zenoti"); setNonce((n) => n + 1); }
-              catch (e) { toast((e as Error).message); } finally { setBusy(false); }
-            }}>{busy ? "Syncing…" : "Sync services & packages now"}</Btn>
-          )}
+          {busy && <span className="text-[11.5px] text-ink3">Syncing…</span>}
         </div>
       </div>
       <div className="grid gap-3 md:grid-cols-2">
         <div className="text-[12px]">
           <div className="mb-1 font-bold text-ink2">Zenoti → Zennara</div>
-          {h.inbound.map((m) => (
-            <div key={m.type} className="flex flex-wrap items-center justify-between gap-2 border-b border-border py-1 last:border-0">
-              <span>{m.label} <span className="text-ink3">· {m.every}</span></span>
-              <span className="flex items-center gap-2">{tag(m.last)}{m.last?.startedAt && <span className="text-ink3">{fmtAgo(m.last.startedAt)}</span>}</span>
-            </div>
-          ))}
+          {h.inbound.map((m) => {
+            const run = ({
+              products: api.zenoti.syncProducts, catalog: api.zenoti.syncCatalog,
+              centers: api.zenoti.syncCenters, categories: api.zenoti.syncCategories,
+              appointments: api.zenoti.syncAppointments, details: () => api.zenoti.crawl(),
+            } as Record<string, (() => Promise<unknown>) | undefined>)[m.type];
+            return (
+              <div key={m.type} className="flex flex-wrap items-center justify-between gap-2 border-b border-border py-1 last:border-0">
+                <span>{m.label} <span className="text-ink3">· {m.every}</span></span>
+                <span className="flex items-center gap-2">
+                  {tag(m.last)}{m.last?.startedAt && <span className="text-ink3">{fmtAgo(m.last.startedAt)}</span>}
+                  {run && can("zenoti.manage") && (
+                    <button className="text-[11px] underline-offset-2 hover:underline" disabled={busy} onClick={async () => {
+                      setBusy(true);
+                      try { await run(); toast(`${m.label.split(" (")[0]} — synced`); setNonce((n) => n + 1); }
+                      catch (e) { toast((e as Error).message); } finally { setBusy(false); }
+                    }}>Sync now</button>
+                  )}
+                </span>
+              </div>
+            );
+          })}
         </div>
         <div className="text-[12px]">
           <div className="mb-1 font-bold text-ink2">Zennara → Zenoti (waiting)</div>

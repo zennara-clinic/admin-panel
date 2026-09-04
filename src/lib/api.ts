@@ -949,6 +949,12 @@ export type ReportingPractitioner = {
 };
 
 export const zenoti = {
+  /** Mirror Zenoti products (attributes only; stock is not in the feed). */
+  syncProducts: () => request<Record<string, unknown>>("/admin/zenoti/products/sync", { method: "POST" }),
+  /** Mirror the clinics' address, phone, email and map pin from Zenoti. */
+  syncCenters: () => request<Record<string, unknown>>("/admin/zenoti/centers/sync", { method: "POST" }),
+  /** Mirror Zenoti's category list (linked by id; new ones arrive hidden). */
+  syncCategories: () => request<Record<string, unknown>>("/admin/zenoti/categories/sync", { method: "POST" }),
   /** Mirror Zenoti services + packages now (read-only against Zenoti). */
   syncCatalog: () => request<Record<string, unknown>>("/admin/zenoti/catalog/sync", { method: "POST" }),
   /** Last run of every inbound mirror + the outbound backlog. */
