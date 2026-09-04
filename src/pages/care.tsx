@@ -1360,22 +1360,6 @@ export function Doctors() {
         ? `${list.length} practitioner${list.length === 1 ? "" : "s"} · ${tierList.map((t) => `${t.title} ${fmtINR(t.fee)}`).join(" · ")}`
         : "The dermatology team the app shows"}
       actions={<>
-      {notOnboarded.length > 0 && (
-        <Card className="mb-3 p-4">
-          <div className="mb-1 text-[12px] font-bold text-ink2">In Zenoti, not yet in the app ({notOnboarded.length})</div>
-          <div className="mb-2 text-[11.5px] text-ink3">Doctors on the clinic's Zenoti roster with no dermatologist profile here. Their clinic visits are mirrored, but they cannot be booked in the app or sign in to the doctor panel until onboarded.</div>
-          <div className="flex flex-wrap gap-2">
-            {notOnboarded.map((p) => (
-              <div key={p.filterValue} className="flex items-center gap-2 rounded-lg bg-ivory px-3 py-2 text-[12px]">
-                <B>{p.name}</B><span className="text-ink3">{p.centers.join(" / ")}</span>
-                {can("dermatologists.manage") && p.zenotiEmployeeId && (
-                  <Btn kind="ghost" disabled={onboarding === p.zenotiEmployeeId} onClick={() => onboard(p.zenotiEmployeeId!, p.name)}>{onboarding === p.zenotiEmployeeId ? "Adding…" : "Add to app"}</Btn>
-                )}
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
         {can("dermatologists.manage") && tierList.length > 0 && <TierEditor tiers={tierList} onSaved={reloadAll} />}
         {can("dermatologists.manage") && <Btn onClick={() => setAddOpen(true)}>+ Add dermatologist</Btn>}
       </>}>
