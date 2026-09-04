@@ -949,6 +949,15 @@ export type ReportingPractitioner = {
 };
 
 export const zenoti = {
+  /** Mirror Zenoti services + packages now (read-only against Zenoti). */
+  syncCatalog: () => request<Record<string, unknown>>("/admin/zenoti/catalog/sync", { method: "POST" }),
+  /** Last run of every inbound mirror + the outbound backlog. */
+  syncHealth: () => request<{
+    checkedAt: string; writeMode: string; lifecycleWriteback: boolean;
+    breaker?: Record<string, unknown>;
+    inbound: { type: string; label: string; every: string; last: null | { status: string; startedAt: string; finishedAt?: string | null; created?: number; updated?: number; failed?: number; error?: string | null } }[];
+    outbound: Record<string, number | string>;
+  }>("/admin/zenoti/sync-health"),
   /** Legacy by-phone/email lookup of a live Zenoti record. */
   overview: (q: { phone?: string; email?: string; guestId?: string }) =>
     request<ZenotiOverview>("/admin/zenoti/overview", { query: q }),

@@ -385,6 +385,70 @@ function PublishHours() {
   );
 }
 
+/** Is everything flowing, both ways? Shown at the top of the Zenoti page. */
+function SyncHealth() {
+  const { toast, can } = useStore();
+  const [nonce, setNonce] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const q = useApi(() => api.zenoti.syncHealth().catch(() => null), [nonce]);
+  const h = q.data;
+  if (!h) return null;
+  const tag = (l: { status: string; failed?: number } | null) =>
+    !l ? <Tag kind="mute">never run</Tag>
+      : l.status === "running" ? <Tag kind="info">running</Tag>
+      : l.status === "failed" ? <Tag kind="err">failed</Tag>
+      : (l.failed ?? 0) > 0 ? <Tag kind="warn">done · {l.failed} failed</Tag>
+      : <Tag kind="ok">ok</Tag>;
+  const out = h.outbound as Record<string, number | string>;
+  const row = (label: string, n: number | string, bad = false) => (
+    <div key={label} className="flex justify-between border-b border-border py-1 last:border-0">
+      <span className="text-ink3">{label}</span><b className={bad && Number(n) > 0 ? "text-err" : ""}>{n}</b>
+    </div>
+  );
+  return (
+    <Card className="mb-3 p-4">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="text-[12px] font-bold text-ink2">
+          Sync health <span className="font-normal text-ink3">(checked {fmtAgo(h.checkedAt)}) · write mode <b>{h.writeMode}</b></span>
+        </div>
+        <div className="flex gap-2">
+          <Btn kind="ghost" className="!px-2.5 !py-1 !text-[11.5px]" onClick={() => setNonce((n) => n + 1)}>Refresh</Btn>
+          {can("zenoti.manage") && (
+            <Btn kind="ghost" className="!px-2.5 !py-1 !text-[11.5px]" disabled={busy} onClick={async () => {
+              setBusy(true);
+              try { await api.zenoti.syncCatalog(); toast("Services & packages mirrored from Zenoti"); setNonce((n) => n + 1); }
+              catch (e) { toast((e as Error).message); } finally { setBusy(false); }
+            }}>{busy ? "Syncing…" : "Sync services & packages now"}</Btn>
+          )}
+        </div>
+      </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="text-[12px]">
+          <div className="mb-1 font-bold text-ink2">Zenoti → Zennara</div>
+          {h.inbound.map((m) => (
+            <div key={m.type} className="flex flex-wrap items-center justify-between gap-2 border-b border-border py-1 last:border-0">
+              <span>{m.label} <span className="text-ink3">· {m.every}</span></span>
+              <span className="flex items-center gap-2">{tag(m.last)}{m.last?.startedAt && <span className="text-ink3">{fmtAgo(m.last.startedAt)}</span>}</span>
+            </div>
+          ))}
+        </div>
+        <div className="text-[12px]">
+          <div className="mb-1 font-bold text-ink2">Zennara → Zenoti (waiting)</div>
+          {row("Confirmed bookings not yet in Zenoti", out.bookingsAwaitingPush, true)}
+          {row("Bookings whose push failed", out.bookingsFailed, true)}
+          {row("Bookings needing a person (half-created)", out.bookingsNeedingAPerson, true)}
+          {row("Patients pending sync", out.patientsPendingSync)}
+          {row("Patients sync failed", out.patientsSyncFailed, true)}
+          {row("Patients needing review", out.patientsNeedingReview, true)}
+          {row("Package sales pending", out.packageSalesPending)}
+          {row("Prescription notes failed", out.prescriptionNotesFailed, true)}
+          <div className="mt-1 text-[11px] text-ink3">{String(out.retry ?? "")}</div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 function ReadinessCard() {
   const q = useApi(() => api.zenoti.readiness().catch(() => null), []);
   const r = q.data;
@@ -461,6 +525,7 @@ export function ClinicData() {
         </Btn>
       </> : undefined}>
       {s && !s.configured && <Note kind="crit">Zenoti is not configured on the server (ZENOTI_API_KEY). Nothing will sync until it is.</Note>}
+      <SyncHealth />
       <ReadinessCard />
       {s?.writeBreaker?.tripped && (
         <Note kind="crit">
