@@ -579,8 +579,10 @@ export function ClinicData() {
           )}
         </Card>
       )}
-      <Tabs active={tab} onChange={setTab} items={[["Packages"], ["Appointments"], ["Memberships"], ["Purchases"], ["Notes"], ["Forms"]]} />
-      <ZenotiList key={kinds[tab]} kind={kinds[tab]} />
+      <Note className="mb-0 text-[11.5px]">
+        Packages, appointments, purchases and memberships from Zenoti are no longer listed here — they are the same
+        records as everything else: see Packages → Assignments, Bookings, Orders and each patient&rsquo;s profile.
+      </Note>
     </Page>
   );
 }
