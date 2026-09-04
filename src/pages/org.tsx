@@ -976,21 +976,11 @@ const Row = ({ k, v }: { k: string; v: string }) => (
 type StaffRow = Admin & {
   canSignIn?: boolean;
   isVerified?: boolean;
-  /** How the server lets this account in: an emailed code, or a password. */
-  loginMethod?: "otp" | "password";
-  hasPassword?: boolean;
+  /** Every account signs in with an emailed one-time code. */
+  loginMethod?: "otp";
   onAllowList?: boolean;
 };
 
-/**
- * Which accounts have a password at all.
- *
- * The admin panel is email + emailed code only, so super admins and granular
- * staff never get one. Dermatologists and therapists sign into their own panels
- * with email + password. The server enforces the same split — setting a
- * password on an admin-panel account is refused there too.
- */
-const usesPassword = (role: AdminRole) => role === "doctor" || role === "therapist";
 
 export function Roles() {
   const { can } = useStore();
@@ -1022,7 +1012,6 @@ function StaffTab({ roles }: { roles: Role[] }) {
   const [invOpen, setInvOpen] = useState(false);
   const [sel, setSel] = useState<StaffRow | null>(null);
   const [del, setDel] = useState<StaffRow | null>(null);
-  const [pwFor, setPwFor] = useState<StaffRow | null>(null);
   const [search, setSearch] = useState("");
   const debounced = useDebounced(search);
 
@@ -1105,17 +1094,8 @@ function StaffTab({ roles }: { roles: Role[] }) {
               {sel.lastLogin ? `Last signed in ${fmtDateFull(sel.lastLogin)}` : "Has never signed in"}
             </div>
 
-            {sel.canSignIn === false && (
-              <Note kind="crit" className="my-0">
-                <B>{sel.email}</B> has no password yet, so they cannot sign into the{" "}
-                {sel.role === "doctor" ? "dermatologist" : "floor"} panel. Set one from the{" "}
-                {sel.role === "doctor" ? "Dermatologists" : "Therapists"} page.
-              </Note>
-            )}
             <Note className="my-0 text-[11.5px]">
-              {usesPassword(sel.role)
-                ? <>Signs into the {sel.role === "doctor" ? "dermatologist" : "floor"} panel with <B>{sel.email}</B> and a password.</>
-                : <>Signs into the admin panel with <B>{sel.email}</B> and a 6-digit code emailed at sign-in — admin panel accounts have no password.</>}
+              Signs into the {sel.role === "doctor" ? "dermatologist" : sel.role === "therapist" ? "therapist" : "admin"} panel with <B>{sel.email}</B> and a 6-digit code emailed at sign-in — no account has a password.
             </Note>
 
             {canManageStaff ? (
@@ -1173,12 +1153,6 @@ function StaffTab({ roles }: { roles: Role[] }) {
                   } catch (e) { toast((e as Error).message); }
                 }}>Save changes</Btn>
 
-                {usesPassword(sel.role) && (
-                  can(sel.role === "therapist" ? ["staff.password", "therapists.password"] : ["staff.password", "dermatologists.password"])
-                    ? <Btn kind="ghost" onClick={() => setPwFor(sel)}>Set / reset password</Btn>
-                    : <Note className="my-0 text-[11.5px]">Setting their password is a separate permission your role does not hold.</Note>
-                )}
-
                 {sel._id !== admin?._id && (
                   <>
                     <Btn kind="ghost" onClick={async () => {
@@ -1208,8 +1182,6 @@ function StaffTab({ roles }: { roles: Role[] }) {
         <AddStaffForm roles={roles} groups={catalog.data ?? []} onDone={() => { setInvOpen(false); q.reload(); }} />
       </Modal>
 
-      <StaffPasswordModal staff={pwFor} onClose={() => setPwFor(null)} onSaved={() => { setPwFor(null); q.reload(); }} />
-
       <DeleteModal open={!!del} onClose={() => setDel(null)} what={del ? `staff account "${del.email}"` : ""}
         onConfirm={async (reason) => {
           if (!del) return;
@@ -1223,42 +1195,6 @@ function StaffTab({ roles }: { roles: Role[] }) {
   );
 }
 
-/**
- * Set / reset the password for a clinical account. Only dermatologists and
- * therapists have one — the admin panel signs in with an emailed code.
- */
-function StaffPasswordModal({ staff, onClose, onSaved }: { staff: StaffRow | null; onClose: () => void; onSaved: () => void }) {
-  const { toast, audit } = useStore();
-  const [pw, setPw] = useState("");
-  const [pw2, setPw2] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  if (!staff) return null;
-  return (
-    <Modal open onClose={onClose} title={`${staff.hasPassword ? "Reset" : "Set"} password — ${staff.name || staff.email}`}>
-      <Note>
-        They sign in at the {staff.role === "doctor" ? "dermatologist" : "floor"} panel with <B>{staff.email}</B> and
-        this password — we email them the details. At least 8 characters.
-      </Note>
-      <div className="mt-3 grid gap-2.5">
-        <In label="New password" type="password" value={pw} onChange={setPw} />
-        <In label="Confirm" type="password" value={pw2} onChange={setPw2} />
-        {err && <Note kind="crit" className="mb-0">{err}</Note>}
-      </div>
-      <div className="mt-4 flex justify-end gap-2">
-        <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn disabled={busy || pw.length < 8 || pw !== pw2} onClick={async () => {
-          setBusy(true); setErr(null);
-          try {
-            await api.staff.setPassword(staff._id, pw);
-            audit("SETTINGS_UPDATED", `${staff.email} · staff password ${staff.hasPassword ? "reset" : "set"}`, { staffId: staff._id });
-            toast("Password saved"); onSaved();
-          } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
-        }}>{busy ? "Saving…" : "Save password"}</Btn>
-      </div>
-    </Modal>
-  );
-}
 
 /**
  * Add an admin-panel staff account — the only kind this screen creates.
@@ -1270,7 +1206,7 @@ function StaffPasswordModal({ staff, onClose, onSaved }: { staff: StaffRow | nul
  *   · Dermatologists are created on the Dermatologists page, alongside the
  *     clinical profile the login belongs to.
  *   · Therapists are created on the Therapists page, with their centres.
- * Those two also get a password there; a staff account never has one.
+ * Every account signs in with an emailed code; none has a password.
  */
 function AddStaffForm({ roles, groups, onDone }: { roles: Role[]; groups: PermissionGroup[]; onDone: () => void }) {
   const { toast, audit } = useStore();

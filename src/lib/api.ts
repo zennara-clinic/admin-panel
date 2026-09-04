@@ -28,17 +28,14 @@ export const auth = {
     requestRaw("/admin/auth/login", { method: "POST", body: { email }, anonymous: true }),
   resendOtp: (email: string) =>
     requestRaw("/admin/auth/resend-otp", { method: "POST", body: { email }, anonymous: true }),
-  /** Password sign-in for staff who were given one (dermatologists, therapists). */
-  loginPassword: (email: string, password: string) =>
-    request<{ token: string; admin: Admin; expiresAt: string }>("/admin/auth/login-password", {
-      method: "POST", body: { email, password }, anonymous: true,
-    }),
   verifyOtp: (email: string, otp: string) =>
     request<{ token: string; admin: Admin; expiresAt: string }>("/admin/auth/verify-otp", {
       method: "POST", body: { email, otp }, anonymous: true,
     }),
   me: () => request<Admin>("/admin/auth/me"),
   logout: () => requestRaw("/admin/auth/logout", { method: "POST" }),
+  /** End every session for this account, on every device. */
+  logoutEverywhere: () => requestRaw("/admin/auth/me/logout-all", { method: "POST" }),
   /** Remember that this account finished a walkthrough. */
   markTourSeen: (key: string) =>
     requestRaw("/admin/auth/me/tours", { method: "PUT", body: { key } }),
@@ -277,13 +274,7 @@ export type DoctorStats = {
   recent: { _id: string; guest: string; userId?: string; service?: string | null; kind: "consultation" | "treatment"; date: string; time: string; status: string; amount: number; paymentStatus?: string; rating?: number | null; source?: string }[];
   feedback: { guest: string; rating: number; feedback: string; date: string }[];
 };
-export type DoctorAccount = { _id: Id; email: string; phone?: string | null; role: string; isActive: boolean; lastLogin?: string | null; hasPassword: boolean; canRevealPassword?: boolean; passwordSetAt?: string | null; placeholderEmail: boolean };
-/**
- * Audited password lookup. `password` is null both when none is set and when
- * the one on file predates the readable copy — `canReveal` tells the two apart
- * so the panel can say which it is.
- */
-export type RevealedPassword = { hasPassword: boolean; canReveal?: boolean; password: string | null; passwordSetAt?: string | null };
+export type DoctorAccount = { _id: Id; email: string; phone?: string | null; role: string; isActive: boolean; lastLogin?: string | null; loginMethod: 'otp'; placeholderEmail: boolean };
 
 export const doctors = {
   list: (q?: Query) => requestRaw<Doctor[]>("/doctors", { query: q }),
@@ -295,9 +286,6 @@ export const doctors = {
   stats: (id: string, q?: Query) => request<DoctorStats>(`/doctors/${id}/stats`, { query: q }),
   /** Panel login behind the profile (admin only). */
   account: (id: string) => request<DoctorAccount | null>(`/doctors/${id}/account`),
-  setPassword: (id: string, password: string) => request<unknown>(`/doctors/${id}/account/password`, { method: "PUT", body: { password } }),
-  /** Current password, plaintext (super admins only; audited). Null = set before reveal existed — reset to see it. */
-  revealPassword: (id: string) => request<RevealedPassword>(`/doctors/${id}/account/password`),
   remove: (id: string) => requestRaw(`/doctors/${id}`, { method: "DELETE" }),
   toggle: (id: string) => request<Doctor>(`/doctors/${id}/toggle-status`, { method: "PATCH" }),
   /** The Doctor profile behind the signed-in staff login (role doctor). */
@@ -840,15 +828,9 @@ export const audit = {
 export const staff = {
   list: (q?: Query) => requestRaw<Admin[]>("/admin/staff", { query: q }),
   roles: () => request<{ id: string; label: string; description?: string }[]>("/admin/staff/roles"),
-  /** `password` sets the login in the same request — the server emails the credentials. */
-  create: (body: { email: string; name?: string; role: string; doctorId?: Id | null; phone?: string | null; branchId?: Id | null; branchIds?: Id[]; password?: string; customRoleId?: Id | null; permissions?: PermissionKey[] }) =>
+  create: (body: { email: string; name?: string; role: string; doctorId?: Id | null; phone?: string | null; branchId?: Id | null; branchIds?: Id[]; customRoleId?: Id | null; permissions?: PermissionKey[] }) =>
     requestRaw<Admin>("/admin/staff", { method: "POST", body }),
   update: (id: Id, body: Partial<Admin>) => request<Admin>(`/admin/staff/${id}`, { method: "PUT", body }),
-  /** Set / reset a staff password — the new details are emailed to them. */
-  setPassword: (id: Id, password: string) =>
-    requestRaw(`/admin/staff/${id}/password`, { method: "PUT", body: { password } }),
-  /** Current password, plaintext (super admins only; audited). Null = set before reveal existed — reset to see it. */
-  revealPassword: (id: Id) => request<RevealedPassword>(`/admin/staff/${id}/password`),
   toggle: (id: Id) => request<Admin>(`/admin/staff/${id}/toggle-status`, { method: "PATCH" }),
   remove: (id: Id) => requestRaw(`/admin/staff/${id}`, { method: "DELETE" }),
 };

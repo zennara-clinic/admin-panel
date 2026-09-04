@@ -1694,15 +1694,9 @@ export function DermatologistDetail() {
   const { toast, audit, can, branches, admin } = useStore();
   const [range, setRange] = useState("Last 90 days");
   const [editOpen, setEditOpen] = useState(false);
-  const [pwOpen, setPwOpen] = useState(false);
-  const [pw, setPw] = useState("");
-  const [pw2, setPw2] = useState("");
   const [acctEmail, setAcctEmail] = useState("");
   const [acctPhone, setAcctPhone] = useState("");
   const [busy, setBusy] = useState(false);
-  // undefined = hidden; null = set before passwords could be shown; string = the password.
-  const [shownPw, setShownPw] = useState<string | null | undefined>(undefined);
-  const [pwLookupBusy, setPwLookupBusy] = useState(false);
 
   const win = useMemo(() => {
     const e = new Date(); const s = new Date();
@@ -1815,60 +1809,12 @@ export function DermatologistDetail() {
 
               {can("dermatologists.manage") && (
                 <Card className="p-4">
-                  <SecH t="Panel login" right={account.data ? (
-                    <Tag kind={!account.data.hasPassword ? "warn" : account.data.canRevealPassword === false ? "info" : "ok"}>
-                      {!account.data.hasPassword
-                        ? "no password — cannot sign in"
-                        : account.data.canRevealPassword === false ? "password set · cannot be shown" : "password set"}
-                    </Tag>
-                  ) : undefined} />
-                  <Note className="mt-0">The clinic can set or change the login email, phone and password here at any time; the dermatologist can also change their own from My profile in their panel. Sign-in is password-only for dermatologists.</Note>
+                  <SecH t="Panel login" right={account.data ? <Tag kind="ok">signs in with an emailed code</Tag> : undefined} />
+                  <Note className="mt-0">Dermatologists sign in to their panel with a 6-digit code emailed to the login address below — there is no password to set or reset. Changing the address changes where the code goes.</Note>
                   <div className="grid gap-2">
                     <In label="Login email" type="email" value={acctEmail} onChange={setAcctEmail} hint={account.data?.placeholderEmail ? "Placeholder — replace with their real address" : undefined} />
                     <In label="Phone" value={acctPhone} onChange={setAcctPhone} placeholder="10-digit mobile" />
                     <Btn kind="ghost" disabled={busy} onClick={saveAccount}>Save login details</Btn>
-                    {/* Setting and viewing a password is its own sensitive
-                        permission, so a role that manages dermatologists can
-                        still be kept away from their credentials. */}
-                    {!can("dermatologists.password") && (
-                      <Note className="my-0 text-[11.5px]">Your role can edit these details but not their password. Ask someone with the “set / view dermatologist passwords” permission.</Note>
-                    )}
-                    {can("dermatologists.password") && (
-                      <Btn kind="gold" onClick={() => { setPw(""); setPw2(""); setPwOpen(true); }}>{account.data?.hasPassword ? "Reset password" : "Set password"}</Btn>
-                    )}
-                    {can("dermatologists.password") && account.data?.hasPassword && account.data.canRevealPassword === false && (
-                      <Note className="my-0 text-[11.5px]">
-                        This password was set before the panel kept a readable copy, so it cannot be shown — only a
-                        bcrypt hash is stored and that cannot be turned back into the password. Reset it to set a new
-                        one you can see, or it becomes viewable here by itself the next time they sign in with it.
-                      </Note>
-                    )}
-                    {can("dermatologists.password") && account.data?.hasPassword && account.data.canRevealPassword !== false && shownPw === undefined && (
-                      <Btn kind="ghost" disabled={pwLookupBusy} onClick={async () => {
-                        setPwLookupBusy(true);
-                        try {
-                          const r = await api.doctors.revealPassword(doc._id);
-                          audit("DOCTOR_UPDATED", `${doc.name} · password viewed`, { doctorId: doc._id });
-                          setShownPw(r.password);
-                        } catch (e) { toast((e as Error).message); } finally { setPwLookupBusy(false); }
-                      }}>{pwLookupBusy ? "Looking up…" : "Show current password"}</Btn>
-                    )}
-                    {can("dermatologists.password") && account.data?.hasPassword && shownPw !== undefined && (
-                      <div className="rounded-xl border border-border bg-ivory px-3.5 py-2.5">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="text-[10.5px] font-bold uppercase tracking-wider text-ink3">Current password</div>
-                            {shownPw
-                              ? <code className="block truncate font-mono text-[13px] font-bold">{shownPw}</code>
-                              : <div className="text-[12px] text-ink2">Set before passwords could be shown — reset it to see it here.</div>}
-                          </div>
-                          <div className="flex shrink-0 gap-1.5">
-                            {shownPw && <Btn kind="ghost" onClick={() => { void navigator.clipboard.writeText(shownPw); toast("Password copied"); }}>Copy</Btn>}
-                            <Btn kind="ghost" onClick={() => setShownPw(undefined)}>Hide</Btn>
-                          </div>
-                        </div>
-                      </div>
-                    )}
                     {account.data?.lastLogin && <div className="text-[11px] text-ink3">Last signed in {fmtAgo(account.data.lastLogin)}</div>}
                   </div>
                 </Card>
@@ -1879,21 +1825,6 @@ export function DermatologistDetail() {
           <DoctorEditor open={editOpen} doctor={doc} tiers={tierList} branchNames={branches.map((b) => b.name)}
             onClose={() => setEditOpen(false)} onSaved={() => { setEditOpen(false); q.reload(); }} onDelete={() => undefined} />
 
-          <Modal open={pwOpen} onClose={() => setPwOpen(false)} title={`Set password — ${doc.name}`}>
-            <Note>They sign in at the Dermatologist panel with <B>{acctEmail || account.data?.email}</B> and this password — it is their only way in (no emailed codes). The new details are emailed to them automatically when you save.</Note>
-            <div className="mt-3 grid gap-2">
-              <In label="New password" type="password" value={pw} onChange={setPw} hint="At least 8 characters" />
-              <In label="Confirm" type="password" value={pw2} onChange={setPw2} />
-            </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <Btn kind="ghost" onClick={() => setPwOpen(false)}>Cancel</Btn>
-              <Btn disabled={busy || pw.length < 8 || pw !== pw2} onClick={async () => {
-                setBusy(true);
-                try { await api.doctors.setPassword(doc._id, pw); audit("DOCTOR_UPDATED", `${doc.name} · password set`, { doctorId: doc._id }); toast("Password set"); setPwOpen(false); setShownPw(undefined); account.reload(); }
-                catch (e) { toast((e as Error).message); } finally { setBusy(false); }
-              }}>Save password</Btn>
-            </div>
-          </Modal>
         </Page>
       )}
     </Async>
@@ -1940,9 +1871,6 @@ function DoctorEditor({ open, doctor, tiers, branchNames, onClose, onSaved, onDe
   const [f, setF] = useState<Partial<Doctor>>({});
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // Panel login password — creation only; afterwards it lives on the detail page.
-  const [pw, setPw] = useState("");
-  const [pw2, setPw2] = useState("");
 
   useEffect(() => {
     if (!open) return;
@@ -1953,7 +1881,6 @@ function DoctorEditor({ open, doctor, tiers, branchNames, onClose, onSaved, onDe
       experienceYears: 0, fee: 0, isActive: true, photo: "", email: "", phone: "", branch: "", displayOrder: 0,
     });
     setErr(null);
-    setPw(""); setPw2("");
   }, [open, doctor?._id]);
 
   const uploadPhoto = (file: File) => api.media.upload([file]).then((r) => r?.[0]?.url ?? "");
@@ -1965,15 +1892,10 @@ function DoctorEditor({ open, doctor, tiers, branchNames, onClose, onSaved, onDe
     if (!f.tier) return setErr("Pick a consultation tier");
     if (!(f.availableCentres ?? []).length) return setErr("Assign at least one centre — a dermatologist with no centre cannot be booked");
     // Creating a dermatologist creates their login in the same save — name,
-    // email, phone and password are all required, and the credentials are
-    // emailed to them by the server.
     if (!doctor) {
       const email = f.email?.trim() ?? "";
       if (!/^\S+@\S+\.\S+$/.test(email)) return setErr("A valid work email is required — it becomes their sign-in address");
       if (!f.phone?.trim()) return setErr("A contact phone number is required");
-      if (!pw) return setErr("Set a panel password — it is emailed to them on save");
-      if (pw.length < 8) return setErr("The panel password must be at least 8 characters");
-      if (pw !== pw2) return setErr("The panel passwords don't match");
     }
 
     setBusy(true);
@@ -1993,8 +1915,7 @@ function DoctorEditor({ open, doctor, tiers, branchNames, onClose, onSaved, onDe
         toast("Dermatologist updated — the app reflects it immediately");
       } else {
         // One request: profile + login + credentials email, so the account
-        // exists and the dermatologist knows their password the moment we save.
-        const res = await api.doctors.create({ ...body, password: pw });
+        const res = await api.doctors.create({ ...body });
         const created = res.data as Doctor;
         audit("DOCTOR_CREATED", `${created.name} · ${(created.availableCentres ?? []).join(", ")}`, { doctorId: created.doctorId });
         toast((res.message as string) ?? `${created.name} added`);
@@ -2012,15 +1933,8 @@ function DoctorEditor({ open, doctor, tiers, branchNames, onClose, onSaved, onDe
         {f.photo && <img src={f.photo} alt="" className="h-24 w-24 rounded-full border border-border object-cover" />}
 
         <In label="Work email" value={f.email ?? ""} onChange={set("email")} placeholder="doctor@zennara.in"
-          hint="Their sign-in address for the Dermatologist panel — dermatologists sign in with email + password (no emailed codes)" />
+          hint="Their sign-in address — a 6-digit code is emailed here each time they sign in" />
         <In label="Phone (staff only — never shown in the app)" value={f.phone ?? ""} onChange={set("phone")} />
-        {!doctor && (
-          <div className="grid grid-cols-2 gap-2">
-            <In label="Panel password" type="password" value={pw} onChange={setPw}
-              hint="Required, at least 8 characters — emailed to them the moment you save." />
-            <In label="Confirm password" type="password" value={pw2} onChange={setPw2} />
-          </div>
-        )}
 
         {tiers.length === 0 && <Note kind="crit">No consultation tiers exist yet — set them up under Standard pricing before adding dermatologists.</Note>}
         <Sel label="Consultation tier"
@@ -2101,9 +2015,9 @@ function DoctorEditor({ open, doctor, tiers, branchNames, onClose, onSaved, onDe
 /**
  * Floor-staff accounts — the people who run treatment sessions on the tablet.
  *
- * Mirrors the dermatologist onboarding: name, email, phone and password are
+ * Mirrors the dermatologist onboarding: name, email and phone are
  * all required at creation, the credentials are emailed by the server, and
- * sign-in is password-only. The assigned centre pins their panel's floor to
+ * The assigned centre pins their panel's floor to
  * that centre.
  */
 export function Therapists() {
@@ -2113,11 +2027,6 @@ export function Therapists() {
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<Admin | null>(null);
-  const [pwFor, setPwFor] = useState<Admin | null>(null);
-  const [pw, setPw] = useState("");
-  const [pw2, setPw2] = useState("");
-  const [pwBusy, setPwBusy] = useState(false);
-  const [pwErr, setPwErr] = useState<string | null>(null);
   const [toDelete, setToDelete] = useState<Admin | null>(null);
 
   const centreNames = (a: Admin) => {
@@ -2128,47 +2037,35 @@ export function Therapists() {
 
   const open = (a: Admin | null) => { setEditing(a); setEditorOpen(true); };
 
-  const savePassword = async () => {
-    if (!pwFor) return;
-    if (pw.length < 8) { setPwErr("The password must be at least 8 characters"); return; }
-    if (pw !== pw2) { setPwErr("The passwords don't match"); return; }
-    setPwBusy(true); setPwErr(null);
-    try {
-      const res = await api.staff.setPassword(pwFor._id, pw);
-      audit("SETTINGS_UPDATED", `${pwFor.name} · therapist password ${pwFor.hasPassword ? "reset" : "set"}`, { staffId: pwFor._id });
-      toast((res.message as string) ?? "Password set");
-      setPwFor(null); setEditorOpen(false); q.reload();
-    } catch (e) { setPwErr((e as Error).message); } finally { setPwBusy(false); }
-  };
+
 
   return (
     <Page title="Therapists" sub={`${list.length} floor staff · they run sessions on the Therapist panel`}
       actions={can("therapists.manage") ? <Btn onClick={() => open(null)}>+ Add therapist</Btn> : undefined}>
       <Hint id="therapists-how">
-        A therapist signs in to the Therapist panel with email + password only — no emailed codes. Creating one
-        here emails them their login details; the assigned centre pins their floor to that centre. Sessions,
-        stock use and service cards are written from their tablet.
+        A therapist signs in to the Therapist panel with a 6-digit code emailed to their work address each time —
+        there is no password. The assigned centre pins their floor to that centre. Sessions, stock use and
+        service cards are written from their tablet.
       </Hint>
 
       <Async q={q} label="Loading therapists…" rows={5}>
         {() => list.length === 0 ? (
           <Empty title="No therapists yet"
-            hint="Add one — they'll get their login by email and can run sessions the moment a centre is assigned."
+            hint="Add one — they sign in with a code emailed to them and can run sessions the moment a centre is assigned."
             action={can("therapists.manage") ? <Btn onClick={() => open(null)}>+ Add therapist</Btn> : undefined} />
         ) : (
           <>
-            <DataTable cols={["Name", "Email", "Phone", "Centres", "Password", "Last sign-in", "Status"]}
+            <DataTable cols={["Name", "Email", "Phone", "Centres", "Last sign-in", "Status"]}
               onRow={can("therapists.manage") ? (i) => open(list[i]) : undefined}
               rows={list.map((a) => [
                 <B key={a._id}>{a.name}</B>,
                 a.email,
                 a.phone || "—",
                 centreNames(a),
-                a.hasPassword ? <Tag key={`${a._id}p`} kind="ok">set</Tag> : <Tag key={`${a._id}p`} kind="warn">none — cannot sign in</Tag>,
                 a.lastLogin ? fmtAgo(a.lastLogin) : "never",
                 a.isActive ? <Tag key={`${a._id}s`} kind="ok">active</Tag> : <Tag key={`${a._id}s`} kind="mute">inactive</Tag>,
               ])} />
-            {can("therapists.manage") && <div className="mt-2 text-[11.5px] text-ink3">Click a therapist to open their details — password, centres, status and delete live there.</div>}
+            {can("therapists.manage") && <div className="mt-2 text-[11.5px] text-ink3">Click a therapist to open their details — centres, status and delete live there.</div>}
           </>
         )}
       </Async>
@@ -2176,7 +2073,6 @@ export function Therapists() {
       <TherapistEditor open={editorOpen} therapist={editing} branches={branches.map((b) => [b._id, b.name] as [string, string])}
         onClose={() => setEditorOpen(false)}
         onSaved={() => { setEditorOpen(false); q.reload(); }}
-        onPassword={() => { if (editing) { setPw(""); setPw2(""); setPwErr(null); setPwFor(editing); } }}
         onToggle={async () => {
           if (!editing) return;
           try {
@@ -2188,19 +2084,6 @@ export function Therapists() {
         }}
         onDelete={() => { if (editing) { setEditorOpen(false); setToDelete(editing); } }} />
 
-      <Modal open={!!pwFor} onClose={() => setPwFor(null)} title={`${pwFor?.hasPassword ? "Reset" : "Set"} password — ${pwFor?.name ?? ""}`}>
-        <Note>They sign in at the Therapist panel with <B>{pwFor?.email}</B> and this password — it is their only
-          way in (no emailed codes). The new details are emailed to them automatically when you save.</Note>
-        <div className="mt-3 grid gap-2.5">
-          <In label="New password" type="password" value={pw} onChange={setPw} hint="At least 8 characters" />
-          <In label="Confirm" type="password" value={pw2} onChange={setPw2} />
-          {pwErr && <Note kind="crit" className="mb-0">{pwErr}</Note>}
-        </div>
-        <div className="mt-4 flex justify-end gap-2">
-          <Btn kind="ghost" onClick={() => setPwFor(null)}>Cancel</Btn>
-          <Btn disabled={pwBusy || !pw || !pw2} onClick={savePassword}>{pwBusy ? "Saving…" : "Save password"}</Btn>
-        </div>
-      </Modal>
 
       <DeleteModal open={!!toDelete} onClose={() => setToDelete(null)}
         what={toDelete ? `${toDelete.name} (therapist)` : "this therapist"}
@@ -2217,23 +2100,18 @@ export function Therapists() {
   );
 }
 
-function TherapistEditor({ open, therapist, branches, onClose, onSaved, onPassword, onToggle, onDelete }: {
+function TherapistEditor({ open, therapist, branches, onClose, onSaved, onToggle, onDelete }: {
   open: boolean; therapist: Admin | null; branches: [string, string][];
   onClose: () => void; onSaved: () => void;
-  onPassword?: () => void; onToggle?: () => void; onDelete?: () => void;
+  onToggle?: () => void; onDelete?: () => void;
 }) {
   const { toast, audit, can } = useStore();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [branchIds, setBranchIds] = useState<string[]>([]);
-  const [pw, setPw] = useState("");
-  const [pw2, setPw2] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  // undefined = hidden; null = set before passwords could be shown; string = the password.
-  const [shownPw, setShownPw] = useState<string | null | undefined>(undefined);
-  const [pwLookupBusy, setPwLookupBusy] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -2241,7 +2119,7 @@ function TherapistEditor({ open, therapist, branches, onClose, onSaved, onPasswo
     setEmail(therapist?.email ?? "");
     setPhone(therapist?.phone ?? "");
     setBranchIds(((therapist?.branchIds?.length ? therapist.branchIds : therapist?.branchId ? [therapist.branchId] : []) as string[]) ?? []);
-    setPw(""); setPw2(""); setErr(null); setShownPw(undefined);
+    setErr(null);
   }, [open, therapist?._id]);
 
   const save = async () => {
@@ -2251,9 +2129,6 @@ function TherapistEditor({ open, therapist, branches, onClose, onSaved, onPasswo
     if (!/^\S+@\S+\.\S+$/.test(addr)) return setErr("A valid email is required — it becomes their sign-in address");
     if (!therapist) {
       if (!phone.trim()) return setErr("A phone number is required");
-      if (!pw) return setErr("Set a password — it is emailed to them on save");
-      if (pw.length < 8) return setErr("The password must be at least 8 characters");
-      if (pw !== pw2) return setErr("The passwords don't match");
     }
     setBusy(true);
     try {
@@ -2264,7 +2139,7 @@ function TherapistEditor({ open, therapist, branches, onClose, onSaved, onPasswo
       } else {
         const res = await api.staff.create({
           email: addr, name: name.trim(), role: "therapist",
-          phone: phone.trim() || null, branchIds, password: pw,
+          phone: phone.trim() || null, branchIds,
         });
         const created = res.data as Admin;
         audit("SETTINGS_UPDATED", `Created therapist ${created.email}`, { staffId: created._id });
@@ -2280,7 +2155,7 @@ function TherapistEditor({ open, therapist, branches, onClose, onSaved, onPasswo
         <In label="Full name" value={name} onChange={setName} placeholder="Asha Verma" />
         <In label="Work email" type="email" value={email} onChange={setEmail} readOnly={!!therapist}
           placeholder="therapist@zennara.in"
-          hint={therapist ? "Their sign-in address — fixed once created" : "Their sign-in address for the Therapist panel — password-only, no emailed codes"} />
+          hint={therapist ? "Their sign-in address — fixed once created" : "Their sign-in address — a 6-digit code is emailed here each time they sign in"} />
         <In label="Phone (staff only — never shown to guests)" value={phone} onChange={setPhone} />
         <div>
           <div className="mb-1.5 text-[11px] font-bold text-ink2">Centres — their floor tablet is pinned to these</div>
@@ -2292,13 +2167,6 @@ function TherapistEditor({ open, therapist, branches, onClose, onSaved, onPasswo
           )}
           <div className="mt-1 text-[11px] text-ink3">One centre pins their panel to it; several let them switch between those centres only.</div>
         </div>
-        {!therapist && (
-          <div className="grid grid-cols-2 gap-2">
-            <In label="Panel password" type="password" value={pw} onChange={setPw}
-              hint="Required, at least 8 characters — emailed to them the moment you save." />
-            <In label="Confirm password" type="password" value={pw2} onChange={setPw2} />
-          </div>
-        )}
         {err && <Note kind="crit">{err}</Note>}
         <div className="flex gap-2">
           <Btn disabled={busy} onClick={save}>{busy ? "Saving…" : therapist ? "Save changes" : "Add therapist"}</Btn>
@@ -2307,54 +2175,12 @@ function TherapistEditor({ open, therapist, branches, onClose, onSaved, onPasswo
 
         {therapist && (
           <>
-            <SecH t="Account" em="· password, access, removal" />
+            <SecH t="Account" em="· access, removal" />
             <div className="grid gap-2">
-              <div className="flex items-center justify-between rounded-xl border border-border bg-ivory px-3.5 py-2.5">
-                <div>
-                  <div className="text-[12.5px] font-bold">Password</div>
-                  <div className="text-[11px] text-ink3">
-                    {!therapist.hasPassword
-                      ? "Not set — they cannot sign in yet"
-                      : therapist.canRevealPassword === false
-                        ? "Set before the panel kept a readable copy — it can be reset, not shown"
-                        : "Set — they sign in with it"}
-                    {therapist.lastLogin ? ` · last sign-in ${fmtAgo(therapist.lastLogin)}` : ""}
-                  </div>
-                </div>
-                {/* Credentials are a separate permission from managing the
-                    therapist record, so show the controls only to a role that
-                    actually holds it. */}
-                <div className="flex shrink-0 gap-1.5">
-                  {!can("therapists.password") && <span className="text-[11px] text-ink3">Not your permission</span>}
-                  {can("therapists.password") && therapist.hasPassword && therapist.canRevealPassword !== false && shownPw === undefined && (
-                    <Btn kind="ghost" disabled={pwLookupBusy} onClick={async () => {
-                      setPwLookupBusy(true);
-                      try {
-                        const r = await api.staff.revealPassword(therapist._id);
-                        audit("SETTINGS_UPDATED", `${therapist.name} · therapist password viewed`, { staffId: therapist._id });
-                        setShownPw(r.password);
-                      } catch (e) { toast((e as Error).message); } finally { setPwLookupBusy(false); }
-                    }}>{pwLookupBusy ? "Looking up…" : "Show"}</Btn>
-                  )}
-                  {can("therapists.password") && <Btn kind="gold" onClick={onPassword}>{therapist.hasPassword ? "Reset" : "Set"}</Btn>}
-                </div>
+              <div className="rounded-xl border border-border bg-ivory px-3.5 py-2.5 text-[11px] text-ink3">
+                Signs in with a 6-digit code emailed to {therapist.email} — no password.
+                {therapist.lastLogin ? ` Last sign-in ${fmtAgo(therapist.lastLogin)}.` : " Never signed in yet."}
               </div>
-              {can("therapists.password") && therapist.hasPassword && shownPw !== undefined && (
-                <div className="rounded-xl border border-border bg-ivory px-3.5 py-2.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="text-[10.5px] font-bold uppercase tracking-wider text-ink3">Current password</div>
-                      {shownPw
-                        ? <code className="block truncate font-mono text-[13px] font-bold">{shownPw}</code>
-                        : <div className="text-[12px] text-ink2">Set before passwords could be shown — reset it to see it here.</div>}
-                    </div>
-                    <div className="flex shrink-0 gap-1.5">
-                      {shownPw && <Btn kind="ghost" onClick={() => { void navigator.clipboard.writeText(shownPw); toast("Password copied"); }}>Copy</Btn>}
-                      <Btn kind="ghost" onClick={() => setShownPw(undefined)}>Hide</Btn>
-                    </div>
-                  </div>
-                </div>
-              )}
               <div className="flex items-center justify-between rounded-xl border border-border bg-ivory px-3.5 py-2.5">
                 <div>
                   <div className="text-[12.5px] font-bold">{therapist.isActive ? "Active" : "Deactivated"}</div>
