@@ -14,6 +14,7 @@ import { BulkTools, Forms } from "./pages/tools";
 import { AppHome, ConsultPage, MembershipCard, Announcements, ScreenCopy, AppControl } from "./pages/studio";
 import { Branches, Reviews, Analytics, Roles, AuditLog } from "./pages/org";
 import { ContactChanges } from "./pages/contact-change";
+import { MyProfile } from "./pages/profile";
 import { Schedule as DermatologistSchedule } from "./pages/availability";
 
 /**
@@ -125,6 +126,7 @@ export default function App() {
           <Route path="/analytics" element={gated("analytics.view", <Analytics />)} />
           <Route path="/roles" element={gated(["staff.view", "roles.view"], <Roles />)} />
           <Route path="/audit" element={gated("audit.view", <AuditLog />)} />
+          <Route path="/profile" element={<Guarded><MyProfile /></Guarded>} />
 
           <Route path="*" element={<Landing />} />
         </Routes>

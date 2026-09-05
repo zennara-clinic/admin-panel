@@ -15,6 +15,8 @@ export type Admin = {
   name: string;
   role: AdminRole;
   phone?: string | null;
+  /** Profile photo (S3 URL) shown in the top bar. */
+  photo?: string | null;
   /** Home centre for floor staff (therapists) — pins their panel to it. */
   branchId?: Id | null;
   /** Centres a therapist works at (like a dermatologist's availableCentres). */

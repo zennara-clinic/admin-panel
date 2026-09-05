@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import api from "./lib/api";
-import { clearSession, hasLiveSession, onSessionExpired, setSession, storedAdmin } from "./lib/http";
+import { clearSession, getToken, hasLiveSession, onSessionExpired, setSession, storedAdmin } from "./lib/http";
 import type { Admin, AdminRole, Branch, PermissionKey } from "./lib/types";
 
 /**
@@ -74,6 +74,8 @@ type Store = {
   booting: boolean;
   signIn: (token: string, admin: Admin, expiresAt?: string) => void;
   logout: () => void;
+  /** Replace the signed-in account after a self-service edit (profile, photo). */
+  updateAdmin: (next: Admin) => void;
 };
 
 /** Actions the panel records itself, beyond what route middleware captures. */
@@ -153,6 +155,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setAdmin(null);
     setLoggedIn(false);
     setBranches([]);
+  }, []);
+
+  const updateAdmin = useCallback((next: Admin) => {
+    setAdmin(next);
+    const token = getToken();
+    if (token) setSession(token, next);
   }, []);
 
   // A stored token is only trustworthy once the server confirms it.
@@ -288,6 +296,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     booting,
     signIn,
     logout,
+    updateAdmin,
   };
 
   return (
