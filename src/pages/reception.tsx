@@ -111,8 +111,8 @@ export function Overview() {
               })),
             ]} />
             <Stats items={[
-              { k: "Consultations", v: d.counts.consultations, d: `${d.counts.bookings} bookings in total`, onClick: () => nav("/bookings") },
-              { k: "Treatments", v: d.counts.treatments, d: `${d.counts.completed} completed`, onClick: () => nav("/bookings") },
+              { k: "Consultations", v: d.counts.consultations, d: `${d.counts.completedConsultations ?? 0} completed · ${d.counts.bookings} bookings in total`, onClick: () => nav("/bookings") },
+              { k: "Treatments", v: d.counts.treatments, d: `${d.counts.completedTreatments ?? d.counts.completed} completed`, onClick: () => nav("/bookings") },
               { k: "Product orders", v: d.counts.orders, d: `${d.counts.openOrders} open · ${d.counts.paidOrders} paid`, onClick: () => nav("/orders") },
               { k: "New patients", v: d.counts.newPatients.toLocaleString("en-IN"), d: `${d.counts.totalPatients.toLocaleString("en-IN")} on file`, onClick: () => nav("/patients") },
               { k: "Zen members", v: d.counts.activeZen, d: `${d.counts.membershipsSold} sold · ${d.counts.zenExpiring} expiring`, tone: d.counts.zenExpiring ? "dn" : undefined, onClick: () => nav("/patients") },
@@ -1487,7 +1487,7 @@ export function Bookings() {
         </FSection>
         <FSection title="Payment">
           <Chips multi options={[["paid", "Paid"], ["pending", "Pending"], ["failed", "Failed"], ["refunded", "Refunded"]]} value={draft.paymentStatus} onChange={(v) => set("paymentStatus", v as string[])} />
-          <div className="mt-2"><Chips multi options={[["Razorpay", "Razorpay"], ["Cash", "Cash"], ["Card", "Card"], ["UPI", "UPI"], ["Package", "Package"], ["Membership", "Membership"], ["Other", "Other"]]} value={draft.paymentMethod} onChange={(v) => set("paymentMethod", v as string[])} /></div>
+          <div className="mt-2"><Chips multi options={[["Razorpay", "Razorpay"], ["Cash", "Cash"], ["Card", "Card"], ["UPI", "UPI"], ["Package", "Package"], ["Membership", "Membership"], ["Clinic", "Clinic (Zenoti)"], ["Other", "Other"]]} value={draft.paymentMethod} onChange={(v) => set("paymentMethod", v as string[])} /></div>
           <div className="mt-2"><NumRange prefix="₹" min={draft.amountMin} max={draft.amountMax} onChange={(a, b) => setDraft((d) => ({ ...d, amountMin: a, amountMax: b }))} /></div>
         </FSection>
         <FSection title="Sort">

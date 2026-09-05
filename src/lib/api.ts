@@ -783,6 +783,7 @@ export type Dashboard = {
     awaitingConfirmation: number; noShowRate: number; cancellationRate: number; orders: number; paidOrders: number; ordersByStatus: Record<string, number>;
     openOrders: number; packagesAssigned: number; packagesPaid: number; packagesUnpaid: number; membershipsSold: number; activeZen: number; zenExpiring: number;
     newPatients: number; totalPatients: number; bookingsBySource: Record<string, number>; outstanding: number; averageTicket: number; membershipsUnpriced?: number;
+    completedConsultations?: number; completedTreatments?: number;
   };
   dermatologists: DashboardDerm[];
   topServices: { name: string; category?: string | null; kind: string; bookings: number; revenue: number }[];

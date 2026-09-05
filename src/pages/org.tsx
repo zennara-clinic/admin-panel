@@ -698,7 +698,7 @@ export function Analytics() {
                     <ChartCard title="Monthly revenue" sub="Last 12 months, all centres in scope">
                       {monthly.length > 1 ? <AreaChart pts={monthly.map((m) => Number((m as { totalRevenue?: number; revenue?: number }).totalRevenue ?? m.revenue) || 0)} labels={monthly.map((m) => String(m.month))} label="Monthly" format={fmtCompactINR} /> : <Empty title="Not enough history yet" />}
                     </ChartCard>
-                    <ChartCard title="Revenue by centre" sub="Bookings — orders have no centre">
+                    <ChartCard title="Revenue by centre" sub="Visits, packages and clinic sales — app orders have no centre">
                       {d.revenueByCentre.length ? <HBars color="var(--color-c2)" rows={d.revenueByCentre.map((r) => [r.centre, r.revenue, `${r.bookings} bookings · ${fmtCompactINR(r.revenue)}`] as [string, number, string])} /> : <Empty title="No bookings" />}
                     </ChartCard>
                     <ChartCard title="Payment mix" sub="How the money came in">
@@ -706,7 +706,7 @@ export function Analytics() {
                       <div className="mt-3 grid gap-1.5 text-[12px]">
                         <Row k="Outstanding (bookings + packages)" v={fmtINR(d.counts.outstanding)} />
                         <Row k="Average ticket" v={fmtINR(d.counts.averageTicket)} />
-                        {financial && <Row k="Refunded" v={fmtINR(financial.overview.refundsLost)} />}
+                        {financial && <Row k="Cancelled (catalogue value)" v={fmtINR(financial.overview.refundsLost)} />}
                       </div>
                     </ChartCard>
                   </div>
