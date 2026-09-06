@@ -6,6 +6,10 @@ import type { PermissionKey } from "./lib/types";
 import { Tours } from "./tours";
 import { ErrorBoundary } from "./lib/ErrorBoundary";
 import { Overview, Today, Bookings, Patients, PatientDetail, Chat, SupportInbox } from "./pages/reception";
+import { Invoices } from "./pages/billing";
+import { Memberships } from "./pages/memberships";
+import { StockControl } from "./pages/stockcontrol";
+import { Templates } from "./pages/templates";
 import { Services, ServiceEditor, Categories, Packages, Doctors, DermatologistDetail, Therapists } from "./pages/care";
 import { Products, Brands, Coupons, Orders } from "./pages/commerce";
 import { Inventory, Vendors } from "./pages/stock";
@@ -83,18 +87,21 @@ export default function App() {
           <Route path="/overview" element={gated("overview.view", <Overview />)} />
           <Route path="/today" element={gated("today.view", <Today />)} />
           <Route path="/bookings" element={gated("bookings.view", <Bookings />)} />
+          <Route path="/invoices" element={gated(["billing.view", "billing.manage", "bookings.manage"], <Invoices />)} />
           <Route path="/patients" element={gated("patients.view", <Patients />)} />
           <Route path="/patient" element={gated("patients.view", <PatientDetail />)} />
           <Route path="/deleted-accounts" element={gated("patients.delete", <DeletedAccounts />)} />
           <Route path="/consultations" element={<Navigate to="/bookings?kind=consultation" replace />} />
           <Route path="/contact-changes" element={gated("contactChanges.view", <ContactChanges />)} />
           <Route path="/chat" element={gated("chat.view", <Chat />)} />
+          <Route path="/templates" element={gated(["templates.manage", "chat.manage"], <Templates />)} />
           <Route path="/support" element={gated("support.view", <SupportInbox />)} />
 
           <Route path="/services" element={gated("services.view", <Services />)} />
           <Route path="/service-editor" element={gated("services.manage", <ServiceEditor />)} />
           <Route path="/categories" element={gated("categories.view", <Categories />)} />
           <Route path="/packages" element={gated("packages.view", <Packages />)} />
+          <Route path="/memberships" element={gated(["memberships.view", "memberships.manage", "packages.view"], <Memberships />)} />
           <Route path="/doctors" element={gated("dermatologists.view", <Doctors />)} />
           <Route path="/dermatologist" element={gated("dermatologists.view", <DermatologistDetail />)} />
           <Route path="/doctors/schedule" element={gated("dermatologists.manage", <AdminDoctorSchedule />)} />
@@ -107,6 +114,7 @@ export default function App() {
 
           <Route path="/inventory" element={gated("inventory.view", <Inventory />)} />
           <Route path="/stock-ledger" element={gated("stockLedger.view", <StockLedger />)} />
+          <Route path="/stock-control" element={gated(["inventory.view", "stockLedger.view"], <StockControl />)} />
           <Route path="/vendors" element={gated("vendors.view", <Vendors />)} />
           <Route path="/purchase-orders" element={gated("purchaseOrders.view", <PurchaseOrders />)} />
           <Route path="/bulk" element={gated(["bulk.import", "bulk.export"], <BulkTools />)} />

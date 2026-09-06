@@ -7,6 +7,9 @@ import {
 } from "../ui";
 import { useStore } from "../store";
 import api from "../lib/api";
+import { DayBookGrid, TodaysSalesModal } from "./daybook";
+import { InvoiceModal, useOpenInvoice } from "./billing";
+import { TemplatePicker } from "./templates";
 import { ZenotiMembershipCard, ZenotiPackageCard, appointmentState, fmtZDate, fmtZWhen, membershipActive, money, pkgActive } from "./zenoti";
 import { getSocket, type ChatUpdate, type DeletedEvent, type PresenceEvent, type TypingEvent } from "../lib/socket";
 import { useApi, useDebounced, useMutation, usePoll } from "../lib/useApi";
@@ -17,7 +20,7 @@ import { CLINIC_TZ,
   statusKey, mapToRows, isConsultationBooking, clinicHM, addClinicDays, clinicMonthEnd,
   clinicMonthStart, clinicWeekday, dayKeyDate, fmtDayKey,
 } from "../lib/format";
-import type { ConsultationStage, Booking, Branch, Chat as ChatThread, ChatMessage, Consultation, Doctor, User } from "../lib/types";
+import type { ConsultationStage, Booking, Branch, Chat as ChatThread, ChatMessage, Consultation, Doctor, PackageAssignment, User } from "../lib/types";
 
 /* ================= OVERVIEW ================= */
 const RANGE_PRESETS: [string, () => { startDate: string; endDate: string }][] = [
@@ -344,6 +347,7 @@ function BookingDrawer({ id, onClose, onChanged }: {
   const [payAmount, setPayAmount] = useState("");
   const [payNote, setPayNote] = useState("");
   const [noteText, setNoteText] = useState("");
+  const bill = useOpenInvoice();
 
   const q = useApi(() => (id ? api.bookings.get(id) : Promise.resolve(undefined as unknown as Booking)), [id]);
   const bk = q.data;
@@ -392,11 +396,15 @@ function BookingDrawer({ id, onClose, onChanged }: {
               <div className="mt-0.5 font-mono text-[11px] text-ink3">{bk.referenceNumber}</div>
               <div className="mt-2.5 flex flex-wrap items-center gap-2">
                 {STATUS[statusKey(bk)]}
+                {bk.invoiceId && bk.paymentStatus !== "paid" && <Tag kind="gold">Bill open</Tag>}
                 {bk.paymentStatus === "paid"
                   ? <Tag kind="ok">Paid {fmtINR(bk.amount)}{bk.paymentMethod ? ` · ${bk.paymentMethod}` : ""}</Tag>
                   : bk.paymentStatus === "refunded" ? <Tag kind="mute">Refunded</Tag>
                   : <Tag kind="warn">{fmtINR(bk.amount)} due</Tag>}
                 {bk.therapistName && <Tag kind="info">with {bk.therapistName}</Tag>}
+                {!bk.invoiceId && bk.paymentStatus !== "paid" && !["Cancelled", "No Show"].includes(bk.status) && can("bookings.manage") && (
+                  <button className="text-[11px] text-ink3 underline-offset-2 hover:underline" onClick={() => { act.clearError?.(); setPayOpen(true); }}>paid elsewhere?</button>
+                )}
               </div>
               {bk.session && (bk.session.total ?? 0) > 0 && (
                 <div className="mt-2 rounded-lg bg-ivory px-2.5 py-2 text-[12px]">
@@ -523,8 +531,10 @@ function BookingDrawer({ id, onClose, onChanged }: {
                   "Marked as no-show",
                 )}>Mark no-show</Btn>
               )}
-              {bk.paymentStatus !== "paid" && !["Cancelled", "No Show"].includes(bk.status) && (
-                <Btn kind="gold" disabled={act.busy} onClick={() => { act.clearError?.(); setPayOpen(true); }}>Record payment</Btn>
+              {bk.invoiceId ? (
+                <Btn kind="ghost" disabled={bill.busy} onClick={() => bill.setInvoiceId(String(bk.invoiceId))}>Show invoice</Btn>
+              ) : bk.paymentStatus !== "paid" && !["Cancelled", "No Show"].includes(bk.status) && (
+                <Btn kind="gold" disabled={act.busy || bill.busy} onClick={() => bill.openForBooking(bk._id)}>{bill.busy ? "Opening bill…" : "Take payment"}</Btn>
               )}
               <Btn kind="ghost" onClick={() => nav("/patient", {
                 state: { id: idOf(bk.userId), returnTo: `${route.pathname}${route.search}` },
@@ -726,6 +736,8 @@ function BookingDrawer({ id, onClose, onChanged }: {
         </div>
       </Modal>
 
+      <InvoiceModal open={!!bill.invoiceId} invoiceId={bill.invoiceId} onClose={() => bill.setInvoiceId(null)} onChanged={() => { q.reload(); onChanged(); }} />
+
       <Modal open={resOpen} onClose={() => setResOpen(false)} title="Reschedule booking">
         <div className="grid gap-3 md:grid-cols-2">
           <In label="New date" type="date" value={resDate} onChange={setResDate} />
@@ -758,23 +770,31 @@ function BookingDrawer({ id, onClose, onChanged }: {
 }
 
 /* ================= new booking / walk-in ================= */
-export function NewBookingModal({ open, onClose, onBooked, presetUser }: {
+export function NewBookingModal({ open, onClose, onBooked, presetUser, preset }: {
   open: boolean; onClose: () => void; onBooked: () => void;
   presetUser?: Pick<User, "_id" | "fullName" | "phone" | "email"> | null;
+  /** From the day book: a cell's dermatologist, time and date. */
+  preset?: { date?: string; doctorId?: string; doctorName?: string; time?: string } | null;
 }) {
   const { toast, audit, branch, branches, branchId } = useStore();
+  type Line = { key: number; serviceId: string; doctorId: string; time: string; packageAssignmentId?: string; packageSessionId?: string; packageLabel?: string };
+  const [guest, setGuest] = useState<User | null>(null);
+  const [lookup, setLookup] = useState("");
+  const debouncedLookup = useDebounced(lookup, 250);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
-  const [serviceId, setServiceId] = useState("");
-  const [doctorId, setDoctorId] = useState("");
+  const [gender, setGender] = useState("");
+  const [referral, setReferral] = useState("");
   const [location, setLocation] = useState("");
   const [date, setDate] = useState(isoDay());
-  const [time, setTime] = useState("");
+  const [lines, setLines] = useState<Line[]>([{ key: 1, serviceId: "", doctorId: "", time: "" }]);
   const [confirmNow, setConfirmNow] = useState(true);
   const [notes, setNotes] = useState("");
   const [err, setErr] = useState<string | null>(null);
+  const [warn, setWarn] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [pkgOpen, setPkgOpen] = useState<number | null>(null);
 
   const refs = useApi(async () => {
     const [svc, docs] = await Promise.all([
@@ -784,20 +804,46 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser }: {
     return { services: (svc.data ?? []) as Consultation[], doctors: (docs.data ?? []) as Doctor[] };
   }, [open]);
 
+  // Phone-first guest lookup across every centre, like Zenoti's "across centers".
+  const found = useApi(async () => {
+    const q = debouncedLookup.trim();
+    if (!open || guest || q.length < 3) return [] as User[];
+    const res = await api.patients.list({ search: q, limit: 8 }).catch(() => null);
+    return (res?.data as { users?: User[] } | undefined)?.users ?? [];
+  }, [debouncedLookup, open, !!guest]);
+  // The picked guest's desk strip and package balances.
+  const strip = useApi(() => (guest ? api.patients.get(guest._id).catch(() => null) : Promise.resolve(null)), [guest?._id]);
+  const packages = useApi(() => (guest ? api.packageAssignments.list({ userId: guest._id, status: "Active" }).then((r) => (r.data ?? []) as PackageAssignment[]).catch(() => []) : Promise.resolve([] as PackageAssignment[])), [guest?._id]);
+
   useEffect(() => {
     if (!open) return;
+    setGuest(null); setLookup("");
     setName(presetUser?.fullName ?? "");
     setPhone(presetUser?.phone ?? "");
     setEmail(presetUser?.email?.endsWith("@zennara.local") ? "" : presetUser?.email ?? "");
+    setGender(""); setReferral("");
     setLocation(branch && branch !== "All branches" ? branch : branches[0]?.name ?? "");
-    setDate(isoDay()); setTime(""); setNotes(""); setErr(null); setConfirmNow(true);
-  }, [open, presetUser?._id, branch, branches.length]);
+    setDate(preset?.date ?? isoDay());
+    setLines([{ key: 1, serviceId: "", doctorId: "", time: preset?.time ?? "" }]);
+    setNotes(""); setErr(null); setWarn(null); setConfirmNow(true); setPkgOpen(null);
+    if (presetUser?._id) api.patients.get(presetUser._id).then((u) => setGuest(u)).catch(() => undefined);
+  }, [open, presetUser?._id, branch, branches.length, preset?.date, preset?.time]);
 
+  // Default the first line to the cell's dermatologist and the first service.
   useEffect(() => {
-    if (!serviceId && refs.data?.services.length) setServiceId(refs.data.services[0]._id);
-  }, [refs.data?.services.length]);
+    if (!refs.data) return;
+    setLines((ls) => ls.map((l, i) => ({
+      ...l,
+      serviceId: l.serviceId || refs.data!.services[0]?._id || "",
+      doctorId: i === 0 && !l.doctorId && preset?.doctorId ? (refs.data!.doctors.find((d) => d.doctorId === preset.doctorId)?._id ?? "") : l.doctorId,
+    })));
+  }, [refs.data?.services.length, refs.data?.doctors.length, preset?.doctorId]);
 
-  // Real bookable slots for the chosen centre and date.
+  const pickGuest = (u: User) => {
+    setGuest(u); setName(u.fullName); setPhone(u.phone || ""); setEmail(/@zennara\.local$|@guest\.zennara\.in$/i.test(u.email || "") ? "" : u.email || "");
+    setLookup("");
+  };
+
   const slots = useApi(async () => {
     const b = branches.find((x) => x.name === location);
     if (!b || !date) return [] as string[];
@@ -806,117 +852,242 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser }: {
     return raw?.slots ?? raw?.availableSlots ?? [];
   }, [location, date, branches.length]);
 
-  const service = refs.data?.services.find((s) => s._id === serviceId);
-  const doctor = refs.data?.doctors.find((d) => d._id === doctorId);
-  const eligibleDoctors = (refs.data?.doctors ?? []).filter(
-    (d) => !location || !d.availableCentres?.length || d.availableCentres.includes(location),
-  );
+  const branchDoc = branches.find((x) => x.name === location);
+  const services = refs.data?.services ?? [];
+  const doctors = refs.data?.doctors ?? [];
+  const eligibleDoctors = doctors.filter((d) => !location || !d.availableCentres?.length || d.availableCentres.includes(location));
+  const svcOf = (id: string) => services.find((s) => s._id === id);
+  const docOf = (id: string) => doctors.find((d) => d._id === id);
+  /** Price at this centre with GST shown, the way Zenoti quotes "₹6,500 (incl. tax ₹309.52)". */
+  const priceOf = (svc?: Consultation) => {
+    if (!svc) return { total: 0, tax: 0, pct: 0 };
+    const row = branchDoc ? svc.centrePrices?.find((c) => String(c.branchId) === String(branchDoc._id)) : null;
+    const total = row?.price ?? svc.price ?? 0;
+    const pct = row?.taxPercent ?? svc.taxPercent ?? 0;
+    const inclusive = svc.priceIncludesTax !== false;
+    const base = inclusive ? total / (1 + pct / 100) : total;
+    return { total: inclusive ? total : total + base * pct / 100, tax: Math.round(base * pct) / 100, pct };
+  };
+  const total = lines.reduce((n, l) => n + (l.packageAssignmentId ? 0 : priceOf(svcOf(l.serviceId)).total), 0);
+  const setLine = (key: number, patch: Partial<Line>) => setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...patch } : l)));
 
-  const submit = async () => {
-    setErr(null);
+  const submit = async (force = false) => {
+    setErr(null); setWarn(null);
     if (name.trim().length < 2) return setErr("Enter the guest's full name");
     if (phone.replace(/\D/g, "").length < 10) return setErr("Enter a valid mobile number");
-    if (!serviceId) return setErr("Pick a service");
     if (!location) return setErr("Pick a centre");
-    if (!time) return setErr("Pick a time slot");
+    if (lines.some((l) => !l.serviceId)) return setErr("Pick a service on every line");
+    if (lines.some((l) => !l.time)) return setErr("Pick a time on every line");
+    if (!guest && !referral) return setErr("Ask the new guest how they heard about us (referral source)");
 
     setBusy(true);
     try {
-      await api.bookings.create({
-        consultationId: serviceId,
+      const first = lines[0];
+      const res = await api.bookings.create({
+        consultationId: first.serviceId,
         fullName: name.trim(),
         mobileNumber: phone.trim(),
         email: email.trim() || undefined,
+        gender: gender || undefined,
         preferredLocation: location,
         preferredDate: date,
-        preferredTimeSlots: [time],
-        specialistId: doctor?.doctorId,
-        specialistName: doctor?.name,
-        specialistTier: doctor?.tier,
-        amount: service?.price,
+        preferredTimeSlots: [first.time],
+        specialistId: docOf(first.doctorId)?.doctorId,
+        specialistName: docOf(first.doctorId)?.name,
+        specialistTier: docOf(first.doctorId)?.tier,
+        services: lines.map((l) => ({
+          consultationId: l.serviceId, time: l.time,
+          specialistId: docOf(l.doctorId)?.doctorId ?? null, specialistName: docOf(l.doctorId)?.name ?? null, specialistTier: docOf(l.doctorId)?.tier ?? null,
+          amount: l.packageAssignmentId ? 0 : priceOf(svcOf(l.serviceId)).total,
+          packageAssignmentId: l.packageAssignmentId ?? null, packageSessionId: l.packageSessionId ?? null,
+        })),
         notes: notes.trim() || undefined,
         confirmNow,
-        userId: presetUser?._id,
+        force,
+        referralSource: referral || undefined,
+        userId: guest?._id ?? presetUser?._id,
       });
-      audit("BOOKING_CREATED", `${name.trim()} · ${service?.name ?? ""} · ${date} ${time}`);
-      toast(`${name.trim()} is booked — confirmation sent`);
+      audit("BOOKING_CREATED", `${name.trim()} · ${lines.map((l) => svcOf(l.serviceId)?.name).filter(Boolean).join(" + ")} · ${date} ${first.time}`);
+      toast(lines.length > 1 ? `${lines.length} services booked for ${name.trim()}` : `${name.trim()} is booked — confirmation sent`);
+      void res;
       onBooked();
       onClose();
     } catch (e) {
-      setErr((e as Error).message);
+      const ex = e as Error & { code?: string; body?: { code?: string } };
+      const code = ex.code || ex.body?.code;
+      if (code === "PROVIDER_NOT_WORKING" || /Do you want to add the appointment/i.test(ex.message)) setWarn(ex.message);
+      else setErr(ex.message);
     } finally {
       setBusy(false);
     }
   };
 
+  const stats = strip.data?.stats ?? null;
+  const REFERRALS = ["Word of mouth", "Instagram", "Google", "Client referral", "Doctor referral", "Advertisement", "Walk-in", "Corporate", "Events", "Employee", "Internet", "Other"];
+  const openSessions = (packages.data ?? []).flatMap((a) => (a.sessions ?? []).filter((s) => s.status === "Scheduled" && !s.bookingId).map((s) => ({ a, s })));
+
   return (
-    <Modal open={open} onClose={onClose} title={presetUser ? `Book for ${presetUser.fullName}` : "New booking"} wide>
+    <Modal open={open} onClose={onClose} title={presetUser ? `Book for ${presetUser.fullName}` : "New appointment"} xl>
       {refs.initial && !refs.data ? <Loading label="Loading services and dermatologists…" /> : (
         <>
-          <div className="grid gap-3 md:grid-cols-2">
-            <In label="Guest name" value={name} onChange={setName} placeholder="Full name" />
-            <In label="Mobile" value={phone} onChange={setPhone} placeholder="+91 …" />
-            <In label="Email (optional)" value={email} onChange={setEmail} placeholder="name@email.com" />
-            <Sel label="Centre" value={location} onChange={setLocation}
-              options={branches.map((b) => b.name)} />
-            <div className="flex flex-col gap-1">
-              <label className="text-[11px] font-bold text-ink2">Service</label>
-              <select value={serviceId} onChange={(e) => setServiceId(e.target.value)}
-                className="rounded-lg border border-border bg-ivory px-2.5 py-2 text-[12.5px] outline-none focus:border-gold-dark">
-                {(refs.data?.services ?? []).map((s) => (
-                  <option key={s._id} value={s._id}>{s.name} — {fmtINR(s.price)}</option>
-                ))}
-              </select>
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-[11px] font-bold text-ink2">Dermatologist</label>
-              <select value={doctorId} onChange={(e) => setDoctorId(e.target.value)}
-                className="rounded-lg border border-border bg-ivory px-2.5 py-2 text-[12.5px] outline-none focus:border-gold-dark">
-                <option value="">Any available</option>
-                {eligibleDoctors.map((d) => (
-                  <option key={d._id} value={d._id}>{d.name}{d.designation ? ` — ${d.designation}` : ""}</option>
-                ))}
-              </select>
-            </div>
-            <In label="Date" type="date" value={date} onChange={setDate} />
-            <div className="flex flex-col gap-1">
-              <label className="text-[11px] font-bold text-ink2">
-                Time slot {slots.loading && <Spinner className="ml-1 inline h-3 w-3" />}
-              </label>
-              {(slots.data ?? []).length > 0 ? (
-                <select value={time} onChange={(e) => setTime(e.target.value)}
-                  className="rounded-lg border border-border bg-ivory px-2.5 py-2 text-[12.5px] outline-none focus:border-gold-dark">
-                  <option value="">Choose a slot…</option>
-                  {(slots.data ?? []).map((s) => <option key={s} value={s}>{s}</option>)}
-                </select>
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+            {/* ---------------- guest ---------------- */}
+            <div className="grid content-start gap-2.5 rounded-xl border border-border bg-ivory/60 p-3">
+              <SecH t="Guest" em="· across all centres" />
+              {!guest ? (
+                <div className="relative">
+                  <In label="Find by mobile, name or email" value={lookup} onChange={(v) => { setLookup(v); if (/^\+?\d[\d\s]*$/.test(v)) setPhone(v); else if (v.includes("@")) setEmail(v); else setName(v); }} placeholder="98765 43210" />
+                  {(found.data ?? []).length > 0 && (
+                    <div className="absolute z-[5] mt-1 max-h-56 w-full overflow-auto rounded-xl border border-border bg-surface shadow-xl">
+                      {(found.data ?? []).map((u) => (
+                        <button key={u._id} onClick={() => pickGuest(u)} className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-[12.5px] hover:bg-ivory">
+                          <span><B>{u.fullName}</B> <span className="text-ink3">{u.phone}</span></span>
+                          <span className="truncate text-[11px] text-ink3">{u.location || ""}{u.patientId ? ` · ${u.patientId}` : ""}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {lookup.trim().length >= 3 && !found.loading && (found.data ?? []).length === 0 && <div className="mt-1 text-[10.5px] text-ink3">No guest matches — fill the details below to create one.</div>}
+                </div>
               ) : (
-                <input value={time} onChange={(e) => setTime(e.target.value)} placeholder="e.g. 15:30"
-                  className="rounded-lg border border-border bg-ivory px-2.5 py-2 text-[12.5px] outline-none focus:border-gold-dark" />
+                <div className="rounded-xl border border-border bg-surface p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="text-[13.5px] font-bold">{guest.fullName} {guest.memberType === "Zen Member" && <Tag kind="gold">Zen</Tag>}</div>
+                      <div className="text-[11.5px] text-ink3">{guest.phone}{guest.email && !/@zennara\.local$|@guest\.zennara\.in$/i.test(guest.email) ? ` · ${guest.email}` : ""}{guest.patientId ? ` · ${guest.patientId}` : ""}</div>
+                    </div>
+                    {!presetUser && <button className="text-[11px] text-ink3 underline-offset-2 hover:underline" onClick={() => { setGuest(null); setName(""); setPhone(""); setEmail(""); }}>change</button>}
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11.5px]">
+                    <div><span className="text-ink3">Total visits</span> <B>{stats?.totalVisits ?? "…"}</B></div>
+                    <div><span className="text-ink3">Last visit</span> <B>{stats?.lastVisitAt ? fmtDate(stats.lastVisitAt) : stats ? "—" : "…"}</B></div>
+                    <div><span className="text-ink3">Usual doctor</span> <B>{stats?.usualDoctor?.name ?? "—"}</B></div>
+                    <div><span className="text-ink3">Open bookings</span> <B>{stats?.openBookings ?? "…"}</B></div>
+                    <div><span className="text-ink3">Amount due</span> <b className={`font-bold ${stats && stats.amountDue > 0 ? "text-err" : ""}`}>{stats ? fmtINR(stats.amountDue) : "…"}</b></div>
+                    <div><span className="text-ink3">Packages</span> <B>{stats ? stats.activePackages.length : "…"}</B></div>
+                  </div>
+                  {(stats?.activePackages ?? []).length > 0 && (
+                    <div className="mt-1.5 flex flex-wrap gap-1">{stats!.activePackages.map((p, i) => <Tag key={i} kind="info">{p.name} · {p.remaining ?? "?"}/{p.total ?? "?"} left</Tag>)}</div>
+                  )}
+                </div>
               )}
-              {!slots.loading && (slots.data ?? []).length === 0 && (
-                <div className="text-[10.5px] text-ink3">No published slots for this centre and date — type the time instead.</div>
+              {!guest && (
+                <>
+                  <In label="Guest name" value={name} onChange={setName} placeholder="Full name" />
+                  <div className="grid grid-cols-2 gap-2">
+                    <In label="Mobile" value={phone} onChange={setPhone} placeholder="+91 …" />
+                    <Sel label="Gender" value={gender || "—"} options={["—", "Female", "Male", "Other"]} onChange={(v) => setGender(v === "—" ? "" : v)} />
+                  </div>
+                  <In label="Email (optional)" value={email} onChange={setEmail} placeholder="name@email.com" />
+                  <Sel label="How did they hear about us?" value={referral || "— choose —"} options={["— choose —", ...REFERRALS]} onChange={(v) => setReferral(v === "— choose —" ? "" : v)} />
+                </>
               )}
+            </div>
+
+            {/* ---------------- appointment ---------------- */}
+            <div className="grid content-start gap-2.5">
+              <SecH t="Appointment" em={`· ${lines.length} service${lines.length === 1 ? "" : "s"}`} />
+              <div className="grid grid-cols-2 gap-2">
+                <Sel label="Centre" value={location} onChange={setLocation} options={branches.map((b) => b.name)} />
+                <In label="Date" type="date" value={date} onChange={setDate} />
+              </div>
+              {lines.map((l, i) => {
+                const svc = svcOf(l.serviceId);
+                const pr = priceOf(svc);
+                return (
+                  <div key={l.key} className="grid gap-2 rounded-xl border border-border bg-surface p-2.5">
+                    <div className="grid gap-2 sm:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_110px]">
+                      <div className="flex flex-col gap-1">
+                        <label className="text-[11px] font-bold text-ink2">Service</label>
+                        <select value={l.serviceId} disabled={!!l.packageAssignmentId} onChange={(e) => setLine(l.key, { serviceId: e.target.value })}
+                          className="rounded-lg border border-border bg-ivory px-2.5 py-2 text-[12.5px] outline-none focus:border-gold-dark disabled:opacity-70">
+                          {services.map((s) => <option key={s._id} value={s._id}>{s.name}{s.code ? ` (${s.code})` : ""}</option>)}
+                        </select>
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <label className="text-[11px] font-bold text-ink2">Dermatologist</label>
+                        <select value={l.doctorId} onChange={(e) => setLine(l.key, { doctorId: e.target.value })}
+                          className="rounded-lg border border-border bg-ivory px-2.5 py-2 text-[12.5px] outline-none focus:border-gold-dark">
+                          <option value="">Any available</option>
+                          {eligibleDoctors.map((d) => <option key={d._id} value={d._id}>{d.name}</option>)}
+                        </select>
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <label className="text-[11px] font-bold text-ink2">Time {slots.loading && <Spinner className="ml-1 inline h-3 w-3" />}</label>
+                        {(slots.data ?? []).length > 0 ? (
+                          <select value={l.time} onChange={(e) => setLine(l.key, { time: e.target.value })}
+                            className="rounded-lg border border-border bg-ivory px-2.5 py-2 text-[12.5px] outline-none focus:border-gold-dark">
+                            <option value="">Slot…</option>
+                            {(slots.data ?? []).map((s) => <option key={s} value={s}>{s}</option>)}
+                            {l.time && !(slots.data ?? []).includes(l.time) && <option value={l.time}>{l.time}</option>}
+                          </select>
+                        ) : (
+                          <input value={l.time} onChange={(e) => setLine(l.key, { time: e.target.value })} placeholder="15:30" className="rounded-lg border border-border bg-ivory px-2.5 py-2 text-[12.5px] outline-none focus:border-gold-dark" />
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-[11.5px]">
+                      <span className="text-ink2">
+                        {l.packageAssignmentId
+                          ? <><Tag kind="info">Package</Tag> <span className="ml-1">{l.packageLabel} — no charge</span></>
+                          : svc ? <>Price <B>{fmtINR(pr.total)}</B>{pr.pct ? <span className="text-ink3"> (incl. GST {pr.pct}% ₹{pr.tax.toLocaleString("en-IN")})</span> : null}{svc.duration_minutes ? <span className="text-ink3"> · {svc.duration_minutes} min</span> : null}</> : null}
+                      </span>
+                      <span className="flex gap-2">
+                        {guest && openSessions.length > 0 && !l.packageAssignmentId && <button className="font-semibold text-primary underline-offset-2 hover:underline" onClick={() => setPkgOpen(l.key)}>Use a package session</button>}
+                        {l.packageAssignmentId && <button className="text-ink3 underline-offset-2 hover:underline" onClick={() => setLine(l.key, { packageAssignmentId: undefined, packageSessionId: undefined, packageLabel: undefined })}>remove package</button>}
+                        {lines.length > 1 && <button className="text-err underline-offset-2 hover:underline" onClick={() => setLines((ls) => ls.filter((x) => x.key !== l.key))}>remove</button>}
+                      </span>
+                    </div>
+                    {pkgOpen === l.key && (
+                      <div className="grid gap-1 rounded-lg border border-border bg-ivory p-2">
+                        <div className="text-[10.5px] font-bold uppercase tracking-wider text-ink3">Package sessions available</div>
+                        {openSessions.map(({ a, s }) => {
+                          const svcMatch = services.find((x) => (x as Consultation & { id?: string }).id === s.serviceId || x._id === s.serviceId || x.name === s.serviceName);
+                          return (
+                            <button key={`${a._id}-${s._id}`} className="flex items-center justify-between rounded-lg border border-border bg-surface px-2.5 py-1.5 text-left text-[12px] hover:border-gold-dark"
+                              onClick={() => { setLine(l.key, { packageAssignmentId: a._id, packageSessionId: s._id as string, packageLabel: `${a.packageDetails?.packageName ?? "Package"} · ${s.serviceName}`, serviceId: svcMatch?._id ?? l.serviceId }); setPkgOpen(null); }}>
+                              <span><B>{s.serviceName}</B> <span className="text-ink3">· {a.packageDetails?.packageName}</span></span>
+                              <span className="text-[11px] text-ink3">{a.validUntil ? `valid till ${fmtDate(a.validUntil)}` : ""}</span>
+                            </button>
+                          );
+                        })}
+                        <button className="text-left text-[11px] text-ink3 underline-offset-2 hover:underline" onClick={() => setPkgOpen(null)}>close</button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              <div className="flex items-center justify-between">
+                <button className="text-[12px] font-bold text-primary underline-offset-2 hover:underline" onClick={() => setLines((ls) => {
+                  const last = ls[ls.length - 1];
+                  const lastSvc = svcOf(last?.serviceId ?? "");
+                  const next = last?.time ? (() => { const [h, m] = last.time.split(":").map(Number); const t = h * 60 + (m || 0) + (lastSvc?.duration_minutes || 60); return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`; })() : "";
+                  return [...ls, { key: Date.now(), serviceId: services[0]?._id ?? "", doctorId: last?.doctorId ?? "", time: next }];
+                })}>+ Add another service</button>
+                <div className="text-[13px]">Total <B>{fmtINR(total)}</B></div>
+              </div>
+              <Area label="Desk notes (optional)" value={notes} onChange={setNotes} rows={2} />
+              <label className="flex items-center gap-2.5 rounded-xl border border-border bg-ivory px-3 py-2.5 text-[12.5px]">
+                <input type="checkbox" checked={confirmNow} onChange={(e) => setConfirmNow(e.target.checked)} className="h-4 w-4 accent-[var(--color-primary)]" />
+                <span>Confirm immediately (the guest is at the desk). Leave off to send it for confirmation.</span>
+              </label>
             </div>
           </div>
 
-          <div className="mt-3"><Area label="Desk notes (optional)" value={notes} onChange={setNotes} rows={2} /></div>
-
-          <label className="mt-3 flex items-center gap-2.5 rounded-xl border border-border bg-ivory px-3 py-2.5 text-[12.5px]">
-            <input type="checkbox" checked={confirmNow} onChange={(e) => setConfirmNow(e.target.checked)}
-              className="h-4 w-4 accent-[var(--color-primary)]" />
-            <span>Confirm immediately (a walk-in standing at the desk). Leave off to send it for confirmation.</span>
-          </label>
-
-          <Note className="mb-0">
-            If this mobile number is already on file we book against that record. A new number opens a patient record
-            automatically, and the guest gets the booking on WhatsApp.
-          </Note>
-
+          {warn && (
+            <div className="mt-3 rounded-xl border border-warn bg-warn-bg p-3 text-[12.5px] text-warn">
+              <B>Add service</B> — {warn}
+              <div className="mt-2 flex justify-end gap-2">
+                <Btn kind="ghost" onClick={() => setWarn(null)}>No</Btn>
+                <Btn kind="gold" disabled={busy} onClick={() => submit(true)}>Yes, add anyway</Btn>
+              </div>
+            </div>
+          )}
           {err && <Note kind="crit">{err}</Note>}
 
           <div className="mt-4 flex justify-end gap-2">
             <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
-            <Btn disabled={busy} onClick={submit}>{busy ? "Booking…" : "Create booking"}</Btn>
+            <Btn disabled={busy} onClick={() => submit(false)}>{busy ? "Booking…" : lines.length > 1 ? `Book ${lines.length} services` : "Create booking"}</Btn>
           </div>
         </>
       )}
@@ -925,24 +1096,15 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser }: {
 }
 
 /* ================= TODAY ================= */
-/** One-hour rows whose complete session fits inside the centre's hours. */
-function slotTimesFor(hours: Branch["operatingHours"] | undefined, day: string): string[] {
-  const weekday = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"][clinicWeekday(day)];
-  const h = hours?.[weekday] as { open?: string; openTime?: string; close?: string; closeTime?: string; isOpen?: boolean } | undefined;
-  const open = h?.open ?? h?.openTime ?? "09:00";
-  const close = h?.close ?? h?.closeTime ?? "19:00";
-  const toMin = (t: string) => { const [a, b] = t.split(":").map(Number); return a * 60 + (b || 0); };
-  const out: string[] = [];
-  for (let m = toMin(open); m + 60 <= toMin(close); m += 60) out.push(`${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`);
-  return out.length ? out : ["09:00"];
-}
-
 export function Today() {
   const { branch, branchId, branches } = useStore();
   const [day, setDay] = useState(isoDay());
   const liveDay = useRef(isoDay());
   const [view, setView] = useState<"day" | "list">("day");
   const [newOpen, setNewOpen] = useState(false);
+  const [newPreset, setNewPreset] = useState<{ doctorId?: string; doctorName?: string; time?: string } | null>(null);
+  const [salesOpen, setSalesOpen] = useState(false);
+  const bill = useOpenInvoice();
   const [sel, setSel] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [provF, setProvF] = useState("All dermatologists");
@@ -970,7 +1132,6 @@ export function Today() {
 
   const allRows = bookingsQ.data?.data ?? [];
   const rows = kind === "consultation" ? allRows.filter(isConsultationBooking) : kind === "treatment" ? allRows.filter((b) => !isConsultationBooking(b)) : allRows;
-  const SLOT_TIMES = useMemo(() => slotTimesFor(branches.find((b) => b._id === branchId)?.operatingHours, day), [branches, branchId, day]);
   const providers = useMemo(() => {
     const fromDoctors = (doctorsQ.data?.data ?? []).map((d) => d.name);
     const fromBookings = rows.map((b) => bookingProvider(b)).filter((p) => p !== "Not assigned");
@@ -981,35 +1142,6 @@ export function Today() {
     (!q || b.fullName.toLowerCase().includes(q.toLowerCase()) || bookingServiceName(b, "").toLowerCase().includes(q.toLowerCase())) &&
     (provF === "All dermatologists" || bookingProvider(b) === provF) &&
     (stF === "All statuses" || statusKey(b) === stF.toLowerCase().replace(/[\s-]/g, "")));
-
-  // Every booking of this dermatologist that falls in the hour row starting at t.
-  // Rows are hourly (slotTimesFor), so a slot is placed in the latest row that
-  // starts at or before it; the old half-hour bucket had no row to land in for
-  // anything booked at :30–:59, and find() showed only the first of two guests
-  // booked in the same hour — the rest were silently hidden.
-  const rowFor = (hm: string) => {
-    let hit = SLOT_TIMES[0];
-    for (const s of SLOT_TIMES) if (s <= hm) hit = s;
-    return hit;
-  };
-  const cellsFor = (prov: string, t: string) =>
-    rows
-      .filter((b) => {
-        if (bookingProvider(b) !== prov) return false;
-        const d = bookingSlotDate(b);
-        return d ? rowFor(clinicHM(d)) === t : false;
-      })
-      .sort((a, b) => (bookingSlotDate(a)?.getTime() ?? 0) - (bookingSlotDate(b)?.getTime() ?? 0));
-
-  const APK: Record<string, string> = {
-    confirmed: "bg-ok-bg text-ok shadow-[inset_3px_0_0_var(--color-ok)]",
-    pending: "bg-warn-bg text-warn shadow-[inset_3px_0_0_var(--color-warn)]",
-    inprogress: "bg-info-bg text-info shadow-[inset_3px_0_0_var(--color-info)]",
-    late: "bg-err-bg text-err shadow-[inset_3px_0_0_var(--color-err)]",
-    completed: "bg-sage text-ink2 shadow-[inset_3px_0_0_var(--color-border)]",
-    cancelled: "bg-dis-bg text-dis line-through",
-    noshow: "bg-err-bg text-err",
-  };
 
   const count = (k: string) => rows.filter((b) => statusKey(b) === k).length;
 
@@ -1030,8 +1162,9 @@ export function Today() {
               className={`px-3 py-2 text-[12.5px] font-bold ${kind === v ? "bg-primary text-white" : "bg-surface text-ink2"}`}>{l}</button>
           ))}
         </div>
+        <Btn kind="ghost" onClick={() => setSalesOpen(true)}>Today's sales</Btn>
         <Btn kind="ghost" onClick={() => window.print()}>Print list</Btn>
-        <Btn kind="gold" onClick={() => setNewOpen(true)}>+ Walk-in</Btn>
+        <Btn kind="gold" onClick={() => { setNewPreset(null); setNewOpen(true); }}>+ Walk-in</Btn>
       </>}>
       <Hint id="today-live" steps={[
         "This is the live appointment book for the selected centre and date — one column per dermatologist. Switch between dermatologist consultations and treatments with the toggle.",
@@ -1054,50 +1187,11 @@ export function Today() {
             ]} />
 
             {view === "day" ? (
-              providers.length === 0 ? (
-                <Empty title="No dermatologists to show" hint="Add dermatologists under Care → Dermatologists, or switch to the list view." />
-              ) : (
-                <Card className="overflow-x-auto">
-                  <div style={{ minWidth: Math.max(760, 56 + providers.length * 170) }}>
-                    <div className="grid border-b border-border bg-ivory" style={{ gridTemplateColumns: `56px repeat(${providers.length},1fr)` }}>
-                      <div className="p-2 text-[11.5px] font-bold">Time</div>
-                      {providers.map((p) => {
-                        const doc = (doctorsQ.data?.data ?? []).find((d) => d.name === p);
-                        return (
-                          <div key={p} className="border-l border-border p-2 text-[11.5px] font-bold">
-                            {p}
-                            <span className="block font-mono text-[9px] font-medium text-ink3">
-                              {doc?.designation ?? (doc?.tier === "senior-consultant" ? "Senior Dermatologist" : "Dermatologist")}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    {SLOT_TIMES.map((t) => (
-                      <div key={t} className="grid min-h-[34px] border-b border-border last:border-0" style={{ gridTemplateColumns: `56px repeat(${providers.length},1fr)` }}>
-                        <div className="border-r border-border p-1.5 font-mono text-[10px] text-ink3">{t}</div>
-                        {providers.map((p) => {
-                          const cell = cellsFor(p, t);
-                          return (
-                            <div key={p} className="flex flex-col gap-0.5 border-l border-border p-0.5">
-                              {cell.map((bk) => {
-                                const d = bookingSlotDate(bk);
-                                return (
-                                  <button key={bk._id} onClick={() => setSel(bk._id)}
-                                    className={`block w-full rounded px-2 py-1 text-left text-[10.5px] ${APK[statusKey(bk)] ?? "bg-dis-bg text-dis"}`}>
-                                    <b className="block text-[11px] font-bold">{bk.fullName}</b>
-                                    <span className="opacity-85">{d ? `${clinicHM(d)} · ` : ""}{bookingServiceName(bk, "").split("—")[0]}</span>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ))}
-                  </div>
-                </Card>
-              )
+              <DayBookGrid date={day} bookings={allRows} filterKind={kind as "" | "consultation" | "treatment"}
+                onOpen={(id) => setSel(id)} onChanged={bookingsQ.reload}
+                onCheckIn={(id) => setSel(id)} onCheckOut={(id) => setSel(id)}
+                onInvoice={(id) => bill.openForBooking(id, branchId || null)}
+                onNewAt={(preset) => { setNewPreset(preset); setNewOpen(true); }} />
             ) : null}
 
             <div className={`mt-4 flex flex-wrap items-center justify-between gap-3 ${view === "list" ? "print-only-list" : ""}`}>
@@ -1138,7 +1232,9 @@ export function Today() {
         )}
       </Async>
 
-      <NewBookingModal open={newOpen} onClose={() => setNewOpen(false)} onBooked={bookingsQ.reload} />
+      <NewBookingModal open={newOpen} onClose={() => setNewOpen(false)} onBooked={bookingsQ.reload} preset={{ date: day, ...(newPreset ?? {}) }} />
+      <TodaysSalesModal open={salesOpen} onClose={() => setSalesOpen(false)} date={day} />
+      <InvoiceModal open={!!bill.invoiceId} invoiceId={bill.invoiceId} onClose={() => bill.setInvoiceId(null)} onChanged={bookingsQ.reload} />
       <BookingDrawer id={sel} onClose={() => setSel(null)} onChanged={bookingsQ.reload} />
     </Page>
   );
@@ -1829,6 +1925,8 @@ export function PatientDetail() {
     setSp(next, { replace: true });
   }, [id, sp, setSp]);
   const patientListPath = routeState?.returnTo || (role === "doctor" ? "/doctor/my-patients" : "/patients");
+  // The guest's live membership plan (member number, credits) — separate from the legacy summary fields.
+  const gm = useApi(() => (id ? api.memberships.currentForUser(id).catch(() => null) : Promise.resolve(null)), [id, grantOpen, payOpen]);
 
   const q = useApi(async () => {
     if (!id) throw new Error("No patient selected — open one from the Patients list.");
@@ -2187,6 +2285,12 @@ export function PatientDetail() {
                       ["Payment", p.zenMembershipPaymentMethod ? <span>{p.zenMembershipPaymentMethod}{p.zenMembershipAmount ? ` · ${fmtINR(p.zenMembershipAmount)}` : ""} {p.zenMembershipPaymentStatus === "pending" ? <Tag kind="warn">due</Tag> : p.zenMembershipPaymentStatus === "paid" ? <Tag kind="ok">paid</Tag> : null}</span> : "—"],
                     ];
                     if (p.zenMembershipGrantedBy) rows.push(["Granted by", p.zenMembershipGrantedBy]);
+                    if (gm.data?.kind === "plan") {
+                      if (gm.data.memberNumber) rows.splice(1, 0, ["Member no.", <span className="font-mono">{gm.data.memberNumber}</span>]);
+                      const d = gm.data.discounts || {};
+                      rows.push(["Benefits", [d.servicesPercent ? `${d.servicesPercent}% off services` : "", d.productsPercent ? `${d.productsPercent}% off products` : "", d.packagesPercent ? `${d.packagesPercent}% off packages` : ""].filter(Boolean).join(" · ") || "—"]);
+                      if (gm.data.credits.length) rows.push(["Credits left", gm.data.credits.map((c) => `${c.serviceName ?? c.serviceId} ${c.balance}/${c.entitled}`).join(", ")]);
+                    }
                     return (
                       <>
                         <div className="grid gap-1">{rows.map(([k, v]) => <Row key={k} k={k} v={v} />)}</div>
@@ -2382,7 +2486,14 @@ function GrantMembershipModal({ open, onClose, user, onDone }: { open: boolean; 
   const m = customMonths ? Math.max(1, Math.min(60, parseInt(customMonths, 10) || 0)) : months;
   const suggested = Math.round((yearly / 12) * m);
   const extending = isVip(user) && !!user.zenMembershipExpiryDate && new Date(user.zenMembershipExpiryDate) > new Date();
-  useEffect(() => { if (open) { setReview(false); setErr(null); setMonths(12); setCustomMonths(""); setAmount(""); setMethod("Paid at clinic"); setStartDate(isoDay()); setAutoRenew(false); setNotes(""); setTxn(""); } }, [open]);
+  // Membership plans (Zenoti tiers). Picking one sells that plan with its own validity, number and benefits;
+  // "Zen membership (legacy)" keeps the older months-based grant.
+  const plans = useApi(() => (open ? api.memberships.list().catch(() => []) : Promise.resolve([])), [open]);
+  const [planId, setPlanId] = useState("");
+  const plan = (plans.data ?? []).find((x) => x._id === planId) || null;
+  const { branchId } = useStore();
+  useEffect(() => { if (open) { setReview(false); setErr(null); setMonths(12); setCustomMonths(""); setAmount(""); setMethod("Paid at clinic"); setStartDate(isoDay()); setAutoRenew(false); setNotes(""); setTxn(""); setPlanId(""); } }, [open]);
+  useEffect(() => { if (plan) { setCustomMonths(String(plan.validityMonths)); setAmount(String(plan.price)); } }, [plan?._id]);
   useEffect(() => { setAmount(String(suggested)); }, [suggested]);
   const amt = Number(amount);
   const fromDate = extending ? new Date(user.zenMembershipExpiryDate as string) : new Date(startDate || isoDay());
@@ -2391,6 +2502,13 @@ function GrantMembershipModal({ open, onClose, user, onDone }: { open: boolean; 
   const submit = async () => {
     setBusy(true); setErr(null);
     try {
+      if (plan) {
+        const r = await api.memberships.sell({ userId: user._id, membershipId: plan._id, branchId: branchId || null, startDate: extending ? undefined : startDate, paymentMethod: method === "Paid at clinic" ? "Cash" : method, amount: method === "Complimentary" ? 0 : amt, paymentReceived: method !== "Pay at clinic", transactionId: txn || undefined, notes: notes || undefined, autoRenew });
+        audit("USER_ACTIVATED", `${extending ? "Extended" : "Granted"} ${plan.name} · ${method} · ₹${method === "Complimentary" ? 0 : amt} for ${user.fullName}`, { userId: user._id });
+        toast(r.message || `${plan.name} granted`);
+        onDone();
+        return;
+      }
       await api.patients.assignMembership(user._id, {
         months: m, paymentMethod: method, amount: method === "Complimentary" ? 0 : amt,
         paymentReceived: method !== "Pay at clinic", startDate: extending ? undefined : startDate, autoRenew, notes: notes || undefined, transactionId: txn || undefined,
@@ -2405,7 +2523,14 @@ function GrantMembershipModal({ open, onClose, user, onDone }: { open: boolean; 
     <Modal open={open} onClose={onClose} title={extending ? "Extend Zen membership" : "Grant Zen membership"} wide>
       {!review ? (
         <>
-          <div className="mb-1 text-[11px] font-bold text-ink2">Duration</div>
+          {(plans.data ?? []).length > 0 && (
+            <div className="mb-3">
+              <Sel label="Plan" value={plan ? `${plan.name} · ${fmtINR(plan.price)} · ${plan.validityMonths} mo` : "Zen membership (legacy, by months)"} onChange={(v) => setPlanId((plans.data ?? []).find((x) => `${x.name} · ${fmtINR(x.price)} · ${x.validityMonths} mo` === v)?._id ?? "")}
+                options={["Zen membership (legacy, by months)", ...(plans.data ?? []).filter((x) => x.isActive).map((x) => `${x.name} · ${fmtINR(x.price)} · ${x.validityMonths} mo`)]} />
+              {plan && <div className="mt-1 text-[11.5px] text-ink3">{[plan.discounts.servicesPercent ? `${plan.discounts.servicesPercent}% off services` : "", plan.discounts.productsPercent ? `${plan.discounts.productsPercent}% off products` : "", plan.credits.length ? `credits: ${plan.credits.map((c) => `${c.serviceName || c.serviceId} ×${c.qty}`).join(", ")}` : ""].filter(Boolean).join(" · ") || "No % discount set on this plan yet."} · member no. {(plan.prefix ?? "") + String(plan.seed ?? 1)}</div>}
+            </div>
+          )}
+          <div className="mb-1 text-[11px] font-bold text-ink2">Duration{plan ? " (from the plan)" : ""}</div>
           <div className="flex flex-wrap gap-1.5">
             {Array.from({ length: 12 }, (_, i) => i + 1).map((n) => (
               <button key={n} type="button" onClick={() => { setMonths(n); setCustomMonths(""); }}
@@ -2778,6 +2903,9 @@ export function Chat() {
   const [typing, setTyping] = useState<Record<string, string>>({});
   const [presence, setPresence] = useState<Record<string, boolean>>({});
   const [assignOpen, setAssignOpen] = useState(false);
+  // ezConnect-style composer: private notes (staff-only) and templates (required on WhatsApp outside the 24h window).
+  const [noteMode, setNoteMode] = useState(false);
+  const [tplOpen, setTplOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const typingSent = useRef(false);
@@ -2924,7 +3052,7 @@ export function Chat() {
       // REST is the source of truth; the server fans the message out to the socket rooms.
       const res = file
         ? await api.chat.sendAttachment(activeId, file, text)
-        : await api.chat.send(activeId, text);
+        : await api.chat.send(activeId, text, noteMode ? { kind: "note" } : undefined);
       if (res?._id) setLiveMsgs((prev) => (prev.some((x) => x._id === res._id) ? prev : [...prev, res]));
       setMsg("");
       setSelectedFile(null);
@@ -3009,7 +3137,7 @@ export function Chat() {
                     <div className="min-w-0 flex-1">
                       <div className="flex justify-between gap-1.5 text-[12.5px] font-bold">
                         <span className="truncate">{who}</span>
-                        <span className="shrink-0 font-mono text-[10px] font-normal text-ink3">{fmtAgo(th.lastMessageTime)}</span>
+                        <span className="shrink-0 font-mono text-[10px] font-normal text-ink3">{th.channel === "whatsapp" ? <span className="mr-1 rounded bg-ok-bg px-1 text-[9px] font-bold text-ok">WA</span> : null}{fmtAgo(th.lastMessageTime)}</span>
                       </div>
                       <div className="truncate text-[11px] text-ink3">
                         {typing[th._id] ? <em>typing…</em> : th.lastMessage || "No messages yet"}
@@ -3034,6 +3162,7 @@ export function Chat() {
                     <B>{nameOf(cur.userId, "Guest")}</B>{" "}
                     <span className="text-[11px] text-ink3">
                       · {cur.branchName}
+                      {cur.channel === "whatsapp" ? <> · <span className="font-bold text-ok">WhatsApp</span>{cur.waPhone ? ` ${cur.waPhone}` : ""}{cur.lastInboundAt && Date.now() - new Date(cur.lastInboundAt).getTime() < 86400000 ? " · reply window open" : " · reply window closed — use a template"}</> : null}
                       {presence[cur._id] ? " · online" : ""}
                       {assignedName ? ` · with ${assignedName}` : " · unassigned"}
                     </span>
@@ -3065,6 +3194,8 @@ export function Chat() {
                     <div className="m-auto text-[12.5px] text-ink3">No messages yet — say hello.</div>
                   ) : msgs.map((m) => m.messageType === "system" ? (
                     <div key={m._id} className="self-center rounded-full bg-ivory px-3 py-1 text-[11px] text-ink3">{m.content}</div>
+                  ) : m.messageType === "note" ? (
+                    <div key={m._id} className="max-w-[78%] self-end rounded-xl border border-gold/60 bg-gold/15 px-3 py-2 text-[12.5px]"><div className="text-[10px] font-bold uppercase tracking-wider text-gold-dark">Private note · {m.senderName}</div><div className="whitespace-pre-wrap">{m.content}</div><div className="mt-0.5 text-[10px] text-ink3">{fmtAgo(m.createdAt)}</div></div>
                   ) : (
                     <div key={m._id} className={`group relative max-w-[82%] rounded-xl px-3 py-2 text-[12.5px] leading-normal ${
                       m.senderModel === "User" ? "self-start rounded-bl-[3px] bg-sage" : "self-end rounded-br-[3px] bg-primary text-white"}`}>
@@ -3111,6 +3242,13 @@ export function Chat() {
                         className="grid h-8 w-8 place-items-center rounded-full text-ink3 hover:bg-surface hover:text-err" aria-label="Remove attachment">✕</button>
                     </div>
                   )}
+                  <div className="mb-1.5 flex flex-wrap items-center gap-1.5 text-[11px]">
+                    <button type="button" onClick={() => setNoteMode(false)} className={`rounded-md px-2 py-0.5 font-bold ${!noteMode ? "bg-primary text-white" : "bg-ivory text-ink2"}`}>Reply</button>
+                    <button type="button" onClick={() => setNoteMode(true)} className={`rounded-md px-2 py-0.5 font-bold ${noteMode ? "bg-gold text-primary" : "bg-ivory text-ink2"}`}>Private note</button>
+                    {!noteMode && cur.status === "active" && <button type="button" onClick={() => setTplOpen(true)} className="rounded-md bg-ivory px-2 py-0.5 font-bold text-ink2 hover:bg-border/60">Choose template</button>}
+                    {noteMode && <span className="text-ink3">Notes are seen by staff only — never sent to the guest.</span>}
+                    {cur.channel === "whatsapp" && !noteMode && <span className="text-ink3">WhatsApp messages can be sent freely only within 24h of the guest's last message.</span>}
+                  </div>
                   <div className="flex gap-2">
                   <input ref={fileRef} type="file" className="hidden"
                     accept="image/jpeg,image/png,image/gif,image/webp,image/heic,image/heif,application/pdf,text/plain,text/csv,application/json,application/rtf,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
@@ -3122,7 +3260,7 @@ export function Chat() {
                     maxLength={2000}
                     onKeyDown={(e) => e.key === "Enter" && !sending && send()}
                     disabled={cur.status !== "active"}
-                    placeholder={cur.status === "active" ? `Reply as ${admin?.name ?? "the clinic"}…` : "This conversation is closed"}
+                    placeholder={cur.status !== "active" ? "This conversation is closed" : noteMode ? "Private note for the team…" : `Reply as ${admin?.name ?? "the clinic"}…`}
                     className="flex-1 rounded-lg border border-border bg-ivory px-2.5 py-2 text-[12.5px] outline-none focus:border-gold-dark disabled:opacity-60" />
                   <Btn disabled={sending || (!msg.trim() && !selectedFile) || cur.status !== "active"} onClick={send}>{sending ? "Sending…" : "Send"}</Btn>
                   </div>
@@ -3134,6 +3272,15 @@ export function Chat() {
           </Card>
         )}
       </Async>
+        <TemplatePicker open={tplOpen} onClose={() => setTplOpen(false)} channel="whatsapp" context={{ userId: cur ? idOf(cur.userId) : undefined }} onPick={async (t, rendered) => {
+          setTplOpen(false);
+          if (!activeId) return;
+          if (cur?.channel === "whatsapp") {
+            setSending(true);
+            try { const res = await api.chat.send(activeId, rendered, { templateId: t._id }); if (res?._id) setLiveMsgs((prev) => (prev.some((x) => x._id === res._id) ? prev : [...prev, res])); threads.reload(); }
+            catch (e) { toast((e as Error).message); } finally { setSending(false); }
+          } else setMsg(rendered);
+        }} />
 
       <Modal open={assignOpen} onClose={() => setAssignOpen(false)} title="Assign conversation">
         <div className="flex max-h-[360px] flex-col gap-1 overflow-y-auto">

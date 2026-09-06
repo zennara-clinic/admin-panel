@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   Page, Btn, Tag, Stats, Card, DataTable, B, Note, Hint, In, Sel, Menu, Modal, SecH, Tabs,
   AreaChart, HBars, GBars, ChartCard, Stars, Drawer, Area, Switch, DeleteModal,
-  Async, Empty, StaleBanner, exportCsv,
+  Async, Empty, StaleBanner, exportCsv, DateRange,
 } from "../ui";
 import { useStore, ROLE_LABEL } from "../store";
 import api from "../lib/api";
@@ -13,9 +13,9 @@ import {
   addClinicDays, clinicWeekday, fmtCompactINR, fmtDate, fmtDateFull, fmtDayKey, fmtINR, fmtWhen,
   initials, isoDay, mapToRows, nameOf, pct,
 } from "../lib/format";
-import type { Admin, AdminRole, AuditEntry, Branch, ConsultationReview, PermissionGroup, PermissionKey, ProductReview, Role, ServiceReview } from "../lib/types";
+import type { Admin, AdminRole, AuditEntry, Branch, ConsultationReview, PermissionGroup, PermissionKey, ProductReview, Role, ServiceReview, StaffAssignment } from "../lib/types";
 import { SESSION_SLOT_MINUTES } from "../lib/scheduling";
-import { RolesManager, StaffAccessFields, RoleChip, useCatalog } from "./access";
+import { RolesManager, StaffAccessFields, RoleChip, useCatalog, CentreRolesEditor, SignInControls } from "./access";
 
 /* ================= BRANCHES ================= */
 const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
@@ -380,6 +380,22 @@ function BranchEditor({ open, branch, onClose, onSaved, onDelete }: {
         </div>
         <div className="-mt-1 text-[10.5px] text-ink3">Used by the app for directions and the nearest-centre order. Paste from Google Maps (right-click the pin → copy coordinates).</div>
 
+        <SecH t="Billing & GST" em="· printed on every receipt from this centre" />
+        <div className="grid gap-3 md:grid-cols-2">
+          <In label="Legal entity name" value={f.legalName ?? ""} onChange={(v) => setF((s) => ({ ...s, legalName: v }))} placeholder="e.g. Curispro Health Care Services Pvt Ltd" />
+          <In label="Invoice prefix" value={f.invoicePrefix ?? ""} onChange={(v) => setF((s) => ({ ...s, invoicePrefix: v.toUpperCase() }))} placeholder="e.g. ZNJH (blank = ZN + initials)" hint="Invoices run ZNJH26 0001…; receipts ZNJH26R1…" />
+          <In label="GSTIN" value={f.gstin ?? ""} onChange={(v) => setF((s) => ({ ...s, gstin: v.toUpperCase() }))} placeholder="36AAJCC4657R2ZT" />
+          <In label="PAN" value={f.pan ?? ""} onChange={(v) => setF((s) => ({ ...s, pan: v.toUpperCase() }))} placeholder="AAJCC4657R" />
+          <In label="State code" value={f.stateCode ?? "36"} onChange={(v) => setF((s) => ({ ...s, stateCode: v }))} hint="36 = Telangana; decides CGST+SGST vs IGST" />
+          <In label="Zone" value={f.zone ?? "Hyderabad"} onChange={(v) => setF((s) => ({ ...s, zone: v }))} hint="Groups centres in the switcher" />
+          <Switch label="Pharmacy centre" sub="Retail-only shelf; grouped apart from clinics" on={!!f.isPharmacy} onChange={(v) => setF((s) => ({ ...s, isPharmacy: v }))} />
+        </div>
+        <SecH t="Guest messaging" em="· avoid double messages with Zenoti's ezConnect" />
+        <div className="grid gap-3 md:grid-cols-2">
+          <Switch label="Send WhatsApp from here" sub="Confirmations, reminders, check-in codes, receipts" on={f.messaging?.whatsappEnabled !== false} onChange={(v) => setF((s) => ({ ...s, messaging: { ...(s.messaging ?? {}), whatsappEnabled: v } }))} />
+          <Switch label="Zenoti (ezConnect) messages guests at this centre" sub="On = our automatic WhatsApp is skipped for appointments booked in Zenoti; check-in codes still go" on={!!f.messaging?.zenotiSendsGuestMessages} onChange={(v) => setF((s) => ({ ...s, messaging: { ...(s.messaging ?? {}), zenotiSendsGuestMessages: v } }))} gold />
+          <In label="WhatsApp number guests write to" value={f.messaging?.whatsappNumber ?? ""} onChange={(v) => setF((s) => ({ ...s, messaging: { ...(s.messaging ?? {}), whatsappNumber: v } }))} placeholder="+91 …" hint="Routes incoming WhatsApp messages to this centre's inbox" />
+        </div>
         <SecH t="Booking" />
         <div className="grid grid-cols-2 gap-3">
           <div>
@@ -571,7 +587,7 @@ export function Reviews() {
 
 /* ================= ANALYTICS ================= */
 const ANALYTICS_RANGES: Record<string, number> = { "7 days": 7, "30 days": 30, "90 days": 90, "6 months": 182, "This year": 365 };
-const ANALYTICS_TABS: [string, (number | string)?][] = [["Revenue"], ["Appointments"], ["Dermatologists"], ["Services"], ["Patients"], ["Products & orders"], ["Packages & memberships"], ["Stock"]];
+const ANALYTICS_TABS: [string, (number | string)?][] = [["Revenue"], ["Appointments"], ["Dermatologists"], ["Services"], ["Patients"], ["Products & orders"], ["Packages & memberships"], ["Stock"], ["Staff sales"]];
 
 /** Group a daily series into ≤ n buckets (sum) for bar charts. */
 function bucketSeries<T>(rows: T[], n: number, pick: (r: T) => number): number[] {
@@ -933,6 +949,7 @@ export function Analytics() {
                 </>
               )}
 
+              {tab === 8 && <StaffSalesPanel />}
               {tab === 7 && (
                 inventory ? (
                   <>
@@ -976,8 +993,8 @@ const Row = ({ k, v }: { k: string; v: string }) => (
 type StaffRow = Admin & {
   canSignIn?: boolean;
   isVerified?: boolean;
-  /** Every account signs in with an emailed one-time code. */
-  loginMethod?: "otp";
+  /** Emailed code for everyone; 'password' once an administrator has set one. */
+  loginMethod?: "otp" | "password";
   onAllowList?: boolean;
 };
 
@@ -1008,10 +1025,12 @@ export function Roles() {
 }
 
 function StaffTab({ roles }: { roles: Role[] }) {
-  const { toast, audit, canManageStaff, admin, can } = useStore();
+  const { toast, audit, canManageStaff, admin, can, branches } = useStore();
   const [invOpen, setInvOpen] = useState(false);
   const [sel, setSel] = useState<StaffRow | null>(null);
   const [del, setDel] = useState<StaffRow | null>(null);
+  const [cloneOf, setCloneOf] = useState<StaffRow | null>(null);
+  const [endOf, setEndOf] = useState<StaffRow | null>(null);
   const [search, setSearch] = useState("");
   const debounced = useDebounced(search);
 
@@ -1061,7 +1080,7 @@ function StaffTab({ roles }: { roles: Role[] }) {
           <Empty title="No staff accounts" hint="Add the people who need to sign into the panel."
             action={canManageStaff ? <Btn onClick={() => setInvOpen(true)}>+ Add staff</Btn> : undefined} />
         ) : (
-          <DataTable cols={["Name", "Email", "Role", "Panel", "Last sign-in", "Status"]}
+          <DataTable cols={["Name", "Email", "Job", "Role", "Panel", "Sign-in", "Last sign-in", "Status"]}
             onRow={(i) => setSel(rows[i])}
             rows={rows.map((s) => [
               <span key={s._id} className="flex items-center gap-2">
@@ -1071,12 +1090,16 @@ function StaffTab({ roles }: { roles: Role[] }) {
                 <B>{s.name || s.email.split("@")[0]}</B>
               </span>,
               <span key={`${s._id}e`} className="text-[11.5px]">{s.email}</span>,
+              <span key={`${s._id}j`} className="text-[11.5px] text-ink2">{s.jobTitle || "—"}</span>,
               s.role === "staff"
                 ? (roleName(s.customRoleId) ? <RoleChip key={`${s._id}r`} role={{ name: roleName(s.customRoleId)!, color: roles.find((r) => r._id === s.customRoleId)?.color }} /> : <Tag key={`${s._id}r`} kind="warn">no role</Tag>)
                 : <Tag key={`${s._id}r`} kind={s.role === "super_admin" ? "gold" : "info"}>{ROLE_LABEL[s.role]}</Tag>,
               s.role === "doctor" ? "Dermatologist panel" : s.role === "therapist" ? "Floor panel" : "Admin panel",
+              <Tag key={`${s._id}m`} kind={s.hasPassword ? "ok" : "info"}>{s.hasPassword ? "password" : "code"}</Tag>,
               s.lastLogin ? fmtWhen(s.lastLogin) : "Never",
-              !s.isActive
+              s.terminatedAt
+                ? <Tag key={`${s._id}s`} kind="mute">Left {fmtWhen(s.terminatedAt)}</Tag>
+                : !s.isActive
                 ? <Tag key={`${s._id}s`} kind="mute">Deactivated</Tag>
                 : s.canSignIn === false
                   ? <Tag key={`${s._id}s`} kind="warn">Not on allow-list</Tag>
@@ -1094,13 +1117,20 @@ function StaffTab({ roles }: { roles: Role[] }) {
               {sel.lastLogin ? `Last signed in ${fmtDateFull(sel.lastLogin)}` : "Has never signed in"}
             </div>
 
-            <Note className="my-0 text-[11.5px]">
-              Signs into the {sel.role === "doctor" ? "dermatologist" : sel.role === "therapist" ? "therapist" : "admin"} panel with <B>{sel.email}</B> and a 6-digit code emailed at sign-in — no account has a password.
-            </Note>
+            {canManageStaff ? (
+              <SignInControls accountId={sel._id} email={sel.email} phone={sel.phone} hasPassword={!!sel.hasPassword}
+                onChanged={() => { q.reload(); }} />
+            ) : (
+              <Note className="my-0 text-[11.5px]">
+                Signs into the {sel.role === "doctor" ? "dermatologist" : sel.role === "therapist" ? "therapist" : "admin"} panel with <B>{sel.email}</B> and {sel.hasPassword ? "a password or " : ""}a 6-digit code emailed at sign-in.
+              </Note>
+            )}
 
             {canManageStaff ? (
               <>
                 <In label="Display name" value={sel.name ?? ""} onChange={(v) => setSel({ ...sel, name: v })} />
+                <In label="Job title" value={sel.jobTitle ?? ""} onChange={(v) => setSel({ ...sel, jobTitle: v })}
+                  placeholder="Clinic Manager, Front desk, Accountant…" hint="For display and reports. What they can do is the role below." />
                 {/*
                   * Account type is shown, not chosen. Each kind is created and
                   * retired where it belongs — super admins in ADMIN_EMAILS,
@@ -1140,11 +1170,17 @@ function StaffTab({ roles }: { roles: Role[] }) {
                     onPermissions={(next) => setSel({ ...sel, permissions: [...next] })}
                   />
                 )}
+                {sel.role !== "super_admin" && (
+                  <CentreRolesEditor roles={roles} branches={branches} value={sel.assignments ?? []}
+                    onChange={(next) => setSel({ ...sel, assignments: next })} />
+                )}
 
                 <Btn onClick={async () => {
                   try {
                     await api.staff.update(sel._id, {
                       name: sel.name,
+                      jobTitle: sel.jobTitle ?? null,
+                      assignments: sel.assignments ?? [],
                       doctorId: sel.role === "doctor" ? (sel.doctorId ?? null) : null,
                       ...(sel.role === "staff" ? { customRoleId: sel.customRoleId ?? null, permissions: sel.permissions ?? [] } : {}),
                     });
@@ -1155,13 +1191,19 @@ function StaffTab({ roles }: { roles: Role[] }) {
 
                 {sel._id !== admin?._id && (
                   <>
-                    <Btn kind="ghost" onClick={async () => {
-                      try {
-                        await api.staff.toggle(sel._id);
-                        toast(sel.isActive ? "Sign-in blocked" : "Account reactivated");
-                        q.reload(); setSel(null);
-                      } catch (e) { toast((e as Error).message); }
-                    }}>{sel.isActive ? "Deactivate login" : "Reactivate login"}</Btn>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Btn kind="ghost" onClick={async () => {
+                        try {
+                          await api.staff.toggle(sel._id);
+                          toast(sel.isActive ? "Sign-in blocked" : "Account reactivated");
+                          q.reload(); setSel(null);
+                        } catch (e) { toast((e as Error).message); }
+                      }}>{sel.isActive ? "Deactivate login" : "Reactivate login"}</Btn>
+                      {(sel.role === "staff" || sel.role === "therapist") && (
+                        <Btn kind="ghost" onClick={() => { setCloneOf(sel); setSel(null); }}>Clone access</Btn>
+                      )}
+                    </div>
+                    {!sel.terminatedAt && <Btn kind="ghost" onClick={() => { setEndOf(sel); setSel(null); }}>End employment…</Btn>}
                     <Btn kind="danger" onClick={() => { setSel(null); setDel(sel); }}>Remove staff</Btn>
                   </>
                 )}
@@ -1179,8 +1221,11 @@ function StaffTab({ roles }: { roles: Role[] }) {
       </Drawer>
 
       <Modal open={invOpen} onClose={() => setInvOpen(false)} title="Add staff account" wide>
-        <AddStaffForm roles={roles} groups={catalog.data ?? []} onDone={() => { setInvOpen(false); q.reload(); }} />
+        <AddStaffForm roles={roles} groups={catalog.data ?? []} branches={branches} onDone={() => { setInvOpen(false); q.reload(); }} />
       </Modal>
+
+      <CloneStaffModal source={cloneOf} onClose={() => setCloneOf(null)} onDone={() => { setCloneOf(null); q.reload(); }} />
+      <EndEmploymentModal target={endOf} onClose={() => setEndOf(null)} onDone={() => { setEndOf(null); q.reload(); }} />
 
       <DeleteModal open={!!del} onClose={() => setDel(null)} what={del ? `staff account "${del.email}"` : ""}
         onConfirm={async (reason) => {
@@ -1208,59 +1253,177 @@ function StaffTab({ roles }: { roles: Role[] }) {
  *   · Therapists are created on the Therapists page, with their centres.
  * Every account signs in with an emailed code; none has a password.
  */
-function AddStaffForm({ roles, groups, onDone }: { roles: Role[]; groups: PermissionGroup[]; onDone: () => void }) {
+function AddStaffForm({ roles, groups, branches, onDone }: { roles: Role[]; groups: PermissionGroup[]; branches: Branch[]; onDone: () => void }) {
   const { toast, audit } = useStore();
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [jobTitle, setJobTitle] = useState("");
   const [customRoleId, setCustomRoleId] = useState<string | null>(roles[0]?._id ?? null);
   const [perms, setPerms] = useState<Set<PermissionKey>>(new Set());
+  const [assignments, setAssignments] = useState<StaffAssignment[]>([]);
+  const [signIn, setSignIn] = useState<"code" | "generate" | "typed">("generate");
+  const [password, setPassword] = useState("");
+  const [notify, setNotify] = useState<"email" | "whatsapp" | "both">("email");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [issued, setIssued] = useState<{ password: string; email: string; delivery?: { email: string | null; whatsapp: string | null } | null } | null>(null);
 
   const submit = async () => {
     setBusy(true); setErr(null);
     try {
-      // Always 'staff', and never a password: they sign in with a code emailed
-      // to this address. The server refuses any other account type here.
+      // Always 'staff'; the server refuses any other account type here.
       const res = await api.staff.create({
-        email: email.trim().toLowerCase(), name: name.trim() || undefined, role: "staff",
-        customRoleId, permissions: [...perms],
+        email: email.trim().toLowerCase(), name: name.trim() || undefined, phone: phone.trim() || null, role: "staff",
+        jobTitle: jobTitle.trim() || null, customRoleId, permissions: [...perms], assignments,
+        ...(signIn === "generate" ? { generatePassword: true, notify } : signIn === "typed" ? { password, notify } : {}),
       });
       const created = res.data as Admin;
       audit("SETTINGS_UPDATED", `Created staff ${created.email}`, { staffId: created._id });
       toast(`${created.email} added`);
+      if (res.temporaryPassword) { setIssued({ password: res.temporaryPassword, email: created.email, delivery: res.delivery }); return; }
       onDone();
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
 
+  if (issued) {
+    return (
+      <div className="grid gap-3">
+        <Note kind="gold">Account created. This temporary password is shown once; they choose their own at first sign-in.</Note>
+        <div className="text-[12.5px]">Sign-in email: <B>{issued.email}</B></div>
+        <div className="rounded-xl border border-border bg-ivory px-4 py-3 text-center font-mono text-[20px] font-bold tracking-wide">{issued.password}</div>
+        {issued.delivery && (
+          <div className="text-[11.5px] text-ink3">
+            {issued.delivery.email && <div>Email: {issued.delivery.email}</div>}
+            {issued.delivery.whatsapp && <div>WhatsApp: {issued.delivery.whatsapp}</div>}
+          </div>
+        )}
+        <div className="flex justify-end"><Btn onClick={onDone}>Done</Btn></div>
+      </div>
+    );
+  }
+
+  const pill = (on: boolean) => `rounded-full border px-3 py-1 text-[12px] font-semibold ${on ? "border-primary bg-cream" : "border-border bg-surface hover:bg-ivory"}`;
+
   return (
     <>
       <div className="grid gap-3">
-        <In label="Work email" type="email" value={email} onChange={setEmail} placeholder="name@zennara.in"
-          hint="Their sign-in address. A 6-digit code goes to it at every sign-in." />
-        <In label="Display name" value={name} onChange={setName} placeholder="Leave blank to use the email prefix" />
+        <div className="grid gap-3 sm:grid-cols-2">
+          <In label="Work email" type="email" value={email} onChange={setEmail} placeholder="name@zennara.in" hint="Their sign-in address." />
+          <In label="Display name" value={name} onChange={setName} placeholder="Leave blank to use the email prefix" />
+          <In label="Phone" value={phone} onChange={setPhone} placeholder="10-digit mobile" hint="Needed to send sign-in details by WhatsApp." />
+          <In label="Job title" value={jobTitle} onChange={setJobTitle} placeholder="Front desk, Clinic Manager, Accountant…" />
+        </div>
         <StaffAccessFields
           roles={roles} groups={groups}
           customRoleId={customRoleId} permissions={perms}
           onRole={setCustomRoleId} onPermissions={setPerms}
         />
+        <CentreRolesEditor roles={roles} branches={branches} value={assignments} onChange={setAssignments} />
+
+        <div className="grid gap-2 rounded-xl border border-border bg-ivory/60 p-3">
+          <SecH t="Sign-in" em="· how they get into the panel" />
+          <div className="flex flex-wrap gap-1.5">
+            <button onClick={() => setSignIn("generate")} className={pill(signIn === "generate")}>Generate a temporary password</button>
+            <button onClick={() => setSignIn("typed")} className={pill(signIn === "typed")}>Set a password now</button>
+            <button onClick={() => setSignIn("code")} className={pill(signIn === "code")}>Emailed code only</button>
+          </div>
+          {signIn === "typed" && <In label="Password" type="password" value={password} onChange={setPassword} hint="At least 8 characters. Stored as a hash." />}
+          {signIn !== "code" && (
+            <div>
+              <div className="mb-1 text-[11px] font-bold text-ink2">Send the details by</div>
+              <div className="flex flex-wrap gap-1.5">
+                {(["email", "whatsapp", "both"] as const).map((c) => (
+                  <button key={c} onClick={() => setNotify(c)} disabled={c !== "email" && !phone.trim()} className={`${pill(notify === c)} disabled:opacity-40`}>
+                    {c === "email" ? "Email" : c === "whatsapp" ? "WhatsApp" : "Email and WhatsApp"}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="text-[11px] text-ink3">
+            {signIn === "code" ? "They sign in with a 6-digit code emailed at every sign-in. A password can be set later." : "A temporary password must be changed at first sign-in. The emailed code keeps working too."}
+          </div>
+        </div>
       </div>
 
-      <Note>
-        They sign into the admin panel with this email and a 6-digit code emailed at every sign-in — there is no
-        password to set or share. What they can see and do is the role above.
-      </Note>
       <Note className="text-[11.5px]">
         Adding a <B>dermatologist</B> or <B>therapist</B>? Create them on their own page instead — that is where their
-        profile, centres and password live. <B>Super admins</B> come from the server's <code>ADMIN_EMAILS</code> list
+        profile and centres live. <B>Super admins</B> come from the server's <code>ADMIN_EMAILS</code> list
         and appear here once they first sign in.
       </Note>
       {err && <Note kind="crit">{err}</Note>}
       <div className="mt-3 flex justify-end gap-2">
         <Btn kind="ghost" onClick={onDone}>Cancel</Btn>
-        <Btn disabled={busy || !/^\S+@\S+\.\S+$/.test(email)} onClick={submit}>{busy ? "Adding…" : "Add staff"}</Btn>
+        <Btn disabled={busy || !/^\S+@\S+\.\S+$/.test(email) || (signIn === "typed" && password.length < 8)} onClick={submit}>{busy ? "Adding…" : "Add staff"}</Btn>
       </div>
     </>
+  );
+}
+
+/** Copy one account's access (role, job, centres) onto a new person. Never the password. */
+function CloneStaffModal({ source, onClose, onDone }: { source: StaffRow | null; onClose: () => void; onDone: () => void }) {
+  const { toast, audit } = useStore();
+  const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { setEmail(""); setName(""); setPhone(""); setErr(null); }, [source?._id]);
+  return (
+    <Modal open={!!source} onClose={onClose} title={source ? `Clone ${source.name || source.email}'s access` : ""}>
+      <div className="grid gap-3">
+        <Note className="my-0">Copies the role, job title, centres and centre roles onto a new account. The password and any doctor link are not copied.</Note>
+        <In label="New person's work email" type="email" value={email} onChange={setEmail} placeholder="name@zennara.in" />
+        <In label="Display name" value={name} onChange={setName} />
+        <In label="Phone" value={phone} onChange={setPhone} placeholder="10-digit mobile" />
+        {err && <Note kind="crit">{err}</Note>}
+        <div className="flex justify-end gap-2">
+          <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
+          <Btn disabled={busy || !/^\S+@\S+\.\S+$/.test(email)} onClick={async () => {
+            if (!source) return;
+            setBusy(true); setErr(null);
+            try {
+              const res = await api.staff.clone(source._id, { email: email.trim().toLowerCase(), name: name.trim() || undefined, phone: phone.trim() || null });
+              audit("SETTINGS_UPDATED", `Cloned ${source.email} onto ${email}`, { staffId: (res.data as Admin)?._id });
+              toast(res.message || "Cloned"); onDone();
+            } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+          }}>{busy ? "Cloning…" : "Create account"}</Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/** Zenoti "Terminate": a dated end of employment with a reason; sign-in ends on that date. */
+function EndEmploymentModal({ target, onClose, onDone }: { target: StaffRow | null; onClose: () => void; onDone: () => void }) {
+  const { toast, audit } = useStore();
+  const [reason, setReason] = useState("");
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { setReason(""); setDate(new Date().toISOString().slice(0, 10)); setErr(null); }, [target?._id]);
+  return (
+    <Modal open={!!target} onClose={onClose} title={target ? `End employment — ${target.name || target.email}` : ""}>
+      <div className="grid gap-3">
+        <Note className="my-0" kind="crit">Their sign-in stops on the date below and every open session is ended. Audit history is kept. A dermatologist is also removed from the app.</Note>
+        <In label="Last working day" type="date" value={date} onChange={setDate} />
+        <Area label="Reason" value={reason} onChange={setReason} placeholder="Resigned, contract ended, …" />
+        {err && <Note kind="crit">{err}</Note>}
+        <div className="flex justify-end gap-2">
+          <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
+          <Btn kind="danger" disabled={busy || reason.trim().length < 3} onClick={async () => {
+            if (!target) return;
+            setBusy(true); setErr(null);
+            try {
+              const res = await api.staff.terminate(target._id, { reason: reason.trim(), effectiveAt: date });
+              audit("SETTINGS_UPDATED", `Ended employment for ${target.email} · ${reason.trim()}`, { staffId: target._id });
+              toast(res.message || "Employment ended"); onDone();
+            } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+          }}>{busy ? "Saving…" : "End employment"}</Btn>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -1409,5 +1572,32 @@ export function AuditLog() {
         or denied action is recorded too — that is often the more interesting row.
       </Note>
     </Page>
+  );
+}
+
+
+/* ------------------------------ staff sales ------------------------------ */
+/** Zenoti's "Employee sales" report: who sold what, from closed bills (sale-by per line). */
+function StaffSalesPanel() {
+  const { branchId } = useStore();
+  const [from, setFrom] = useState(isoDay(new Date(Date.now() - 29 * 86400000)));
+  const [to, setTo] = useState(isoDay());
+  const q = useApi(() => api.analytics.salesByStaff({ from, to, branchId: branchId || undefined }), [from, to, branchId]);
+  const rows = (q.data?.data ?? []) as import("../lib/types").StaffSalesRow[];
+  const totals = q.data?.totals;
+  return (
+    <div className="mt-3">
+      <div className="mb-3 flex flex-wrap items-end gap-3">
+        <DateRange from={from} to={to} onChange={(a, b) => { setFrom(a); setTo(b); }} />
+        <Btn kind="ghost" disabled={!rows.length} onClick={() => exportCsv(`staff-sales-${from}-${to}`, ["Staff", "Services", "Products", "Packages", "Memberships", "Other", "Total", "Items", "Bills"], rows.map((r) => [r.staff, r.services, r.products, r.packages, r.memberships, r.other, r.total, r.items, r.bills]))}>Export CSV</Btn>
+        {totals && <span className="text-[12px] text-ink3">{totals.staff} staff · {totals.invoices} bills · <B>{fmtINR(totals.total)}</B></span>}
+      </div>
+      <Async q={q} label="Adding up sales…" rows={4}>
+        {() => rows.length === 0 ? <Empty title="No sales in this range" hint="Sales are attributed by the Sale-by on each bill line; visits paid without a bill go to their dermatologist." /> : (
+          <DataTable cols={["Staff", "Services", "Products", "Packages", "Memberships", "Other", "Total", "Items", "Bills"]}
+            rows={rows.map((r) => [<B key="s">{r.staff}</B>, fmtINR(r.services), fmtINR(r.products), fmtINR(r.packages), fmtINR(r.memberships), fmtINR(r.other), <B key="t">{fmtINR(r.total)}</B>, String(r.items), String(r.bills)])} />
+        )}
+      </Async>
+    </div>
   );
 }

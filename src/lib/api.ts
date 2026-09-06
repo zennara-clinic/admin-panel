@@ -15,15 +15,31 @@ import type {
   BulkPreview, BulkResult, FormTemplate, FormSubmissionRow, PatientPhoto, ProductAvailability,
   PurchaseOrder, PurchaseOrderStatus, ProductReview, ServiceCard, ServiceReview, ServiceType, SupportMessage, TaxonomyTree, User, Vendor,
   Role, PermissionGroup, PermissionKey,
+  StaffAssignment,
+  DayBook,
+  GuestStats,
+  Invoice, InvoiceLine, GuestPackageBalance, PaymentMethod,
+  AssignmentLedger, Membership, MembershipAssignment, GuestMembership,
+  CurrentStockRow, StockSummary, StockCount, StockTransfer, StockValuation,
+  MessageTemplate, StaffSalesRow,
 } from "./types";
 import type { VisitCodeLog } from "./types";
 
 /* ============================ auth ============================ */
 export const auth = {
+  /** Is this address a panel account, and does it have a password set? */
   checkEmail: (email: string) =>
-    requestRaw<{ authorized: boolean }>("/admin/auth/check-email", {
+    request<{ isAuthorized: boolean; hasPassword: boolean; methods: ("password" | "otp")[]; role?: string | null }>("/admin/auth/check-email", {
       method: "POST", body: { email }, anonymous: true,
     }),
+  /** Email + password, for accounts an administrator has given a password. */
+  loginPassword: (email: string, password: string) =>
+    request<{ token: string; admin: Admin; expiresAt: string }>("/admin/auth/login-password", {
+      method: "POST", body: { email, password }, anonymous: true,
+    }),
+  /** Pick or change my own password. Returns a fresh session (the old ones end). */
+  changePassword: (body: { currentPassword?: string; newPassword: string }) =>
+    request<{ token: string; admin: Admin; expiresAt: string }>("/admin/auth/me/password", { method: "PUT", body }),
   requestOtp: (email: string) =>
     requestRaw("/admin/auth/login", { method: "POST", body: { email }, anonymous: true }),
   resendOtp: (email: string) =>
@@ -114,7 +130,18 @@ export type NewBooking = {
   userId?: Id;
   gender?: string;
   dateOfBirth?: string;
+  /** One visit, several services — each becomes its own booking sharing a visitGroupId. */
+  services?: { consultationId: Id; specialistId?: string | null; specialistName?: string | null; specialistTier?: string | null; time: string; amount?: number | null; packageAssignmentId?: Id | null; packageSessionId?: Id | null }[];
+  /** The desk saw "not working at this time" and chose Yes. */
+  force?: boolean;
+  referralSource?: string | null;
+  referredByUserId?: Id | null;
+  packageAssignmentId?: Id | null;
+  packageSessionId?: Id | null;
 };
+
+/** Thrown shape when the server asks the desk to confirm an off-shift booking. */
+export type BookingWarning = { code: "PROVIDER_NOT_WORKING" | "DERMATOLOGIST_SLOT_UNAVAILABLE"; reason?: string; message: string };
 
 export type DermPick = { specialistId?: string; specialistName?: string };
 
@@ -176,6 +203,9 @@ export const bookings = {
     request<Booking>(`/bookings/admin/${id}/payment`, { method: "PUT", body }),
   addNote: (id: Id, note: string) =>
     request<Booking>(`/bookings/admin/${id}/notes`, { method: "PUT", body: { note } }),
+  /** Step the last desk status change back (undo check-in / check-out / no-show / cancel). */
+  undo: (id: Id, reason?: string) =>
+    request<Booking>(`/bookings/admin/${id}/undo`, { method: "POST", body: { reason } }),
   availableSlots: (q: Query) => request<{ slots?: string[]; availableSlots?: string[] }>("/bookings/available-slots", { query: q }),
   cleanupExpired: () => requestRaw("/bookings/admin/cleanup-expired", { method: "POST" }),
 };
@@ -253,6 +283,14 @@ export const packageAssignments = {
   remove: (id: Id) => requestRaw(`/package-assignments/${id}`, { method: "DELETE" }),
   uploadProof: (id: Id, form: FormData) =>
     request<PackageAssignment>(`/package-assignments/${id}/payment-proof`, { method: "POST", body: form }),
+  /** Balances, redemptions, freeze / transfer history, refund, terms — the Zenoti package detail. */
+  ledger: (id: Id) => request<AssignmentLedger>(`/package-assignments/${id}/ledger`),
+  freeze: (id: Id, body: { reason?: string; resumeOn?: string | null }) => requestRaw<PackageAssignment>(`/package-assignments/${id}/freeze`, { method: "POST", body }),
+  unfreeze: (id: Id) => requestRaw<PackageAssignment>(`/package-assignments/${id}/unfreeze`, { method: "POST" }),
+  transfer: (id: Id, body: { toUserId: Id; services: { serviceId: string; qty: number }[]; reason?: string }) =>
+    requestRaw<PackageAssignment>(`/package-assignments/${id}/transfer`, { method: "POST", body }),
+  refundPreview: (id: Id) => request<{ paid: number; unitsTotal: number; unitsLeft: number; suggested: number; balances: AssignmentLedger["balances"] }>(`/package-assignments/${id}/refund-preview`),
+  refund: (id: Id, body: { amount: number; method: string; reference?: string; reason: string }) => requestRaw<PackageAssignment>(`/package-assignments/${id}/refund`, { method: "POST", body }),
   saveServiceCard: (body: Record<string, unknown>) =>
     requestRaw("/package-assignments/service-card", { method: "POST", body }),
   sendServiceOtp: (body: Record<string, unknown>) =>
@@ -277,7 +315,7 @@ export type DoctorStats = {
   recent: { _id: string; guest: string; userId?: string; service?: string | null; kind: "consultation" | "treatment"; date: string; time: string; status: string; amount: number; paymentStatus?: string; rating?: number | null; source?: string }[];
   feedback: { guest: string; rating: number; feedback: string; date: string }[];
 };
-export type DoctorAccount = { _id: Id; email: string; phone?: string | null; role: string; isActive: boolean; lastLogin?: string | null; loginMethod: 'otp'; placeholderEmail: boolean };
+export type DoctorAccount = { _id: Id; email: string; phone?: string | null; role: string; isActive: boolean; lastLogin?: string | null; loginMethod: 'otp' | 'password'; loginMethods?: ('otp' | 'password')[]; hasPassword?: boolean; passwordSetAt?: string | null; mustChangePassword?: boolean; placeholderEmail: boolean; jobTitle?: string | null; terminatedAt?: string | null };
 
 export const doctors = {
   list: (q?: Query) => requestRaw<Doctor[]>("/doctors", { query: q }),
@@ -307,6 +345,9 @@ export const doctors = {
  * session policy to every saved range.
  */
 export const schedules = {
+  /** Every dermatologist's shift, leave and blocks for one date — the desk day book. */
+  dayShifts: (date: string, branchId?: string | null) =>
+    request<DayBook>("/dermatologists/day-shifts", { query: { date, ...(branchId ? { branchId } : {}) } }),
   get: (doctorId: string) =>
     request<{ dermatologist: Doctor; schedule: DermatologistSchedule; canEdit: boolean }>(
       `/dermatologists/${encodeURIComponent(doctorId)}/schedule`,
@@ -596,8 +637,12 @@ export const chat = {
       byBranch: { branchId: Id; branchName: string; activeChats: number; totalUnread: number }[];
     }>("/chat/admin/stats", { query: { branchId } }),
   messages: (chatId: Id, q?: Query) => requestRaw<ChatMessage[]>(`/chat/${chatId}/messages`, { query: q }),
-  send: (chatId: Id, content: string) =>
-    request<ChatMessage>(`/chat/${chatId}/messages`, { method: "POST", body: { content } }),
+  /** `kind: "note"` = staff-only private note; `templateId` sends a template (required on WhatsApp threads outside the 24h window). */
+  send: (chatId: Id, content: string, opts?: { kind?: "note"; templateId?: Id; bookingId?: Id }) =>
+    request<ChatMessage>(`/chat/${chatId}/messages`, { method: "POST", body: { content, ...(opts || {}) } }),
+  setTags: (chatId: Id, body: { tags?: string[]; pinned?: boolean }) => request<Chat>(`/chat/admin/${chatId}/tags`, { method: "PUT", body }),
+  /** Open the guest's WhatsApp thread from the desk by sending an approved template. */
+  startWhatsApp: (body: { userId: Id; templateId: Id; bookingId?: Id; branchId?: Id | null }) => request<ChatMessage>("/chat/admin/start-whatsapp", { method: "POST", body }),
   sendAttachment: (chatId: Id, file: File, caption = "") => {
     const form = new FormData();
     form.append("file", file);
@@ -792,7 +837,115 @@ export type Dashboard = {
   daily: { date: string; consultations: number; treatments: number; products: number; packages: number; memberships: number; total: number; bookings: number }[];
 };
 
+/** A row on the "Today's sales" register. */
+export type SaleRow = { kind: "invoice" | "visit" | "order" | "package"; id: Id; ref: string | null; receipt?: string | null; customer: string | null; phone: string | null; patientId: string | null; userId?: Id | null; items: string[]; amount: number; due: number; method: string | null; methods?: Record<string, number>; at: string | null; status: string; source: string; staff: string | null };
+export type TodaysSales = { date: string | null; totals: { count: number; amount: number; visits: number; products: number; packages: number; due: number; dueCount: number; open?: number; void?: number; byMethod: Record<string, number> }; rows: SaleRow[] };
+
+/* ============================ billing ============================ */
+export type NewInvoiceLine = {
+  consultationId?: Id; productId?: Id; inventoryId?: Id; packageId?: Id; membershipId?: Id; bookingId?: Id | null;
+  kind?: "custom"; name?: string; qty?: number; unitPrice?: number | string; taxPercent?: number; priceIncludesTax?: boolean;
+  discount?: number; discountPercent?: number; soldById?: string | null; soldByName?: string | null; soldByModel?: "Doctor" | "Admin" | null;
+  useMrp?: boolean; batchNo?: string; expiryDate?: string; hsn?: string; notes?: string;
+};
+/** Desk bills — Zenoti's POS. One open invoice per visit; closing settles the visits. */
+export const invoices = {
+  meta: () => request<{ methods: PaymentMethod[]; lineKinds: string[] }>("/invoices/meta"),
+  list: (q?: Query) => requestRaw<Invoice[]>("/invoices", { query: q }) as Promise<Envelope<Invoice[]> & { totals?: { count: number; amount: number; paid: number; due: number; byStatus: Record<string, { count: number; amount: number; paid: number; due: number }> } }>,
+  lookup: (number: string) => request<Invoice>("/invoices/lookup", { query: { number } }),
+  get: (id: Id) => request<Invoice>(`/invoices/${id}`),
+  /** Open (or return the live) bill for a visit / visit group / guest. */
+  open: (body: { bookingId?: Id; bookingIds?: Id[]; visitGroupId?: string; userId?: Id; branchId?: Id | null; lines?: NewInvoiceLine[] }) =>
+    requestRaw<Invoice>("/invoices", { method: "POST", body }) as Promise<Envelope<Invoice> & { existing?: boolean }>,
+  update: (id: Id, body: { comments?: string; invoiceDiscount?: { percent?: number; amount?: number; reason?: string }; interState?: boolean; guest?: { name?: string; phone?: string; email?: string; gstin?: string; stateCode?: string } }) =>
+    request<Invoice>(`/invoices/${id}`, { method: "PUT", body }),
+  addLine: (id: Id, body: NewInvoiceLine) => request<Invoice>(`/invoices/${id}/lines`, { method: "POST", body }),
+  updateLine: (id: Id, lineId: Id, body: Partial<Pick<InvoiceLine, "qty" | "unitPrice" | "taxPercent" | "priceIncludesTax" | "discount" | "discountPercent" | "soldById" | "soldByName" | "soldByModel" | "notes" | "hsn" | "batchNo" | "expiryDate">> & { restoreMembershipDiscount?: boolean }) =>
+    request<Invoice>(`/invoices/${id}/lines/${lineId}`, { method: "PUT", body }),
+  removeLine: (id: Id, lineId: Id) => request<Invoice>(`/invoices/${id}/lines/${lineId}`, { method: "DELETE" }),
+  guestPackages: (id: Id) => requestRaw<GuestPackageBalance[]>(`/invoices/${id}/packages`) as Promise<Envelope<GuestPackageBalance[]> & { membership?: GuestMembership | null }>,
+  applyMembershipCredits: (id: Id, body?: { lineIds?: Id[] }) =>
+    requestRaw<Invoice>(`/invoices/${id}/redeem-membership`, { method: "POST", body: body || {} }) as Promise<Envelope<Invoice> & { applied?: number }>,
+  applyPackage: (id: Id, body: { packageAssignmentId: Id; lineIds?: Id[] }) =>
+    requestRaw<Invoice>(`/invoices/${id}/redeem`, { method: "POST", body }) as Promise<Envelope<Invoice> & { applied?: number }>,
+  removeRedemption: (id: Id, lineId: Id) => request<Invoice>(`/invoices/${id}/redeem/${lineId}`, { method: "DELETE" }),
+  addPayment: (id: Id, body: { method: PaymentMethod; amount: number; customName?: string; reference?: string; note?: string }) =>
+    requestRaw<Invoice>(`/invoices/${id}/payments`, { method: "POST", body }) as Promise<Envelope<Invoice> & { closed?: boolean }>,
+  voidPayment: (id: Id, paymentId: Id, reason?: string) => request<Invoice>(`/invoices/${id}/payments/${paymentId}`, { method: "DELETE", body: { reason } }),
+  close: (id: Id, allowDue = false) => request<Invoice>(`/invoices/${id}/close`, { method: "POST", body: { allowDue } }),
+  reopen: (id: Id) => request<Invoice>(`/invoices/${id}/reopen`, { method: "POST" }),
+  void: (id: Id, reason: string) => request<Invoice>(`/invoices/${id}/void`, { method: "POST", body: { reason } }),
+  receipt: (id: Id, print = false) => request<{ html: string; text: string; invoiceNumber: string; receiptNumber: string | null }>(`/invoices/${id}/receipt`, { query: print ? { print: 1 } : undefined }),
+  send: (id: Id, body: { channel: "email" | "whatsapp" | "both"; email?: string; phone?: string }) =>
+    requestRaw<{ email?: { ok: boolean; to?: string; error?: string }; whatsapp?: { ok: boolean; to?: string; error?: string } }>(`/invoices/${id}/send`, { method: "POST", body }),
+};
+
+/* ============================ message templates ============================ */
+export const templates = {
+  list: (q?: Query) => requestRaw<MessageTemplate[]>("/admin/message-templates", { query: q }) as Promise<Envelope<MessageTemplate[]> & { placeholders?: string[] }>,
+  create: (body: Partial<MessageTemplate>) => request<MessageTemplate>("/admin/message-templates", { method: "POST", body }),
+  update: (id: Id, body: Partial<MessageTemplate>) => request<MessageTemplate>(`/admin/message-templates/${id}`, { method: "PUT", body }),
+  remove: (id: Id) => requestRaw(`/admin/message-templates/${id}`, { method: "DELETE" }),
+  preview: (id: Id, body: { userId?: Id; bookingId?: Id; invoiceId?: Id; assignmentId?: Id }) => request<{ body: string; subject: string; vars: Record<string, string> }>(`/admin/message-templates/${id}/preview`, { method: "POST", body }),
+};
+
+/* ============================ stock control ============================ */
+/** Zenoti's Inventory module beyond the item list: current stock valued three ways, audits, transfers. */
+export const stockControl = {
+  current: (q?: Query) => requestRaw<CurrentStockRow[]>("/admin/stock/current", { query: q }) as Promise<Envelope<CurrentStockRow[]> & { totals?: StockSummary; basis?: string; lastReconcile?: { at: string; ref: string } | null }>,
+  valuation: (q?: Query) => request<StockValuation>("/admin/stock/valuation", { query: q }),
+  adjust: (body: { inventoryId: Id; newQty?: number; delta?: number; reason: string }) => requestRaw("/admin/stock/adjust", { method: "POST", body }),
+  counts: (q?: Query) => request<StockCount[]>("/admin/stock/counts", { query: q }),
+  count: (id: Id) => request<StockCount>(`/admin/stock/counts/${id}`),
+  createCount: (body: { branchId?: Id | "none" | "all" | null; category?: string; vendorId?: Id; search?: string; title?: string }) => requestRaw<StockCount>("/admin/stock/counts", { method: "POST", body }),
+  updateCount: (id: Id, body: { lines?: { lineId?: Id; inventoryId?: Id; counted: number | null; note?: string }[]; notes?: string; title?: string }) => request<StockCount>(`/admin/stock/counts/${id}`, { method: "PUT", body }),
+  submitCount: (id: Id, allowMissing = false) => requestRaw<StockCount>(`/admin/stock/counts/${id}/submit`, { method: "POST", body: { allowMissing } }),
+  reconcileCount: (id: Id) => requestRaw<StockCount>(`/admin/stock/counts/${id}/reconcile`, { method: "POST" }),
+  cancelCount: (id: Id, reason?: string) => requestRaw<StockCount>(`/admin/stock/counts/${id}/cancel`, { method: "POST", body: { reason } }),
+  transfers: (q?: Query) => request<StockTransfer[]>("/admin/stock/transfers", { query: q }),
+  transfer: (id: Id) => request<StockTransfer>(`/admin/stock/transfers/${id}`),
+  createTransfer: (body: { fromBranchId: Id; toBranchId: Id; kind?: "transfer" | "return"; lines: { inventoryId: Id; qty: number; note?: string }[]; notes?: string; send?: boolean }) => requestRaw<StockTransfer>("/admin/stock/transfers", { method: "POST", body }),
+  sendTransfer: (id: Id) => requestRaw<StockTransfer>(`/admin/stock/transfers/${id}/send`, { method: "POST" }),
+  receiveTransfer: (id: Id, lines?: { lineId: Id; receivedQty: number }[]) => requestRaw<StockTransfer>(`/admin/stock/transfers/${id}/receive`, { method: "POST", body: { lines } }),
+  cancelTransfer: (id: Id, reason?: string) => requestRaw<StockTransfer>(`/admin/stock/transfers/${id}/cancel`, { method: "POST", body: { reason } }),
+};
+
+/* ============================ memberships ============================ */
+export const memberships = {
+  list: (q?: Query) => request<Membership[]>("/memberships", { query: q }),
+  get: (id: Id) => request<Membership>(`/memberships/${id}`),
+  create: (body: Partial<Membership>) => request<Membership>("/memberships", { method: "POST", body }),
+  update: (id: Id, body: Partial<Membership>) => request<Membership>(`/memberships/${id}`, { method: "PUT", body }),
+  toggle: (id: Id) => request<Membership>(`/memberships/${id}/toggle`, { method: "PATCH" }),
+  members: (q?: Query) => request<MembershipAssignment[]>("/memberships/members", { query: q }),
+  member: (id: Id) => request<MembershipAssignment>(`/memberships/members/${id}`),
+  /** Grant / sell a plan from the desk without a bill (the bill path is an invoice line). */
+  sell: (body: { userId: Id; membershipId: Id; branchId?: Id | null; startDate?: string; paymentMethod?: string; amount?: number; paymentReceived?: boolean; transactionId?: string; notes?: string; autoRenew?: boolean }) =>
+    requestRaw<MembershipAssignment>("/memberships/members", { method: "POST", body }),
+  updateMember: (id: Id, body: { validUntil?: string | null; notes?: string; autoRenew?: boolean; payment?: { isReceived?: boolean; paymentMethod?: string; transactionId?: string; amountPaid?: number; balanceDue?: number } }) =>
+    request<MembershipAssignment>(`/memberships/members/${id}`, { method: "PUT", body }),
+  cancelMember: (id: Id, body: { reason: string; refundAmount?: number; refundMethod?: string }) =>
+    requestRaw<MembershipAssignment>(`/memberships/members/${id}/cancel`, { method: "POST", body }),
+  currentForUser: (userId: Id) => request<GuestMembership | null>(`/memberships/current/${userId}`),
+};
+
+/** Held time on a provider's diary (Zenoti block-outs and desk blocks). */
+export const providerBlocks = {
+  list: (q: { from: string; to?: string; branchId?: string | null; doctorId?: string | null }) =>
+    requestRaw<import("./types").DayBookBlock[]>("/provider-blocks", { query: q as Query }),
+  create: (body: { date: string; startTime: string; endTime: string; doctorId?: string | null; adminId?: Id | null; branchId?: Id | null; title?: string; notes?: string; color?: string | null }) =>
+    request<import("./types").DayBookBlock>("/provider-blocks", { method: "POST", body }),
+  update: (id: Id, body: { date?: string; startTime?: string; endTime?: string; title?: string; notes?: string; color?: string | null }) =>
+    request<import("./types").DayBookBlock>(`/provider-blocks/${id}`, { method: "PUT", body }),
+  remove: (id: Id) => request<import("./types").DayBookBlock>(`/provider-blocks/${id}`, { method: "DELETE" }),
+};
+
 export const analytics = {
+  /** Zenoti's "Today's sales" register: every payment taken on a clinic day. */
+  todaySales: (q?: { date?: string; branchId?: string | null }) =>
+    request<TodaysSales>("/admin/analytics/sales/today", { query: (q || {}) as Query }),
+  /** Zenoti's "Employee sales": sale-by per invoice line over a range. */
+  salesByStaff: (q?: Query) => requestRaw<StaffSalesRow[]>("/admin/analytics/sales/by-staff", { query: q }) as Promise<Envelope<StaffSalesRow[]> & { totals?: { total: number; staff: number; invoices: number } }>,
   /** One-call clinic dashboard: revenue per stream, counts, dermatologist board. */
   dashboard: (q?: Query) => request<Dashboard>("/admin/analytics/dashboard", { query: q }),
   financial: (q?: Query) => request<FinancialAnalytics>("/admin/analytics/financial", { query: q }),
@@ -829,14 +982,34 @@ export const audit = {
     requestRaw("/admin/audit-logs", { method: "POST", body }),
 };
 
+/** Delivery report for sign-in details: 'sent', 'skipped: …' or 'failed: …' per channel. */
+export type CredentialDelivery = { email: string | null; whatsapp: string | null };
+export type CredentialChannel = "email" | "whatsapp" | "both" | "none";
+
 export const staff = {
   list: (q?: Query) => requestRaw<Admin[]>("/admin/staff", { query: q }),
   roles: () => request<{ id: string; label: string; description?: string }[]>("/admin/staff/roles"),
-  create: (body: { email: string; name?: string; role: string; doctorId?: Id | null; phone?: string | null; branchId?: Id | null; branchIds?: Id[]; customRoleId?: Id | null; permissions?: PermissionKey[] }) =>
-    requestRaw<Admin>("/admin/staff", { method: "POST", body }),
+  create: (body: {
+    email: string; name?: string; role: string; doctorId?: Id | null; phone?: string | null; branchId?: Id | null; branchIds?: Id[];
+    customRoleId?: Id | null; permissions?: PermissionKey[]; jobTitle?: string | null; assignments?: StaffAssignment[];
+    password?: string; generatePassword?: boolean; mustChangePassword?: boolean; notify?: CredentialChannel;
+  }) =>
+    requestRaw<Admin>("/admin/staff", { method: "POST", body }) as Promise<Envelope<Admin> & { temporaryPassword?: string; delivery?: CredentialDelivery | null }>,
   update: (id: Id, body: Partial<Admin>) => request<Admin>(`/admin/staff/${id}`, { method: "PUT", body }),
   toggle: (id: Id) => request<Admin>(`/admin/staff/${id}/toggle-status`, { method: "PATCH" }),
   remove: (id: Id) => requestRaw(`/admin/staff/${id}`, { method: "DELETE" }),
+  /** Zenoti "Update Password": set a chosen or generated password. A generated one comes back once. */
+  setPassword: (id: Id, body: { password?: string; generate?: boolean; mustChange?: boolean; notify?: CredentialChannel }) =>
+    requestRaw<Admin>(`/admin/staff/${id}/password`, { method: "PUT", body }) as Promise<Envelope<Admin> & { temporaryPassword?: string; delivery?: CredentialDelivery }>,
+  /** Zenoti "Reset Password": issue a temporary password and send it by email / WhatsApp. */
+  sendCredentials: (id: Id, channel: Exclude<CredentialChannel, "none">) =>
+    requestRaw<Admin>(`/admin/staff/${id}/send-credentials`, { method: "POST", body: { channel } }) as Promise<Envelope<Admin> & { temporaryPassword?: string; delivery?: CredentialDelivery }>,
+  /** Copy this account's access onto a new person. */
+  clone: (id: Id, body: { email: string; name?: string; phone?: string | null }) =>
+    requestRaw<Admin>(`/admin/staff/${id}/clone`, { method: "POST", body }),
+  /** End employment on a date, with a reason; sign-in ends on that date. */
+  terminate: (id: Id, body: { reason: string; effectiveAt?: string }) =>
+    requestRaw<Admin>(`/admin/staff/${id}/terminate`, { method: "POST", body }),
 };
 
 /* ============================ zenoti (CRM) ============================ */
@@ -1031,7 +1204,7 @@ export const api = {
   auth, branches, patients, bookings, services, serviceTypes, categories, packages, packageAssignments, consultationNotes,
   doctors, availability, productAvailability, patientPhotos, purchaseOrders, bulk, formTemplates, schedules, feeRequests, products, brands, formulations, coupons, orders, inventory, vendors,
   appStudio, media, chat, notifications, reviews, support, preConsult, consentForms,
-  serviceCards, analytics, audit, staff, zenoti, contactChange, banners, roles,
+  serviceCards, analytics, audit, staff, zenoti, contactChange, banners, roles, providerBlocks, invoices, memberships, stockControl, templates,
 };
 
 export default api;

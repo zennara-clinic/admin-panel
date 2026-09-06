@@ -44,6 +44,30 @@ export type Admin = {
   roleName?: string | null;
   /** Effective permission keys the server resolved for this account. */
   permissions?: string[];
+  /** Which centres each permission applies to, from per-centre assignments. */
+  permissionsByBranch?: Record<string, string[]>;
+  /* ---- staff record (Zenoti employee parity) ---- */
+  /** Job title for display and reports — separate from what the account may do. */
+  jobTitle?: string | null;
+  /** Per-centre role assignments; a deputation is a dated temporary posting. */
+  assignments?: StaffAssignment[];
+  /** True after an admin-issued temporary password until the person picks their own. */
+  mustChangePassword?: boolean;
+  loginMethod?: "password" | "otp";
+  loginMethods?: ("password" | "otp")[];
+  terminatedAt?: string | null;
+  terminationReason?: string | null;
+};
+
+/** "Receptionist at Jubilee Hills" — one row of a staff member's centre assignments. */
+export type StaffAssignment = {
+  branchId: Id;
+  roleId?: Id | null;
+  roleName?: string | null;
+  kind?: "primary" | "deputation";
+  from?: string | null;
+  to?: string | null;
+  note?: string;
 };
 
 /** A permission key like `bookings.manage`. */
@@ -126,6 +150,15 @@ export type Branch = {
   /** Holidays / "closed today" — YYYY-MM-DD, optional `to` for a range. */
   closures?: { _id?: Id; date: string; to?: string | null; reason?: string; createdBy?: string | null }[];
   slotDuration?: number;
+  /** Organisation tree + the legal block printed on GST receipts. */
+  zone?: string;
+  isPharmacy?: boolean;
+  invoicePrefix?: string | null;
+  gstin?: string | null;
+  pan?: string | null;
+  legalName?: string | null;
+  stateCode?: string | null;
+  messaging?: { whatsappEnabled?: boolean; zenotiSendsGuestMessages?: boolean; whatsappNumber?: string | null };
   isActive: boolean;
   displayOrder?: number;
   description?: string;
@@ -136,9 +169,45 @@ export type Branch = {
 };
 
 /* ---------------- people ---------------- */
+/** The desk strip GET /users/:id returns: visits, last visit, usual doctor, open bookings, dues. */
+export type GuestStats = {
+  totalVisits: number;
+  lastVisitAt?: string | null;
+  lastVisitService?: string | null;
+  usualDoctor?: { doctorId?: string | null; name?: string | null; visits: number } | null;
+  openBookings: number;
+  nextBookingAt?: string | null;
+  amountDue: number;
+  amountDueBreakdown?: { bookings: number; packages: number };
+  activePackages: { name: string | null; remaining: number | null; total: number | null; validUntil: string | null }[];
+  membership?: { active: boolean; expiresAt: string | null } | null;
+  referralSource?: string | null;
+  totalSpent?: number;
+};
+
+/** One dermatologist's row on the desk day book. */
+export type DayBookProvider = {
+  doctorId: string; name: string; tier?: string; designation?: string; photo?: string | null; displayOrder?: number;
+  onlineBookingEnabled?: boolean; configured: boolean; onLeave: boolean; note?: string; source?: string | null;
+  ranges: { start: string; end: string }[];
+  blocks: DayBookBlock[];
+};
+export type DayBookBlock = { _id: Id; startTime: string; endTime: string; title: string; notes?: string; source: "zenoti" | "panel"; color?: string | null; providerName?: string; zenotiEmployeeId?: string | null };
+export type DayBook = {
+  date: string;
+  branch: { _id: Id; name: string; open: string | null; close: string | null } | null;
+  providers: DayBookProvider[];
+  otherBlocks: DayBookBlock[];
+};
+
 export type User = {
   _id: Id;
   patientId?: string;
+  /** How the guest found the clinic (asked once at the desk). */
+  referralSource?: string | null;
+  referredByUserId?: Id | null;
+  lastVisitAt?: string | null;
+  stats?: GuestStats | null;
   fullName: string;
   email: string;
   phone: string;
@@ -204,6 +273,12 @@ export type ConsultationStage =
   | "follow_up_required" | "no_follow_up";
 
 export type Booking = {
+  /** Several services booked as one desk visit share this id. */
+  visitGroupId?: string | null;
+  /** The desk bill that settles this visit, once one exists. */
+  invoiceId?: Id | null;
+  packageAssignmentId?: Id | null;
+  packageSessionId?: Id | null;
   /** Therapist reception assigned to run this session (Admin login id + name). */
   assignedTherapistId?: Id | null;
   assignedTherapistName?: string | null;
@@ -267,8 +342,9 @@ export type Booking = {
   zenotiLastInboundAt?: string | null;
   /** Snapshot of the Zenoti diary row at the last read. */
   zenotiSource?: {
-    status?: number | string | null; progress?: number | null; invoiceNumber?: string | null;
+    status?: number | string | null; progress?: number | null; invoiceNumber?: string | null; receiptNumber?: string | null;
     packageName?: string | null; startTime?: string | null; endTime?: string | null; vanishedAt?: string | null;
+    createdByName?: string | null; createdAt?: string | null;
   } | null;
   therapistId?: Id | null;
   therapistName?: string;
@@ -310,6 +386,20 @@ export type Consultation = {
   key_benefits?: string[];
   ideal_for?: string[];
   price: number;
+  /** Service master (mirrors Zenoti): code, timing, tax, per-centre price, prerequisites. */
+  code?: string | null;
+  duration_minutes?: number | null;
+  recovery_minutes?: number | null;
+  taxPercent?: number | null;
+  priceIncludesTax?: boolean;
+  centrePrices?: { branchId: Id; price?: number | null; taxPercent?: number | null; available?: boolean }[];
+  eligibleDoctorIds?: string[];
+  prerequisites?: { requiresConsultation?: boolean | null; serviceIds?: string[]; withinDays?: number; note?: string };
+  consumables?: { inventoryId?: Id | null; productId?: Id | null; name?: string; quantity?: number; unit?: string; autoConsume?: boolean }[];
+  addOnIds?: string[];
+  packageOnly?: boolean;
+  policy?: { cancellationWindowHours?: number | null; cancellationFee?: number | null; noShowFee?: number | null; depositAmount?: number | null };
+  zenotiCanBook?: boolean | null;
   cta_label?: string;
   tags?: string[];
   /** Stored as `{ q, a }` — the app reads those keys. */
@@ -372,6 +462,8 @@ export type PackageService = {
   servicePrice?: number;
   customPrice?: number;
   sessions?: number;
+  /** Zenoti "Order": which benefit a redemption draws from first. */
+  redemptionOrder?: number;
   /** Panel-side alias kept for older drafts. */
   name?: string;
   [key: string]: unknown;
@@ -384,6 +476,8 @@ export type Package = {
   description: string;
   /** Months a customer has to use the package after it is assigned (12 = one year). */
   validityMonths?: number;
+  taxPercent?: number;
+  priceIncludesTax?: boolean;
   benefits?: string[];
   services?: PackageService[];
   consultationServices?: PackageService[];
@@ -397,6 +491,25 @@ export type Package = {
   bookingsCount?: number;
   /** Zenoti series package sold when this package is assigned. */
   zenotiPackageId?: string | null;
+  /* Zenoti "Create package" terms (2026-09-06) */
+  code?: string | null;
+  category?: string;
+  packageType?: "series" | "custom";
+  neverExpires?: boolean;
+  validityDays?: number | null;
+  validityStartsAt?: "sale" | "firstRedemption";
+  graceDays?: number;
+  closeWhenConsumed?: boolean;
+  redemption?: { scope: "organization" | "centres"; branchIds: Id[] };
+  centrePrices?: { branchId: Id; price?: number | null; taxPercent?: number | null; available?: boolean }[];
+  maxFreezes?: number;
+  maxFreezeDays?: number;
+  minPartialPaymentPercent?: number;
+  agreementText?: string;
+  version?: number;
+  versions?: { version: number; at: string; by?: string | null; price?: number; validityMonths?: number }[];
+  productBenefits?: { productId?: Id | null; name: string; qty: number }[];
+  bundledProducts?: { productId?: Id | null; name: string; qty: number }[];
   createdAt?: string;
 };
 
@@ -408,8 +521,18 @@ export type PackageAssignment = {
   packageDetails?: { packageName?: string; packagePrice?: number; originalPrice?: number; services?: PackageService[] };
   userDetails?: { fullName?: string; email?: string; phone?: string; patientId?: string; memberType?: string };
   pricing?: { originalAmount?: number; discountPercentage?: number; discountAmount?: number; finalAmount?: number };
-  payment?: { isReceived?: boolean; receivedDate?: string; proofUrl?: string; paymentMethod?: string };
+  payment?: { isReceived?: boolean; receivedDate?: string; proofUrl?: string; paymentMethod?: string; transactionId?: string | null; amountPaid?: number | null; balanceDue?: number | null };
   status: "Active" | "Expired" | "Cancelled" | "Completed";
+  invoiceId?: Id | null;
+  terms?: { version?: number; code?: string | null; validityDays?: number | null; neverExpires?: boolean; validityStartsAt?: "sale" | "firstRedemption"; graceDays?: number; closeWhenConsumed?: boolean; redeemableScope?: "organization" | "centres"; redeemableBranchIds?: string[]; maxFreezes?: number; maxFreezeDays?: number; minPartialPaymentPercent?: number };
+  graceUntil?: string | null;
+  firstRedeemedAt?: string | null;
+  freeze?: { isFrozen?: boolean; frozenAt?: string | null; frozenBy?: string | null; reason?: string | null; resumeOn?: string | null };
+  freezeHistory?: { frozenAt: string; resumedAt: string; days: number; by?: string; resumedBy?: string; reason?: string | null }[];
+  transfers?: { at: string; by?: string; toUserId?: Id; toUserName?: string; toAssignmentId?: Id; services: { serviceId: string; serviceName?: string; qty: number }[]; reason?: string | null }[];
+  transferredFrom?: { assignmentId?: Id | null; userId?: Id | null; userName?: string | null; at?: string | null };
+  redemptions?: { at: string; serviceId: string; serviceName?: string | null; sessionId?: Id; bookingId?: Id; invoiceId?: Id; invoiceNumber?: string; byName?: string; reversed?: boolean }[];
+  refund?: { refundedAt?: string | null; amount?: number | null; method?: string | null; reference?: string | null; reason?: string | null; byName?: string | null };
   validFrom?: string;
   validUntil?: string | null;
   // Where the package's sessions run — clinic the auto-created appointments land at.
@@ -535,6 +658,10 @@ export type Product = {
   code?: string;
   price: number;
   gstPercentage: number;
+  mrp?: number | null;
+  hsn?: string | null;
+  isRx?: boolean | null;
+  trackStock?: boolean;
   image?: string;
   stock: number;
   rating?: number;
@@ -858,6 +985,12 @@ export type Vendor = {
 /* ---------------- engagement ---------------- */
 export type Chat = {
   _id: Id;
+  /** app = in-app chat; whatsapp = the guest's WhatsApp thread. */
+  channel?: "app" | "whatsapp";
+  waPhone?: string | null;
+  lastInboundAt?: string | null;
+  tags?: string[];
+  pinned?: boolean;
   userId: Id | User;
   branchId: Id | Branch;
   branchName: string;
@@ -875,7 +1008,8 @@ export type ChatMessage = {
   senderId: Id;
   senderModel: "User" | "Admin";
   senderName: string;
-  messageType?: "text" | "image" | "file" | "system";
+  messageType?: "text" | "image" | "file" | "system" | "note" | "template";
+  metadata?: { channel?: string; sid?: string; status?: string; error?: string; private?: boolean; media?: { url: string; contentType?: string }[] };
   content: string;
   attachment?: {
     url: string;
@@ -1215,3 +1349,192 @@ export type SlotDay = {
   reason?: string;
   slots: Slot[];
 };
+
+/* ---------------- billing (desk invoices) ---------------- */
+export type InvoiceStatus = "open" | "closed" | "void";
+export type InvoiceLineKind = "service" | "product" | "package" | "membership" | "custom";
+export type PaymentMethod = "Cash" | "Card" | "UPI" | "Custom" | "Razorpay" | "Membership" | "Prepaid" | "GiftCard" | "Points" | "BankTransfer" | "Cheque";
+export type InvoiceLine = {
+  _id: Id;
+  kind: InvoiceLineKind;
+  refId?: Id | null;
+  refModel?: "Consultation" | "Product" | "Inventory" | "Package" | null;
+  bookingId?: Id | null;
+  name: string;
+  code?: string | null;
+  hsn?: string | null;
+  qty: number;
+  unitPrice: number;
+  priceIncludesTax: boolean;
+  taxPercent: number;
+  discount: number;
+  discountPercent: number;
+  redeemed?: { kind: "package" | "membership" | null; packageAssignmentId?: Id | null; membershipAssignmentId?: Id | null; sessionId?: Id | null; label?: string | null };
+  discountSource?: "membership" | "manual" | null;
+  discountLabel?: string | null;
+  membershipAssignmentId?: Id | null;
+  soldById?: string | null;
+  soldByName?: string | null;
+  soldByModel?: "Doctor" | "Admin" | null;
+  batchNo?: string | null;
+  expiryDate?: string | null;
+  inventoryId?: Id | null;
+  packageAssignmentId?: Id | null;
+  notes?: string;
+  listTotal: number;
+  base: number;
+  invoiceDiscountShare: number;
+  net: number;
+  tax: number;
+  total: number;
+};
+export type InvoicePayment = {
+  _id: Id;
+  method: PaymentMethod;
+  customName?: string | null;
+  reference?: string | null;
+  amount: number;
+  paidAt: string;
+  takenByName?: string | null;
+  note?: string;
+  voided?: boolean;
+  voidedAt?: string | null;
+  voidReason?: string | null;
+};
+export type InvoiceTotals = {
+  listTotal: number; base: number; lineDiscount: number; invoiceDiscount: number; redeemed: number;
+  net: number; tax: number; cgst: number; sgst: number; igst: number; rawTotal: number; rounding: number; total: number;
+  paid: number; due: number; change: number;
+};
+export type Invoice = {
+  _id: Id;
+  invoiceNumber: string;
+  receiptNumber?: string | null;
+  branchId: Id | { _id: Id; name: string; invoicePrefix?: string | null };
+  seller?: { name?: string | null; legalName?: string | null; gstin?: string | null; pan?: string | null; stateCode?: string | null; address?: string | null; phone?: string | null; email?: string | null };
+  userId?: Id | (Pick<User, "_id" | "fullName" | "phone" | "email" | "patientId"> & { gender?: string; memberType?: string; zenMembershipExpiryDate?: string | null }) | null;
+  guest: { name?: string | null; phone?: string | null; email?: string | null; patientId?: string | null; gender?: string | null; stateCode?: string | null; gstin?: string | null };
+  visitGroupId?: string | null;
+  status: InvoiceStatus;
+  source: "desk" | "app" | "zenoti";
+  membership?: { kind?: string | null; name?: string | null; memberNumber?: string | null; assignmentId?: Id | null };
+  lines: InvoiceLine[];
+  payments: InvoicePayment[];
+  invoiceDiscount: { percent: number; amount: number; reason?: string };
+  coupon?: { code?: string | null; discount?: number };
+  interState: boolean;
+  totals: InvoiceTotals;
+  taxSummary: { rate: number; taxable: number; tax: number }[];
+  comments?: string;
+  issuedAt: string;
+  closedAt?: string | null;
+  closedByName?: string | null;
+  reopenedAt?: string | null;
+  voidedAt?: string | null;
+  voidedByName?: string | null;
+  voidReason?: string | null;
+  createdByName?: string | null;
+  effectsAppliedAt?: string | null;
+  printedCount?: number;
+  emailedAt?: string | null;
+  whatsappedAt?: string | null;
+  bookingIds?: Id[];
+  createdAt?: string;
+  updatedAt?: string;
+};
+/** A guest's active package with what is left on it — the "Packages" dropdown on a bill. */
+export type GuestPackageBalance = { _id: Id; assignmentId: string; name?: string; validUntil?: string | null; graceUntil?: string | null; frozen?: boolean; redeemable?: { ok: boolean; code?: string; message?: string; grace?: boolean }; balances: { serviceId: string; serviceName: string | null; entitled: number; used: number; balance: number }[] };
+
+/* ---------------- package ledger / memberships ---------------- */
+export type ServiceBalance = { serviceId: string; serviceName: string | null; order?: number; entitled: number; transferred?: number; used: number; balance: number };
+export type AssignmentLedger = {
+  balances: ServiceBalance[];
+  redeemable: { ok: boolean; code?: string; message?: string; grace?: boolean };
+  redemptions: NonNullable<PackageAssignment["redemptions"]>;
+  freeze?: PackageAssignment["freeze"];
+  freezeHistory: NonNullable<PackageAssignment["freezeHistory"]>;
+  transfers: NonNullable<PackageAssignment["transfers"]>;
+  transferredFrom?: PackageAssignment["transferredFrom"] | null;
+  refund?: PackageAssignment["refund"] | null;
+  terms?: PackageAssignment["terms"];
+  graceUntil?: string | null;
+  invoice?: { _id: Id; invoiceNumber: string; receiptNumber?: string | null; totals?: { total: number; paid: number; due: number }; status: string } | null;
+  payment?: PackageAssignment["payment"];
+};
+export type Membership = {
+  _id: Id;
+  name: string;
+  code: string;
+  description?: string;
+  membershipType: "non_recurring" | "recurring";
+  prefix?: string;
+  seed?: number;
+  price: number;
+  taxPercent?: number;
+  priceIncludesTax?: boolean;
+  validityMonths: number;
+  discounts: { servicesPercent: number; productsPercent: number; packagesPercent: number };
+  credits: { serviceId: string; serviceName?: string; qty: number }[];
+  benefits?: string[];
+  branchIds?: Id[];
+  isActive: boolean;
+  isAppDefault?: boolean;
+  terms?: string;
+  source?: "panel" | "zenoti";
+  zenotiMembershipId?: string | null;
+  membersCount?: number;
+  createdAt?: string;
+};
+export type MembershipAssignment = {
+  _id: Id;
+  userId: Id | Pick<User, "_id" | "fullName" | "phone" | "email" | "patientId">;
+  membershipId: Id | Pick<Membership, "_id" | "name" | "code" | "prefix">;
+  memberNumber?: string | null;
+  snapshot?: { name?: string; code?: string; discounts?: Membership["discounts"]; validityMonths?: number };
+  credits: { serviceId: string; serviceName?: string; qty: number; used: number }[];
+  price: number;
+  payment?: { isReceived?: boolean; receivedDate?: string | null; paymentMethod?: string | null; transactionId?: string | null; amountPaid?: number | null; balanceDue?: number | null };
+  invoiceId?: Id | null;
+  status: "Active" | "Expired" | "Cancelled";
+  validFrom?: string;
+  validUntil?: string | null;
+  autoRenew?: boolean;
+  redemptions?: { at: string; kind: "credit" | "discount"; serviceId?: string; serviceName?: string; amount?: number; invoiceId?: Id; invoiceNumber?: string; byName?: string; reversed?: boolean }[];
+  cancellation?: { cancelledAt?: string; byName?: string; reason?: string; refundAmount?: number; refundMethod?: string };
+  notes?: string;
+  source?: "panel" | "app" | "zenoti";
+  soldByName?: string | null;
+  createdAt?: string;
+};
+/** The guest's live membership as the bill and the profile see it (plan row or legacy Zen tier). */
+export type GuestMembership = { kind: "plan" | "legacy"; name: string; memberNumber?: string | null; validUntil?: string | null; discounts: { servicesPercent?: number; productsPercent?: number; packagesPercent?: number }; credits: { serviceId: string; serviceName?: string | null; entitled: number; used: number; balance: number }[]; assignmentId?: Id | null };
+
+/* ---------------- stock control ---------------- */
+export type StockValue = { unit: number; cost: number; tax?: number; at?: string | null };
+export type CurrentStockRow = {
+  _id: Id; code: string | null; name: string; category: string; unit: string | null; batchNo: string | null; expiryDate: string | null;
+  vendor: string | null; branch: string | null; branchId: Id | null; onHand: number; reOrderLevel: number; gstPercent: number;
+  avg: StockValue; configured: StockValue; lastProcured: StockValue; lastCountedAt: string | null; lastReconciledAt: string | null;
+};
+export type StockSummary = { items: number; inStock: number; onHand: number; cost: number; tax: number; configured: number; lastProcured: number; byCategory: Record<string, { items: number; onHand: number; cost: number }> };
+export type StockCountLine = { _id: Id; inventoryId: Id; name: string; code?: string | null; batchNo?: string | null; category?: string | null; unit?: string | null; expected: number; counted: number | null; unitCost: number; note?: string; countedByName?: string | null; countedAt?: string | null; shelfAtReconcile?: number | null; applied?: number | null };
+export type StockCount = {
+  _id: Id; ref: string; branchId: Id | null; branchName: string; title: string; scope?: { category?: string | null; vendorId?: Id | null; search?: string | null };
+  status: "open" | "submitted" | "reconciled" | "cancelled"; lines?: StockCountLine[];
+  totals: { items: number; counted: number; varianceQty: number; varianceValue: number; shortQty: number; excessQty: number; stockValueBefore: number; stockValueAfter: number | null };
+  createdByName?: string | null; submittedAt?: string | null; submittedByName?: string | null; reconciledAt?: string | null; reconciledByName?: string | null; cancelledAt?: string | null; cancelReason?: string | null; notes?: string; createdAt: string;
+};
+export type StockTransferLine = { _id: Id; inventoryId: Id; toInventoryId?: Id | null; name: string; code?: string | null; batchNo?: string | null; expiryDate?: string | null; qty: number; receivedQty?: number | null; unitCost: number; note?: string };
+export type StockTransfer = {
+  _id: Id; ref: string; kind: "transfer" | "return"; fromBranchId: Id; fromBranchName: string; toBranchId: Id; toBranchName: string;
+  status: "draft" | "sent" | "received" | "cancelled"; lines: StockTransferLine[]; totals: { qty: number; value: number }; notes?: string;
+  createdByName?: string | null; sentAt?: string | null; sentByName?: string | null; receivedAt?: string | null; receivedByName?: string | null; cancelledAt?: string | null; cancelReason?: string | null; createdAt: string;
+};
+export type StockValuation = { total: StockSummary; perBranch: (StockSummary & { branchId: Id | null; branch: string })[]; history: { ref: string; branch: string; at: string; before: number; after: number | null; varianceValue: number }[] };
+
+/* ---------------- message templates / staff sales ---------------- */
+export type MessageTemplate = {
+  _id: Id; name: string; key: string; channel: "whatsapp" | "email" | "sms" | "note"; category: "appointment" | "billing" | "package" | "membership" | "marketing" | "general";
+  subject?: string; body: string; twilioContentSid?: string | null; contentVariables?: string[]; isActive: boolean; branchIds?: Id[]; usageCount?: number; lastUsedAt?: string | null; createdAt?: string;
+};
+export type StaffSalesRow = { staff: string; services: number; products: number; packages: number; memberships: number; other: number; total: number; items: number; bills: number };

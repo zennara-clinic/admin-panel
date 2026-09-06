@@ -11,7 +11,8 @@ import {
 import type { ReactNode } from "react";
 import { useStore, ROLE_LABEL, panelAccepts, wrongPanelMessage, type Role } from "./store";
 import { replayTour } from "./tours";
-import { Menu } from "./ui";
+import { Menu, Modal, Sel, Note, Btn, getPageSizePref, setPageSizePref } from "./ui";
+import { ChangePasswordForm } from "./pages/access";
 import api from "./lib/api";
 import { useApi, useDebounced, usePoll } from "./lib/useApi";
 import { fmtAgo, initials } from "./lib/format";
@@ -33,16 +34,19 @@ const NAV: NavGroup[] = [
   ]},
   { g: "Operations", items: [
     { to: "/bookings", label: "Bookings", icon: <BookOpenCheck className={ic} />, badge: "bookings", perm: "bookings.view" },
+    { to: "/invoices", label: "Invoices", icon: <Receipt className={ic} />, perm: ["billing.view", "billing.manage", "bookings.manage"] },
     { to: "/patients", label: "Patients", icon: <Users className={ic} />, perm: "patients.view" },
     { to: "/deleted-accounts", label: "Deleted accounts", icon: <UserCog className={ic} />, perm: "patients.delete" },
     { to: "/contact-changes", label: "Contact changes", icon: <UserCog className={ic} />, perm: "contactChanges.view" },
     { to: "/chat", label: "Chat", icon: <MessagesSquare className={ic} />, badge: "chat", perm: "chat.view" },
+    { to: "/templates", label: "Message templates", icon: <MessageSquareText className={ic} />, perm: ["templates.manage", "chat.manage"] },
     { to: "/support", label: "Support inbox", icon: <LifeBuoy className={ic} />, perm: "support.view" },
   ]},
   { g: "Care", items: [
     { to: "/services", label: "Services", icon: <Sparkles className={ic} />, perm: "services.view" },
     { to: "/categories", label: "Categories", icon: <FolderTree className={ic} />, perm: "categories.view" },
     { to: "/packages", label: "Packages", icon: <Package className={ic} />, perm: "packages.view" },
+    { to: "/memberships", label: "Memberships", icon: <IdCard className={ic} />, perm: ["memberships.view", "memberships.manage", "packages.view"] },
     { to: "/doctors", label: "Dermatologists", icon: <UserCog className={ic} />, perm: "dermatologists.view" },
     { to: "/therapists", label: "Therapists", icon: <Users className={ic} />, perm: "therapists.view" },
     { to: "/forms", label: "Consultation forms", icon: <ClipboardList className={ic} />, perm: "forms.view" },
@@ -56,6 +60,7 @@ const NAV: NavGroup[] = [
   ]},
   { g: "Stock", items: [
     { to: "/inventory", label: "Inventory", icon: <Boxes className={ic} />, badge: "lowstock", perm: "inventory.view" },
+    { to: "/stock-control", label: "Stock control", icon: <ClipboardList className={ic} />, perm: ["inventory.view", "stockLedger.view"] },
     { to: "/stock-ledger", label: "Stock ledger", icon: <ScrollText className={ic} />, perm: "stockLedger.view" },
     { to: "/vendors", label: "Vendors", icon: <Store className={ic} />, perm: "vendors.view" },
     { to: "/purchase-orders", label: "Purchase orders", icon: <ClipboardList className={ic} />, perm: "purchaseOrders.view" },
@@ -349,6 +354,8 @@ export function Shell({ children }: { children: ReactNode }) {
   const loc = useLocation();
   const nav = useNavigate();
   const badges = useNavBadges(role, branchId, can);
+  const [prefsOpen, setPrefsOpen] = useState(false);
+  useIdleSignOut(logout, toast);
 
   // Show only the sections this account may open; hide groups left empty.
   const visibleNav = NAV
@@ -377,6 +384,21 @@ export function Shell({ children }: { children: ReactNode }) {
 
   if (!loggedIn) {
     return <LoginPage onSignedIn={(token, me, exp) => { signIn(token, me, exp); nav(HOME); }} />;
+  }
+
+  // A temporary password issued by an administrator must be replaced before
+  // the panel opens — the same first-sign-in rule Zenoti applies.
+  if (admin?.mustChangePassword) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-side px-6 py-12">
+        <div className="w-full max-w-[420px] rounded-3xl bg-surface p-8 shadow-[0_24px_60px_-20px_rgba(0,0,0,0.45)]">
+          <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-ink3">Admin panel</div>
+          <h1 className="mt-1.5 text-[22px] font-extrabold tracking-tight text-ink">Choose your password</h1>
+          <p className="mb-5 mt-1 text-[13px] text-ink3">You signed in with a temporary password. Pick your own to continue.</p>
+          <ChangePasswordForm requireCurrent={false} onDone={(token, me, exp) => signIn(token, me, exp)} />
+        </div>
+      </div>
+    );
   }
 
   const who = {
@@ -435,10 +457,14 @@ export function Shell({ children }: { children: ReactNode }) {
                 ? [
                     { label: <span className={!branchId ? "font-bold text-primary" : ""}>All branches</span>,
                       onClick: () => { setBranchById(""); toast("Showing all branches"); } },
-                    ...branches.map((b) => ({
-                      label: <span className={b._id === branchId ? "font-bold text-primary" : ""}>{b.name}</span>,
-                      onClick: () => { setBranchById(b._id); toast(`Switched to ${b.name}`); },
-                    })),
+                    // Organisation › zone › centre, pharmacies grouped after clinics (Zenoti's centre tree).
+                    ...[...new Set(branches.map((b) => b.zone || "Hyderabad"))].flatMap((zone) => [
+                      ...(new Set(branches.map((b) => b.zone || "Hyderabad")).size > 1 ? [{ label: <span className="text-[10px] font-bold uppercase tracking-wider text-ink3">{zone}</span>, onClick: () => {} }] : []),
+                      ...branches.filter((b) => (b.zone || "Hyderabad") === zone).sort((a, b) => Number(!!a.isPharmacy) - Number(!!b.isPharmacy)).map((b) => ({
+                        label: <span className={b._id === branchId ? "font-bold text-primary" : ""}>{b.isPharmacy ? "💊 " : ""}{b.name}</span>,
+                        onClick: () => { setBranchById(b._id); toast(`Switched to ${b.name}`); },
+                      })),
+                    ]),
                   ]
                 : [{ label: <span className="text-ink3">No branches configured</span>, onClick: () => nav("/branches") }]
             }
@@ -459,12 +485,14 @@ export function Shell({ children }: { children: ReactNode }) {
               items={[
                 { label: <span><b>{who.name}</b><br /><span className="text-[11px] text-ink3">{who.role}{branch ? ` · ${branch}` : ""}</span></span> },
                 { label: "My profile", onClick: () => nav("/profile") },
+                { label: "Preferences (rows per page, auto sign-out)", onClick: () => setPrefsOpen(true) },
                 { label: "View tutorial again", onClick: () => { replayTour(); toast("Starting the walkthrough"); } },
                 { label: "Sign out", onClick: () => { logout(); toast("Signed out"); } },
               ]}
             />
           </div>
         </header>
+        <PreferencesModal open={prefsOpen} onClose={() => setPrefsOpen(false)} />
         <main className="min-w-0 flex-1 overflow-x-hidden bg-bg p-5">{children}</main>
       </div>
       <SearchOverlay />
@@ -474,8 +502,9 @@ export function Shell({ children }: { children: ReactNode }) {
 
 /* ================= login ================= */
 function LoginPage({ onSignedIn }: { onSignedIn: (token: string, admin: Admin, expiresAt?: string) => void }) {
-  const [step, setStep] = useState<"email" | "otp">("email");
+  const [step, setStep] = useState<"email" | "password" | "otp">("email");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [otp, setOtp] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -496,6 +525,29 @@ function LoginPage({ onSignedIn }: { onSignedIn: (token: string, admin: Admin, e
     setBusy(true); setError(null);
     try { await api.auth.requestOtp(addr); setStep("otp"); setCooldown(30); }
     catch (err) { fail(err); } finally { setBusy(false); }
+  };
+
+  // Accounts with a password get the password box; everyone else goes
+  // straight to the emailed code (both stay available either way).
+  const continueFromEmail = async () => {
+    if (!/^\S+@\S+\.\S+$/.test(addr)) { setError("Enter a valid email address"); return; }
+    setBusy(true); setError(null);
+    try {
+      const info = await api.auth.checkEmail(addr).catch(() => null);
+      if (info && info.hasPassword) { setStep("password"); setBusy(false); return; }
+    } catch { /* fall through to the code */ }
+    setBusy(false);
+    await sendOtp();
+  };
+
+  const signInWithPassword = async () => {
+    if (!password) { setError("Enter your password"); return; }
+    setBusy(true); setError(null);
+    try {
+      const res = await api.auth.loginPassword(addr, password);
+      if (!panelAccepts(res.admin.role)) { setError(wrongPanelMessage(res.admin.role)); setPassword(""); return; }
+      onSignedIn(res.token, res.admin, res.expiresAt);
+    } catch (err) { fail(err); } finally { setBusy(false); }
   };
 
   const resend = async () => {
@@ -526,10 +578,10 @@ function LoginPage({ onSignedIn }: { onSignedIn: (token: string, admin: Admin, e
         <div className="mt-8 rounded-3xl bg-surface p-8 shadow-[0_24px_60px_-20px_rgba(0,0,0,0.45)]">
           <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-ink3">Admin panel</div>
           <h1 className="mt-1.5 text-[24px] font-extrabold leading-tight tracking-tight text-ink">
-            {step === "email" ? "Sign in" : "Enter your code"}
+            {step === "email" ? "Sign in" : step === "password" ? "Your password" : "Enter your code"}
           </h1>
           <p className="mt-1 text-[13px] text-ink3">
-            {step === "email" ? "We’ll email you a one-time code." : <>Sent to <span className="font-semibold text-ink2">{addr}</span></>}
+            {step === "email" ? "Your work email, then your password or a one-time code." : <>Signing in as <span className="font-semibold text-ink2">{addr}</span></>}
           </p>
 
           <div className="mt-6 grid gap-3">
@@ -537,11 +589,30 @@ function LoginPage({ onSignedIn }: { onSignedIn: (token: string, admin: Admin, e
               <>
                 <input id="login-email" autoFocus value={email} type="email" autoComplete="email" aria-label="Email"
                   onChange={(e) => { setEmail(e.target.value); setError(null); }}
-                  onKeyDown={(e) => e.key === "Enter" && !busy && sendOtp()}
+                  onKeyDown={(e) => e.key === "Enter" && !busy && continueFromEmail()}
                   placeholder="you@zennara.in" className={field} />
-                <button onClick={sendOtp} disabled={busy} className={primary}>
+                <button onClick={continueFromEmail} disabled={busy} className={primary}>
                   {busy && <Loader2 className="h-4 w-4 animate-spin" />} Continue
                 </button>
+              </>
+            ) : step === "password" ? (
+              <>
+                <input id="login-password" autoFocus value={password} type="password" autoComplete="current-password" aria-label="Password"
+                  onChange={(e) => { setPassword(e.target.value); setError(null); }}
+                  onKeyDown={(e) => e.key === "Enter" && !busy && signInWithPassword()}
+                  placeholder="Password" className={field} />
+                <button onClick={signInWithPassword} disabled={busy || !password} className={primary}>
+                  {busy && <Loader2 className="h-4 w-4 animate-spin" />} Sign in
+                </button>
+                <div className="flex items-center justify-between pt-1 text-[12.5px]">
+                  <button className="font-semibold text-ink3 transition-colors hover:text-ink"
+                    onClick={() => { setStep("email"); setPassword(""); setError(null); }}>
+                    Use another email
+                  </button>
+                  <button className="font-semibold text-primary" disabled={busy} onClick={sendOtp}>
+                    Email me a code instead
+                  </button>
+                </div>
               </>
             ) : (
               <>
@@ -569,5 +640,43 @@ function LoginPage({ onSignedIn }: { onSignedIn: (token: string, admin: Admin, e
         </div>
       </div>
     </div>
+  );
+}
+
+
+/* ------------------------------ preferences ------------------------------ */
+const IDLE_KEY = "zennara.admin.idleMinutes";
+export function getIdleMinutes(): number { try { const v = Number(localStorage.getItem(IDLE_KEY)); return [0, 15, 30, 60, 120].includes(v) ? v : 30; } catch { return 30; } }
+
+/** Sign out after N idle minutes (Zenoti's session timeout). 0 = never. */
+function useIdleSignOut(logout: () => void, toast: (m: string) => void) {
+  useEffect(() => {
+    let timer: number | undefined;
+    const arm = () => {
+      if (timer) window.clearTimeout(timer);
+      const mins = getIdleMinutes();
+      if (!mins) return;
+      timer = window.setTimeout(() => { logout(); toast(`Signed out after ${mins} minutes without activity`); }, mins * 60 * 1000);
+    };
+    const events = ["mousemove", "keydown", "click", "touchstart", "scroll", "zennara:idle"];
+    events.forEach((e) => window.addEventListener(e, arm, { passive: true }));
+    arm();
+    return () => { if (timer) window.clearTimeout(timer); events.forEach((e) => window.removeEventListener(e, arm)); };
+  }, [logout, toast]);
+}
+
+function PreferencesModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [rows, setRows] = useState(String(getPageSizePref()));
+  const [idle, setIdle] = useState(String(getIdleMinutes()));
+  useEffect(() => { if (open) { setRows(String(getPageSizePref())); setIdle(String(getIdleMinutes())); } }, [open]);
+  return (
+    <Modal open={open} onClose={onClose} title="Preferences">
+      <div className="grid gap-3 md:grid-cols-2">
+        <Sel label="Rows per page" value={rows} onChange={setRows} options={["15", "25", "50", "100"]} />
+        <Sel label="Auto sign-out after" value={idle === "0" ? "Never" : `${idle} minutes`} onChange={(v) => setIdle(v === "Never" ? "0" : v.replace(" minutes", ""))} options={["15 minutes", "30 minutes", "60 minutes", "120 minutes", "Never"]} />
+      </div>
+      <Note className="mt-3 mb-0">Both are remembered on this browser only. Auto sign-out protects a shared desk computer, as Zenoti's session timeout does.</Note>
+      <div className="mt-4 flex justify-end gap-2"><Btn kind="ghost" onClick={onClose}>Cancel</Btn><Btn onClick={() => { setPageSizePref(Number(rows)); try { localStorage.setItem(IDLE_KEY, idle); } catch { /* ignore */ } window.dispatchEvent(new Event("zennara:idle")); onClose(); }}>Save</Btn></div>
+    </Modal>
   );
 }

@@ -6,7 +6,9 @@ import {
 } from "../ui";
 import { useStore } from "../store";
 import api from "../lib/api";
+import { openHtmlExport, download } from "../lib/http";
 import { AssignPackageModal, PatientPickerModal } from "./reception";
+import { SignInControls } from "./access";
 import { useApi, useDebounced } from "../lib/useApi";
 import { useQueryNumber, useQueryPage, useQueryString } from "../lib/useListState";
 import { fmtAgo, fmtCompactINR, fmtDate, fmtINR, fmtWhen, imageUrl, initials, isoDay, nameOf } from "../lib/format";
@@ -45,7 +47,7 @@ function ZenotiPick({ label, value, onChange, kind, hint }: { label: string; val
 
 export function Services() {
   const nav = useNavigate();
-  const { can, toast, audit } = useStore();
+  const { can, toast, audit, branchId } = useStore();
   const [search, setSearch] = useQueryString("q");
   const [type, setType] = useQueryString("type", "");
   const [category, setCategory] = useQueryString("category", "");
@@ -168,6 +170,7 @@ export function Services() {
         <Btn kind="ghost" disabled={!list.length} onClick={() => exportCsv("zennara-services",
           ["Name", "Type", "Category", "Price", "Price shown", "Paid in app", "Popular", "Active", "Rating", "Reviews"],
           list.map((s) => [s.name, s.type ?? "", s.category, s.price, s.showPriceInApp ? "yes" : "no", s.chargeOnlineBooking === false ? "no" : "yes", s.isPopular ? "yes" : "no", s.isActive ? "yes" : "no", s.rating ?? "", s.reviews ?? 0]))}>Export CSV</Btn>
+        <Menu button={<Btn kind="ghost">Price list ▾</Btn>} items={[{ label: "Open printable price list", onClick: () => { openHtmlExport("/bulk/price-list", { format: "html", branchId: branchId || undefined }, "Zennara price list").catch((e) => toast((e as Error).message)); } }, { label: "Download CSV", onClick: () => { download(`/bulk/price-list?format=csv${branchId ? `&branchId=${branchId}` : ""}`, "zennara-price-list.csv").catch((e) => toast((e as Error).message)); } }]} />
         {can("services.manage") && <Btn onClick={() => nav("/service-editor", { state: { blank: true, type: type || undefined, category: category || undefined } })}>+ New service</Btn>}
       </>}>
       <Hint id="services-live">Pick a type or category on the left; everything on the right is exactly what the app shows. Click a service to edit its photo, gallery, price, copy, pre/post care and FAQs.</Hint>
@@ -284,7 +287,7 @@ export function ServiceEditor() {
   const loc = useLocation();
   const { toast, audit, can } = useStore();
   const [sp] = useSearchParams();
-  const state = { ...((loc.state as { id?: string; blank?: boolean; type?: string; category?: string } | null) ?? {}) };
+  const state = { ...((loc.state as { id?: string; blank?: boolean; type?: string; category?: string; cloneFrom?: string } | null) ?? {}) };
   if (!state.id && sp.get("id")) state.id = sp.get("id") ?? undefined;
   const isNew = !state.id;
 
@@ -297,8 +300,10 @@ export function ServiceEditor() {
   const types = useApi(() => api.serviceTypes.list(), []);
   const cats = useApi(() => api.categories.list(), []);
   const q = useApi(
-    () => (state.id ? api.services.get(state.id) : Promise.resolve(BLANK as Consultation)),
-    [state.id],
+    () => (state.id ? api.services.get(state.id)
+      : state.cloneFrom ? api.services.get(state.cloneFrom).then((c) => ({ ...c, _id: undefined, id: undefined, slug: undefined, name: `${c.name} (copy)`, code: null, zenotiServiceId: null, createdAt: undefined } as unknown as Consultation))
+      : Promise.resolve(BLANK as Consultation)),
+    [state.id, state.cloneFrom],
   );
 
   useEffect(() => { if (q.data) setF(q.data); }, [q.data]);
@@ -367,6 +372,7 @@ export function ServiceEditor() {
       sub={isNew ? "Creating a new treatment" : `${f.name} · updated ${fmtDate((q.data as Consultation & { updatedAt?: string })?.updatedAt ?? q.data?.createdAt)}`}
       actions={<>
         <Btn kind="ghost" onClick={() => nav("/services")}>← All services</Btn>
+        {!isNew && can("services.manage") && <Btn kind="ghost" onClick={() => nav("/service-editor", { state: { cloneFrom: state.id } })} >Clone</Btn>}
         {!isNew && can("services.manage") && <Btn kind="danger" onClick={() => setDelOpen(true)}>Delete</Btn>}
         {can("services.manage") && <Btn disabled={busy} onClick={save}>{busy ? "Saving…" : isNew ? "Create service" : "Save changes"}</Btn>}
       </>}>
@@ -807,6 +813,7 @@ export function Packages() {
   const [edit, setEdit] = useState<Package | null>(null);
   const [creating, setCreating] = useState(false);
   const [del, setDel] = useState<Package | null>(null);
+  const [cloneSeed, setCloneSeed] = useState<Partial<Package> | null>(null);
 
   const [tab, setTab] = useQueryNumber("tab", 0, { min: 0, max: 2 });
   const [pickOpen, setPickOpen] = useState(false);
@@ -893,8 +900,10 @@ export function Packages() {
       <PackageEditor
         open={creating || !!edit}
         pkg={edit}
-        onClose={() => { setCreating(false); setEdit(null); }}
-        onSaved={() => { q.reload(); setCreating(false); setEdit(null); }}
+        seed={cloneSeed}
+        onClone={(p) => { const { _id, id, createdAt, versions, version, zenotiPackageId, bookingsCount, ...rest } = p as Package & { createdAt?: string }; void _id; void id; void createdAt; void versions; void version; void zenotiPackageId; void bookingsCount; setEdit(null); setCloneSeed({ ...rest, name: `${p.name} (copy)`, code: null }); setCreating(true); }}
+        onClose={() => { setCreating(false); setEdit(null); setCloneSeed(null); }}
+        onSaved={() => { q.reload(); setCreating(false); setEdit(null); setCloneSeed(null); }}
         onDelete={(p) => { setEdit(null); setDel(p); }}
       />
 
@@ -911,10 +920,10 @@ export function Packages() {
   );
 }
 
-function PackageEditor({ open, pkg, onClose, onSaved, onDelete }: {
-  open: boolean; pkg: Package | null; onClose: () => void; onSaved: () => void; onDelete: (p: Package) => void;
+function PackageEditor({ open, pkg, seed, onClose, onSaved, onDelete, onClone }: {
+  open: boolean; pkg: Package | null; seed?: Partial<Package> | null; onClose: () => void; onSaved: () => void; onDelete: (p: Package) => void; onClone?: (p: Package) => void;
 }) {
-  const { toast, audit } = useStore();
+  const { toast, audit, branches } = useStore();
   const [f, setF] = useState<Partial<Package>>({});
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -928,7 +937,7 @@ function PackageEditor({ open, pkg, onClose, onSaved, onDelete }: {
 
   useEffect(() => {
     if (!open) return;
-    setF(pkg ?? {
+    setF(pkg ?? seed ?? {
       name: "", description: "", price: 0, originalPrice: 0, discount: 0, image: "", validityMonths: 12,
       benefits: [], services: [], consultationServices: [], isActive: true, isPopular: false,
     });
@@ -938,7 +947,7 @@ function PackageEditor({ open, pkg, onClose, onSaved, onDelete }: {
   const set = <K extends keyof Package>(k: K) => (v: Package[K]) => setF((s) => ({ ...s, [k]: v }));
   const uploadImage = (file: File) => api.media.upload([file]).then((r) => r?.[0]?.url ?? "");
 
-  const included = (f.services ?? []) as { serviceId?: string; name?: string; serviceName?: string; sessions?: number; customPrice?: number }[];
+  const included = (f.services ?? []) as { serviceId?: string; name?: string; serviceName?: string; sessions?: number; customPrice?: number; redemptionOrder?: number }[];
   const listPrice = included.reduce((sum, it) => {
     const svc = findSvc(it.serviceId);
     const unit = it.customPrice ?? svc?.price ?? 0;
@@ -963,9 +972,12 @@ function PackageEditor({ open, pkg, onClose, onSaved, onDelete }: {
         services: included.map((it) => ({
           serviceId: findSvc(it.serviceId)?._id ?? it.serviceId,
           sessions: Math.max(1, it.sessions ?? 1),
+          redemptionOrder: Math.max(1, it.redemptionOrder ?? 1),
           ...(it.customPrice !== undefined && it.customPrice !== null ? { customPrice: Number(it.customPrice) } : {}),
         })),
       };
+      // The version history is server-owned.
+      delete (body as { versions?: unknown }).versions; delete (body as { version?: unknown }).version;
       if (pkg) {
         await api.packages.update(pkg._id, body);
         audit("CATALOGUE_UPDATED", `Package ${f.name}`, { packageId: pkg._id });
@@ -1043,6 +1055,12 @@ function PackageEditor({ open, pkg, onClose, onSaved, onDelete }: {
                         onChange={(e) => setF((s) => ({ ...s, services: ((s.services ?? []) as typeof included).map((x, j) => (j === i ? { ...x, customPrice: Number(e.target.value) || 0 } : x)) }))}
                         className="w-24 rounded-lg border border-border bg-surface px-2 py-1.5 text-right font-mono text-[12px] outline-none focus:border-gold-dark" />
                     </label>
+                    <label className="flex items-center gap-2 text-[11px] font-bold text-ink2" title="Zenoti 'Order': which benefit a redemption draws from first when a bill could match several">
+                      Order
+                      <input type="number" min={1} value={String(it.redemptionOrder ?? 1)}
+                        onChange={(e) => setF((s) => ({ ...s, services: ((s.services ?? []) as typeof included).map((x, j) => (j === i ? { ...x, redemptionOrder: Math.max(1, Number(e.target.value) || 1) } : x)) }))}
+                        className="w-14 rounded-lg border border-border bg-surface px-2 py-1.5 text-right font-mono text-[12px] outline-none focus:border-gold-dark" />
+                    </label>
                     <span className="ml-auto font-mono text-[12.5px] font-bold tabular-nums">
                       {fmtINR((it.customPrice ?? svc?.price ?? 0) * (it.sessions ?? 1))}
                     </span>
@@ -1050,6 +1068,44 @@ function PackageEditor({ open, pkg, onClose, onSaved, onDelete }: {
                 </div>
               );
             })}
+
+            <SecH t="Terms" em="· how Zenoti defines a package" />
+            <div className="grid gap-3 md:grid-cols-3">
+              <In label="Code" value={f.code ?? ""} onChange={(v) => set("code")(v.toUpperCase())} placeholder="e.g. 2GFCEXO" hint="Printed on receipts" />
+              <In label="Category" value={f.category ?? "Default"} onChange={set("category")} />
+              <Sel label="Type" value={f.packageType === "custom" ? "Custom (built for one guest)" : "Series (defined package)"} onChange={(v) => set("packageType")(v.startsWith("Custom") ? "custom" : "series")} options={["Series (defined package)", "Custom (built for one guest)"]} />
+              <Sel label="Validity" value={f.neverExpires ? "Never expires" : Number(f.validityDays) > 0 ? "Fixed — days" : "Fixed — months"} onChange={(v) => { if (v === "Never expires") { set("neverExpires")(true); } else if (v === "Fixed — days") { set("neverExpires")(false); set("validityDays")(f.validityDays || 182); } else { set("neverExpires")(false); set("validityDays")(null); } }} options={["Fixed — months", "Fixed — days", "Never expires"]} />
+              {!f.neverExpires && Number(f.validityDays) > 0 && <In label="Expiry period (days)" type="number" value={String(f.validityDays ?? 182)} onChange={(v) => set("validityDays")(Math.max(1, Number(v) || 1))} />}
+              {!f.neverExpires && <Sel label="Validity starts" value={f.validityStartsAt === "firstRedemption" ? "At first redemption" : "From sale date"} onChange={(v) => set("validityStartsAt")(v.startsWith("At") ? "firstRedemption" : "sale")} options={["From sale date", "At first redemption"]} />}
+              {!f.neverExpires && <In label="Grace period (days)" type="number" value={String(f.graceDays ?? 0)} onChange={(v) => set("graceDays")(Math.max(0, Number(v) || 0))} hint="Redeemable this long after expiry" />}
+              <In label="Freezes allowed" type="number" value={String(f.maxFreezes ?? 2)} onChange={(v) => set("maxFreezes")(Math.max(0, Number(v) || 0))} hint="0 = no freezing" />
+              <In label="Max freeze days" type="number" value={String(f.maxFreezeDays ?? 90)} onChange={(v) => set("maxFreezeDays")(Math.max(0, Number(v) || 0))} />
+              <In label="Minimum partial payment %" type="number" value={String(f.minPartialPaymentPercent ?? 0)} onChange={(v) => set("minPartialPaymentPercent")(Math.min(100, Math.max(0, Number(v) || 0)))} hint="0 = pay in full at the bill" />
+              <In label="GST %" type="number" value={String(f.taxPercent ?? 5)} onChange={(v) => set("taxPercent")(Math.max(0, Number(v) || 0))} />
+            </div>
+            <div className="mt-2 grid gap-2 md:grid-cols-2">
+              <Switch on={f.closeWhenConsumed !== false} onChange={set("closeWhenConsumed")} label="Close when all benefits are used" sub="Off keeps it Active (service discounts stay valid)" />
+              <Switch on={f.redemption?.scope === "centres"} onChange={(v) => set("redemption")({ scope: v ? "centres" : "organization", branchIds: f.redemption?.branchIds ?? [] })} label="Redeemable only at chosen centres" sub="Off = any centre" />
+            </div>
+            {f.redemption?.scope === "centres" && (
+              <div className="mt-2 flex flex-wrap gap-3 text-[12.5px]">
+                {branches.map((b) => { const on = (f.redemption?.branchIds ?? []).map(String).includes(String(b._id)); return <label key={b._id} className="flex items-center gap-1.5"><input type="checkbox" checked={on} onChange={(e) => set("redemption")({ scope: "centres", branchIds: e.target.checked ? [...(f.redemption?.branchIds ?? []), b._id] : (f.redemption?.branchIds ?? []).filter((x) => String(x) !== String(b._id)) })} />{b.name}</label>; })}
+              </div>
+            )}
+            <div className="mt-3">
+              <div className="text-[11px] font-bold text-ink2">Sale price per centre <span className="font-normal text-ink3">(blank = {fmtINR(price)} everywhere; untick to not sell there)</span></div>
+              <div className="mt-1 grid gap-1.5 md:grid-cols-2">
+                {branches.map((b) => { const row = (f.centrePrices ?? []).find((c) => String(c.branchId) === String(b._id)); const upd = (patch: Partial<NonNullable<Package["centrePrices"]>[number]>) => set("centrePrices")([...(f.centrePrices ?? []).filter((c) => String(c.branchId) !== String(b._id)), { branchId: b._id, price: row?.price ?? null, taxPercent: row?.taxPercent ?? null, available: row?.available !== false, ...patch }]); return (
+                  <div key={b._id} className="flex items-center gap-2 rounded-lg border border-border px-2.5 py-1.5 text-[12.5px]">
+                    <input type="checkbox" checked={row ? row.available !== false : true} onChange={(e) => upd({ available: e.target.checked })} />
+                    <span className="min-w-0 flex-1 truncate">{b.name}</span>
+                    <input type="number" placeholder={String(price)} value={row?.price ?? ""} onChange={(e) => upd({ price: e.target.value === "" ? null : Number(e.target.value) })} className="w-24 rounded-md border border-border bg-surface px-2 py-1 text-right font-mono text-[12px]" />
+                  </div>
+                ); })}
+              </div>
+            </div>
+            <div className="mt-3"><Area label="Package agreement (sent with the bill)" value={f.agreementText ?? ""} onChange={set("agreementText")} rows={2} /></div>
+            {pkg?.version && pkg.version > 1 && <div className="mt-1 text-[11px] text-ink3">Version {pkg.version} · earlier versions: {(pkg.versions ?? []).map((v) => `v${v.version} (${fmtINR(v.price ?? 0)}, ${fmtDate(v.at)})`).join(", ") || "—"}. Guests keep the terms of the version they bought.</div>}
 
             <div className="mt-3 grid gap-2 md:grid-cols-2">
               <Switch on={!!f.isActive} onChange={set("isActive")} label="Live in the app" sub="Off hides it from the app" />
@@ -1080,6 +1136,7 @@ function PackageEditor({ open, pkg, onClose, onSaved, onDelete }: {
             <div className="flex flex-col gap-2">
               <Btn disabled={busy} onClick={save}>{busy ? "Saving…" : pkg ? "Save package" : "Create package"}</Btn>
               <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
+              {pkg && onClone && <Btn kind="ghost" onClick={() => onClone(pkg)}>Clone package</Btn>}
               {pkg && <Btn kind="danger" onClick={() => onDelete(pkg)}>Delete package</Btn>}
             </div>
           </div>
@@ -1166,6 +1223,28 @@ function AssignmentDrawer({ a, onClose, onChanged, canEdit, toast, audit }: {
   const [cancelReason, setCancelReason] = useState("");
   // Roster for the per-session dermatologist picker.
   const doctors = useApi(() => api.doctors.list({ isActive: "true" }), []);
+  // Zenoti package detail: balances, redemptions, freeze / transfer / refund.
+  const { can } = useStore();
+  const canRefund = can("packages.refund");
+  const ledger = useApi(() => (a ? api.packageAssignments.ledger(a._id).catch(() => null) : Promise.resolve(null)), [a?._id, a?.status, a?.freeze?.isFrozen, (a?.transfers ?? []).length]);
+  const [freezeOpen, setFreezeOpen] = useState(false);
+  const [freezeReason, setFreezeReason] = useState("");
+  const [freezeUntil, setFreezeUntil] = useState("");
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [transferTo, setTransferTo] = useState<User | null>(null);
+  const [transferQty, setTransferQty] = useState<Record<string, number>>({});
+  const [transferReason, setTransferReason] = useState("");
+  const [refundOpen, setRefundOpen] = useState(false);
+  const [refundAmt, setRefundAmt] = useState("");
+  const [refundMethod, setRefundMethod] = useState("Cash");
+  const [refundRef, setRefundRef] = useState("");
+  const [refundReason, setRefundReason] = useState("");
+  const refundPrev = useApi(() => (refundOpen && a ? api.packageAssignments.refundPreview(a._id) : Promise.resolve(null)), [refundOpen, a?._id]);
+  useEffect(() => { if (refundPrev.data) setRefundAmt(String(refundPrev.data.suggested)); }, [refundPrev.data?.suggested]);
+  const act = async (fn: () => Promise<unknown>, done: string) => {
+    setBusy(true); setErr(null);
+    try { const r = (await fn()) as { message?: string } | undefined; toast(r?.message || done); onChanged(); ledger.reload(); return true; } catch (e) { setErr((e as Error).message); return false; } finally { setBusy(false); }
+  };
 
   useEffect(() => {
     if (!a) return;
@@ -1232,8 +1311,46 @@ function AssignmentDrawer({ a, onClose, onChanged, canEdit, toast, audit }: {
         <div className="flex justify-between"><span className="text-ink3">Clinic</span><span>{a.preferredLocation || "—"}</span></div>
       </div>
 
+      {(a.freeze?.isFrozen || a.graceUntil || a.terms) && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11.5px]">
+          {a.freeze?.isFrozen && <Tag kind="warn">Frozen since {fmtDate(a.freeze.frozenAt)}{a.freeze.reason ? ` · ${a.freeze.reason}` : ""}</Tag>}
+          {a.validUntil && <span className="text-ink3">Expires {fmtDate(a.validUntil)}{a.graceUntil ? ` · grace to ${fmtDate(a.graceUntil)}` : ""}</span>}
+          {a.terms?.validityStartsAt === "firstRedemption" && !a.validUntil && <Tag kind="info">Validity starts at first redemption</Tag>}
+          {a.terms?.neverExpires && <Tag kind="info">Never expires</Tag>}
+          {a.terms?.redeemableScope === "centres" && <Tag kind="mute">Redeem only at selected centres</Tag>}
+          {a.terms?.version ? <span className="text-ink3">· package v{a.terms.version}{a.terms.code ? ` · ${a.terms.code}` : ""}</span> : null}
+          {a.transferredFrom?.userName && <Tag kind="mute">Transferred from {a.transferredFrom.userName}</Tag>}
+          {a.payment?.balanceDue ? <Tag kind="warn">Instalment: {fmtINR(a.payment.amountPaid ?? 0)} paid · {fmtINR(a.payment.balanceDue)} due</Tag> : null}
+        </div>
+      )}
+      {ledger.data && (
+        <>
+          <SecH t="Benefits" em={`· ${ledger.data.balances.reduce((n, b) => n + b.balance, 0)} of ${ledger.data.balances.reduce((n, b) => n + b.entitled, 0)} left`} />
+          <table className="w-full text-[12px]"><thead><tr className="text-left text-[10px] uppercase tracking-wider text-ink3"><th>Service</th><th className="text-right">Order</th><th className="text-right">Qty</th><th className="text-right">Used</th><th className="text-right">Transferred</th><th className="text-right">Balance</th></tr></thead>
+            <tbody>{ledger.data.balances.map((b) => <tr key={b.serviceId} className="border-t border-border/60"><td className="py-1">{b.serviceName ?? b.serviceId}</td><td className="text-right">{b.order ?? 1}</td><td className="text-right">{b.entitled}</td><td className="text-right">{b.used}</td><td className="text-right">{b.transferred ?? 0}</td><td className="text-right font-bold">{b.balance}</td></tr>)}</tbody></table>
+          {ledger.data.invoice && <div className="mt-1 text-[11.5px] text-ink3">Sold on invoice <span className="font-mono">{ledger.data.invoice.invoiceNumber}</span>{ledger.data.invoice.receiptNumber ? ` · receipt ${ledger.data.invoice.receiptNumber}` : ""}{ledger.data.invoice.totals?.due ? ` · ${fmtINR(ledger.data.invoice.totals.due)} due` : ""}</div>}
+          {ledger.data.redemptions.length > 0 && (
+            <details className="mt-2 text-[12px]"><summary className="cursor-pointer font-semibold">Redemptions ({ledger.data.redemptions.filter((r) => !r.reversed).length})</summary>
+              {ledger.data.redemptions.map((r, i) => <div key={i} className={`flex justify-between border-t border-border/60 py-1 ${r.reversed ? "text-ink3 line-through" : ""}`}><span>{fmtDate(r.at)} · {r.serviceName ?? r.serviceId}{r.byName ? ` · ${r.byName}` : ""}</span><span className="font-mono text-[11px] text-ink3">{r.invoiceNumber ?? ""}</span></div>)}
+            </details>
+          )}
+          {(ledger.data.freezeHistory.length > 0 || ledger.data.transfers.length > 0) && (
+            <details className="mt-1 text-[12px]"><summary className="cursor-pointer font-semibold">Freeze & transfer history</summary>
+              {ledger.data.freezeHistory.map((h, i) => <div key={`f${i}`} className="border-t border-border/60 py-1">Frozen {fmtDate(h.frozenAt)} → {fmtDate(h.resumedAt)} ({h.days} day{h.days === 1 ? "" : "s"} added back){h.reason ? ` · ${h.reason}` : ""}</div>)}
+              {ledger.data.transfers.map((t, i) => <div key={`t${i}`} className="border-t border-border/60 py-1">Transferred {fmtDate(t.at)} to <B>{t.toUserName}</B>: {t.services.map((s) => `${s.serviceName ?? s.serviceId} ×${s.qty}`).join(", ")}{t.reason ? ` · ${t.reason}` : ""}</div>)}
+            </details>
+          )}
+          {ledger.data.refund?.refundedAt && <Note kind="crit" className="mt-2 mb-0">Refunded {fmtINR(ledger.data.refund.amount ?? 0)} by {ledger.data.refund.method} on {fmtDate(ledger.data.refund.refundedAt)} — {ledger.data.refund.reason}</Note>}
+        </>
+      )}
+
       {canEdit && a.status === "Active" && (
         <div className="mt-3 flex flex-wrap gap-2">
+          {a.freeze?.isFrozen
+            ? <Btn kind="gold" disabled={busy} onClick={() => act(() => api.packageAssignments.unfreeze(a._id), "Package unfrozen")}>Unfreeze</Btn>
+            : <Btn kind="ghost" disabled={busy} onClick={() => { setFreezeReason(""); setFreezeUntil(""); setFreezeOpen(true); }}>Freeze…</Btn>}
+          {canRefund && <Btn kind="ghost" disabled={busy || !!a.freeze?.isFrozen} onClick={() => { setTransferTo(null); setTransferQty({}); setTransferReason(""); setTransferOpen(true); }}>Transfer…</Btn>}
+          {canRefund && <Btn kind="ghost" disabled={busy} onClick={() => { setRefundReason(""); setRefundRef(""); setRefundMethod("Cash"); setRefundOpen(true); }}>Refund…</Btn>}
           <Btn kind="ghost" disabled={busy} onClick={() => markPaid(!a.payment?.isReceived)}>{a.payment?.isReceived ? "Mark unpaid" : "Mark paid"}</Btn>
           <label className="cursor-pointer rounded-(--radius-btn) border border-border bg-surface px-3 py-2 text-[12.5px] font-bold text-ink2">
             Attach proof<input type="file" accept="image/*,application/pdf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) uploadProof(f); }} />
@@ -1295,6 +1412,51 @@ function AssignmentDrawer({ a, onClose, onChanged, canEdit, toast, audit }: {
           </div>
         </>
       )}
+
+      <Modal open={freezeOpen} onClose={() => setFreezeOpen(false)} title="Freeze this package">
+        <Note className="my-0">While frozen, sessions cannot be booked or redeemed. When you unfreeze, the frozen days are added back to the expiry{a.terms?.maxFreezes ? ` — this package allows ${a.terms.maxFreezes} freeze${a.terms.maxFreezes === 1 ? "" : "s"}` : ""}{a.terms?.maxFreezeDays ? ` of up to ${a.terms.maxFreezeDays} days` : ""}.</Note>
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <In label="Reason" value={freezeReason} onChange={setFreezeReason} placeholder="e.g. Travelling" />
+          <In label="Planned resume (optional)" type="date" value={freezeUntil} onChange={setFreezeUntil} />
+        </div>
+        {err && <Note kind="crit" className="mt-2">{err}</Note>}
+        <div className="mt-4 flex justify-end gap-2"><Btn kind="ghost" onClick={() => setFreezeOpen(false)}>Back</Btn><Btn disabled={busy} onClick={async () => { if (await act(() => api.packageAssignments.freeze(a._id, { reason: freezeReason, resumeOn: freezeUntil || null }), "Package frozen")) setFreezeOpen(false); }}>Freeze package</Btn></div>
+      </Modal>
+
+      <Modal open={transferOpen} onClose={() => setTransferOpen(false)} title="Transfer sessions to another guest" wide>
+        <Note className="my-0">The chosen sessions move to a new package on the other guest's record (same terms, same expiry) and show as Transferred here.</Note>
+        <div className="mt-3">
+          {transferTo ? <div className="flex items-center justify-between rounded-lg bg-ivory px-3 py-2 text-[12.5px]"><span><B>{transferTo.fullName}</B> <span className="text-ink3">{transferTo.phone}</span></span><button className="text-[11px] text-ink3 underline-offset-2 hover:underline" onClick={() => setTransferTo(null)}>change</button></div>
+            : <PatientPickerModal open={transferOpen && !transferTo} onClose={() => setTransferOpen(false)} title="Transfer to — who receives the sessions?" onPick={(u) => setTransferTo(u)} />}
+        </div>
+        {transferTo && (
+          <>
+            <div className="mt-3 grid gap-2">
+              {(ledger.data?.balances ?? []).filter((b) => b.balance > 0).map((b) => (
+                <div key={b.serviceId} className="flex items-center justify-between gap-2 rounded-lg border border-border px-3 py-2 text-[12.5px]">
+                  <span><B>{b.serviceName ?? b.serviceId}</B> <span className="text-ink3">· {b.balance} left</span></span>
+                  <input type="number" min={0} max={b.balance} value={transferQty[b.serviceId] ?? 0} onChange={(e) => setTransferQty({ ...transferQty, [b.serviceId]: Math.max(0, Math.min(b.balance, Number(e.target.value) || 0)) })} className="w-20 rounded-md border border-border bg-surface px-2 py-1 text-right text-[12px]" />
+                </div>
+              ))}
+            </div>
+            <div className="mt-2"><In label="Reason" value={transferReason} onChange={setTransferReason} /></div>
+            {err && <Note kind="crit" className="mt-2">{err}</Note>}
+            <div className="mt-4 flex justify-end gap-2"><Btn kind="ghost" onClick={() => setTransferOpen(false)}>Back</Btn><Btn disabled={busy || !Object.values(transferQty).some((n) => n > 0)} onClick={async () => { if (await act(() => api.packageAssignments.transfer(a._id, { toUserId: transferTo._id, services: Object.entries(transferQty).filter(([, n]) => n > 0).map(([serviceId, qty]) => ({ serviceId, qty })), reason: transferReason }), "Transferred")) setTransferOpen(false); }}>Transfer</Btn></div>
+          </>
+        )}
+      </Modal>
+
+      <Modal open={refundOpen} onClose={() => setRefundOpen(false)} title="Refund and cancel this package">
+        {refundPrev.data && <Note className="my-0">Paid {fmtINR(refundPrev.data.paid)} · {refundPrev.data.unitsLeft} of {refundPrev.data.unitsTotal} sessions unused → suggested refund <B>{fmtINR(refundPrev.data.suggested)}</B>. Unbooked sessions and pending appointments from this package are released.</Note>}
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <In label="Refund amount (₹)" type="number" value={refundAmt} onChange={setRefundAmt} />
+          <Sel label="Refund by" value={refundMethod} onChange={setRefundMethod} options={["Cash", "UPI", "Card reversal", "Bank Transfer", "Credit note"]} />
+          <In label="Reference" value={refundRef} onChange={setRefundRef} />
+        </div>
+        <div className="mt-2"><Area label="Reason" value={refundReason} onChange={setRefundReason} rows={2} /></div>
+        {err && <Note kind="crit" className="mt-2">{err}</Note>}
+        <div className="mt-4 flex justify-end gap-2"><Btn kind="ghost" onClick={() => setRefundOpen(false)}>Back</Btn><Btn kind="danger" disabled={busy || refundReason.trim().length < 3 || !(Number(refundAmt) >= 0)} onClick={async () => { if (await act(() => api.packageAssignments.refund(a._id, { amount: Number(refundAmt) || 0, method: refundMethod, reference: refundRef || undefined, reason: refundReason.trim() }), "Refund recorded")) { setRefundOpen(false); onClose(); } }}>Refund & cancel</Btn></div>
+      </Modal>
 
       <Modal open={cancelOpen} onClose={() => setCancelOpen(false)} title="Cancel this package">
         <Note kind="crit"><B>The guest must approve.</B> A one-time code is sent to {guest}; enter it here to confirm. The package is marked cancelled — no refund is triggered automatically.</Note>
@@ -1809,12 +1971,19 @@ export function DermatologistDetail() {
 
               {can("dermatologists.manage") && (
                 <Card className="p-4">
-                  <SecH t="Panel login" right={account.data ? <Tag kind="ok">signs in with an emailed code</Tag> : undefined} />
-                  <Note className="mt-0">Dermatologists sign in to their panel with a 6-digit code emailed to the login address below — there is no password to set or reset. Changing the address changes where the code goes.</Note>
+                  <SecH t="Panel login" right={account.data ? <Tag kind={account.data.hasPassword ? "ok" : "info"}>{account.data.hasPassword ? "password set" : "code only"}</Tag> : undefined} />
+                  <Note className="mt-0">
+                    Dermatologists sign in to their panel with the login email below and either a password you set here or a 6-digit code emailed to that address.
+                    {account.data?.placeholderEmail ? " This address is a placeholder that cannot receive a code — set a password so they can sign in." : ""}
+                  </Note>
                   <div className="grid gap-2">
                     <In label="Login email" type="email" value={acctEmail} onChange={setAcctEmail} hint={account.data?.placeholderEmail ? "Placeholder — replace with their real address" : undefined} />
                     <In label="Phone" value={acctPhone} onChange={setAcctPhone} placeholder="10-digit mobile" />
                     <Btn kind="ghost" disabled={busy} onClick={saveAccount}>Save login details</Btn>
+                    {account.data && (
+                      <SignInControls accountId={account.data._id} email={account.data.email} phone={account.data.phone}
+                        hasPassword={!!account.data.hasPassword} onChanged={() => account.reload()} />
+                    )}
                     {account.data?.lastLogin && <div className="text-[11px] text-ink3">Last signed in {fmtAgo(account.data.lastLogin)}</div>}
                   </div>
                 </Card>
@@ -2177,9 +2346,10 @@ function TherapistEditor({ open, therapist, branches, onClose, onSaved, onToggle
           <>
             <SecH t="Account" em="· access, removal" />
             <div className="grid gap-2">
-              <div className="rounded-xl border border-border bg-ivory px-3.5 py-2.5 text-[11px] text-ink3">
-                Signs in with a 6-digit code emailed to {therapist.email} — no password.
-                {therapist.lastLogin ? ` Last sign-in ${fmtAgo(therapist.lastLogin)}.` : " Never signed in yet."}
+              <SignInControls accountId={therapist._id} email={therapist.email} phone={therapist.phone}
+                hasPassword={!!therapist.hasPassword} onChanged={onSaved} />
+              <div className="text-[11px] text-ink3">
+                {therapist.lastLogin ? `Last sign-in ${fmtAgo(therapist.lastLogin)}.` : "Never signed in yet."}
               </div>
               <div className="flex items-center justify-between rounded-xl border border-border bg-ivory px-3.5 py-2.5">
                 <div>

@@ -159,6 +159,21 @@ export function Card({ children, className = "", onClick }: { children: ReactNod
 
 /** Panel-wide page size — every listing shows at most this many rows per page. */
 export const PAGE_SIZE = 15;
+const PAGE_SIZE_KEY = "zennara.admin.pageSize";
+const PAGE_SIZES = [15, 25, 50, 100];
+/** Rows per table page, remembered per browser (Zenoti's "Page size" control). */
+export function getPageSizePref(): number {
+  try { const v = Number(localStorage.getItem(PAGE_SIZE_KEY)); return PAGE_SIZES.includes(v) ? v : PAGE_SIZE; } catch { return PAGE_SIZE; }
+}
+export function setPageSizePref(n: number) {
+  try { localStorage.setItem(PAGE_SIZE_KEY, String(n)); } catch { /* private mode */ }
+  window.dispatchEvent(new Event("zennara:pageSize"));
+}
+function usePageSizePref() {
+  const [n, setN] = useState(getPageSizePref());
+  useEffect(() => { const h = () => setN(getPageSizePref()); window.addEventListener("zennara:pageSize", h); return () => window.removeEventListener("zennara:pageSize", h); }, []);
+  return n;
+}
 
 /**
  * Every table paginates itself at PAGE_SIZE rows. Pages that paginate on the
@@ -166,9 +181,11 @@ export const PAGE_SIZE = 15;
  * else (detail sub-lists, filtered catalogues, drawers) gets the pager free.
  * `onRow` always receives the index into the ORIGINAL rows array.
  */
-export function DataTable({ cols, rows, onRow, pageSize = PAGE_SIZE }: {
+export function DataTable({ cols, rows, onRow, pageSize: fixedPageSize }: {
   cols: string[]; rows: ReactNode[][]; onRow?: (i: number) => void; pageSize?: number;
 }) {
+  const pref = usePageSizePref();
+  const pageSize = fixedPageSize ?? pref;
   const [page, setPage] = useState(1);
   const pages = Math.max(1, Math.ceil(rows.length / pageSize));
   useEffect(() => { if (page > pages) setPage(pages); }, [pages, page]);
@@ -198,8 +215,15 @@ export function DataTable({ cols, rows, onRow, pageSize = PAGE_SIZE }: {
         </tbody>
       </table>
     </Card>
-    {rows.length > pageSize && (
+    {(rows.length > pageSize || rows.length > PAGE_SIZE) && (
       <div className="mt-2 flex items-center justify-end gap-2 text-[12px] text-ink3">
+        {fixedPageSize === undefined && (
+          <label className="mr-auto flex items-center gap-1">Rows
+            <select value={pageSize} onChange={(e) => setPageSizePref(Number(e.target.value))} className="rounded border border-border bg-surface px-1 py-0.5 text-[11.5px]">
+              {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
+        )}
         <button onClick={() => setPage(current - 1)} disabled={current <= 1}
           className="rounded-lg border border-border bg-surface px-2.5 py-1 font-semibold disabled:opacity-40">← Prev</button>
         <span>{offset + 1}–{Math.min(offset + pageSize, rows.length)} of {rows.length}</span>

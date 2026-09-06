@@ -201,3 +201,20 @@ export async function download(path: string, fallbackName: string): Promise<void
   // Revoking immediately can cancel the save in some browsers.
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
+
+/** Fetch a non-JSON body (HTML / CSV) with the session token — for exports opened in a new window. */
+export async function fetchText(path: string, query?: Query): Promise<string> {
+  const token = getToken();
+  const res = await fetch(`${API_BASE}${withQuery(path, query)}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (!res.ok) throw new ApiError(`Request failed (${res.status})`, res.status);
+  return res.text();
+}
+/** Open an HTML export (price list, receipt) in a print-friendly window. */
+export async function openHtmlExport(path: string, query: Query | undefined, title: string): Promise<boolean> {
+  const html = await fetchText(path, query);
+  const w = window.open("", "_blank");
+  if (!w) return false;
+  w.document.write(html.includes("<html") ? html : `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title></head><body>${html}</body></html>`);
+  w.document.close();
+  return true;
+}

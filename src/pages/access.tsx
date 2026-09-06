@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
-import { Btn, Tag, Card, B, Note, In, Area, Modal, Empty, Async, SecH, DeleteModal } from "../ui";
+import { Btn, Tag, Card, B, Note, In, Sel, Area, Modal, Empty, Async, SecH, DeleteModal } from "../ui";
 import { useStore } from "../store";
 import api from "../lib/api";
 import { useApi } from "../lib/useApi";
-import type { PermissionGroup, PermissionKey, Role } from "../lib/types";
+import type { Admin, Branch, PermissionGroup, PermissionKey, Role, StaffAssignment } from "../lib/types";
 
 /* ---------------- shared: permission catalog + matrix ---------------- */
 
@@ -313,5 +313,194 @@ function RoleEditor({ role, groups, canManage, onClose, onSaved }: {
         </div>
       </div>
     </Modal>
+  );
+}
+
+/* ---------------- centre assignments (role per centre, deputations) ---------------- */
+
+
+const KIND_LABEL: Record<string, string> = { primary: "Regular", deputation: "Deputation (temporary)" };
+
+/**
+ * "Receptionist at Jubilee Hills, manager at Kondapur." One row per centre;
+ * a deputation is the same row with a start and end date. Mirrors Zenoti's
+ * Employee Roles tab (Center × Role) plus its Deputation screen.
+ */
+export function CentreRolesEditor({ value, onChange, roles, branches, disabled }: {
+  value: StaffAssignment[];
+  onChange: (next: StaffAssignment[]) => void;
+  roles: Role[];
+  branches: Branch[];
+  disabled?: boolean;
+}) {
+  const branchName = (id?: string | null) => branches.find((b) => b._id === id)?.name ?? "— choose a centre —";
+  const roleName = (id?: string | null) => roles.find((r) => r._id === id)?.name ?? "— no role at this centre —";
+  const set = (i: number, patch: Partial<StaffAssignment>) => onChange(value.map((a, j) => (j === i ? { ...a, ...patch } : a)));
+  const remove = (i: number) => onChange(value.filter((_, j) => j !== i));
+  const add = (kind: "primary" | "deputation") => onChange([...value, {
+    branchId: branches[0]?._id ?? "", roleId: null, kind,
+    from: kind === "deputation" ? new Date().toISOString().slice(0, 10) : null,
+    to: kind === "deputation" ? new Date(Date.now() + 14 * 864e5).toISOString().slice(0, 10) : null,
+  }]);
+  const day = (v?: string | null) => (v ? String(v).slice(0, 10) : "");
+
+  return (
+    <div className="grid gap-2 rounded-xl border border-border bg-ivory/60 p-3">
+      <SecH t="Centres & roles" em="· what they do at each centre" />
+      {value.length === 0 && <div className="text-[11.5px] text-ink3">No centre assignments yet. The role above applies everywhere; add rows to give a different role per centre or a temporary posting.</div>}
+      {value.map((a, i) => (
+        <div key={i} className={`grid gap-2 rounded-lg border p-2.5 ${a.kind === "deputation" ? "border-gold-dark/60 bg-cream/40" : "border-border bg-surface"}`}>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <Sel label="Centre" value={branchName(a.branchId)} options={["— choose a centre —", ...branches.map((b) => b.name)]}
+              onChange={(v) => set(i, { branchId: branches.find((b) => b.name === v)?._id ?? "" })} />
+            <Sel label="Role at this centre" value={roleName(a.roleId)} options={["— no role at this centre —", ...roles.map((r) => r.name)]}
+              onChange={(v) => set(i, { roleId: roles.find((r) => r.name === v)?._id ?? null })} />
+            <Sel label="Kind" value={KIND_LABEL[a.kind || "primary"]} options={Object.values(KIND_LABEL)}
+              onChange={(v) => set(i, { kind: v === KIND_LABEL.deputation ? "deputation" : "primary", ...(v === KIND_LABEL.deputation ? {} : { from: null, to: null }) })} />
+          </div>
+          {a.kind === "deputation" && (
+            <div className="grid gap-2 sm:grid-cols-3">
+              <In label="From" type="date" value={day(a.from)} onChange={(v) => set(i, { from: v || null })} />
+              <In label="To" type="date" value={day(a.to)} onChange={(v) => set(i, { to: v || null })} />
+              <In label="Note" value={a.note ?? ""} onChange={(v) => set(i, { note: v })} placeholder="Covering for…" />
+            </div>
+          )}
+          {!disabled && <button onClick={() => remove(i)} className="justify-self-end text-[11px] font-bold text-err hover:underline">Remove</button>}
+        </div>
+      ))}
+      {!disabled && (
+        <div className="flex gap-2">
+          <Btn kind="ghost" onClick={() => add("primary")}>+ Role at a centre</Btn>
+          <Btn kind="ghost" onClick={() => add("deputation")}>+ Deputation</Btn>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------- sign-in controls (set / send password) ---------------- */
+
+/**
+ * Zenoti's Update Password and Reset Password, for one account. Passwords are
+ * stored hashed and can never be read back; a generated temporary password is
+ * shown ONCE here and the person must choose their own at first sign-in.
+ */
+export function SignInControls({ accountId, email, phone, hasPassword, onChanged }: {
+  accountId: string; email: string; phone?: string | null; hasPassword?: boolean; onChanged?: () => void;
+}) {
+  const { toast, audit } = useStore();
+  const [mode, setMode] = useState<null | "set" | "send">(null);
+  const [pw, setPw] = useState("");
+  const [generate, setGenerate] = useState(true);
+  const [channel, setChannel] = useState<"email" | "whatsapp" | "both" | "none">("email");
+  const [busy, setBusy] = useState(false);
+  const [issued, setIssued] = useState<string | null>(null);
+  const [delivery, setDelivery] = useState<{ email: string | null; whatsapp: string | null } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const close = () => { setMode(null); setPw(""); setIssued(null); setDelivery(null); setErr(null); };
+  const chLabel: Record<string, string> = { email: "Email", whatsapp: "WhatsApp", both: "Email and WhatsApp", none: "Don't send — I'll tell them" };
+
+  const run = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const res = mode === "send"
+        ? await api.staff.sendCredentials(accountId, channel === "none" ? "email" : channel)
+        : await api.staff.setPassword(accountId, generate ? { generate: true, notify: channel } : { password: pw, notify: channel });
+      setIssued(res.temporaryPassword ?? null);
+      setDelivery(res.delivery ?? null);
+      audit("SETTINGS_UPDATED", `${mode === "send" ? "Sent sign-in details to" : "Set password for"} ${email}`, { staffId: accountId });
+      toast(res.message || "Done");
+      onChanged?.();
+      if (!res.temporaryPassword) close();
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="grid gap-2">
+      <div className="flex flex-wrap items-center gap-2 text-[11.5px] text-ink3">
+        <Tag kind={hasPassword ? "ok" : "info"}>{hasPassword ? "password set" : "code only"}</Tag>
+        <span>Signs in with <B>{email}</B>{hasPassword ? " and a password, or an emailed code." : " and a 6-digit code emailed at sign-in."}</span>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Btn kind="ghost" onClick={() => { setMode("set"); setGenerate(true); setChannel("email"); }}>{hasPassword ? "Update password" : "Set a password"}</Btn>
+        <Btn kind="ghost" onClick={() => { setMode("send"); setChannel(phone ? "both" : "email"); }}>Send sign-in details</Btn>
+      </div>
+
+      <Modal open={mode !== null} onClose={close} title={mode === "send" ? "Send sign-in details" : hasPassword ? "Update password" : "Set a password"}>
+        {issued ? (
+          <div className="grid gap-3">
+            <Note kind="gold">This temporary password is shown once. They will be asked to choose their own at first sign-in.</Note>
+            <div className="rounded-xl border border-border bg-ivory px-4 py-3 text-center font-mono text-[20px] font-bold tracking-wide">{issued}</div>
+            {delivery && (
+              <div className="text-[11.5px] text-ink3">
+                {delivery.email && <div>Email: {delivery.email}</div>}
+                {delivery.whatsapp && <div>WhatsApp: {delivery.whatsapp}</div>}
+              </div>
+            )}
+            <div className="flex justify-end"><Btn onClick={close}>Done</Btn></div>
+          </div>
+        ) : (
+          <div className="grid gap-3">
+            {mode === "send" ? (
+              <Note className="my-0">A new temporary password is issued and sent. Their previous password (if any) stops working.</Note>
+            ) : (
+              <>
+                <div className="flex gap-2">
+                  <button onClick={() => setGenerate(true)} className={`rounded-full border px-3 py-1 text-[12px] font-semibold ${generate ? "border-primary bg-cream" : "border-border bg-surface"}`}>Generate a temporary password</button>
+                  <button onClick={() => setGenerate(false)} className={`rounded-full border px-3 py-1 text-[12px] font-semibold ${!generate ? "border-primary bg-cream" : "border-border bg-surface"}`}>Type one</button>
+                </div>
+                {!generate && <In label="New password" type="password" value={pw} onChange={setPw} hint="At least 8 characters. Stored as a hash — it cannot be shown again." />}
+              </>
+            )}
+            <div>
+              <div className="mb-1 text-[11px] font-bold text-ink2">Send to them by</div>
+              <div className="flex flex-wrap gap-1.5">
+                {(mode === "set" ? (["email", "whatsapp", "both", "none"] as const) : (["email", "whatsapp", "both"] as const)).map((c) => (
+                  <button key={c} onClick={() => setChannel(c)} disabled={(c === "whatsapp" || c === "both") && !phone}
+                    className={`rounded-full border px-3 py-1 text-[12px] font-semibold disabled:opacity-40 ${channel === c ? "border-primary bg-cream" : "border-border bg-surface"}`}>
+                    {chLabel[c]}
+                  </button>
+                ))}
+              </div>
+              {!phone && <div className="mt-1 text-[10.5px] text-ink3">Add a phone number to the account to send by WhatsApp.</div>}
+            </div>
+            {err && <Note kind="crit">{err}</Note>}
+            <div className="flex justify-end gap-2">
+              <Btn kind="ghost" onClick={close}>Cancel</Btn>
+              <Btn disabled={busy || (mode === "set" && !generate && pw.length < 8)} onClick={run}>{busy ? "Working…" : mode === "send" ? "Send" : "Set password"}</Btn>
+            </div>
+          </div>
+        )}
+      </Modal>
+    </div>
+  );
+}
+
+/* ---------------- choose my own password (forced after a temporary one) ---------------- */
+
+export function ChangePasswordForm({ requireCurrent, onDone }: { requireCurrent: boolean; onDone: (token: string, admin: Admin, expiresAt?: string) => void }) {
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [again, setAgain] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const submit = async () => {
+    if (next.length < 8) { setErr("Use at least 8 characters."); return; }
+    if (next !== again) { setErr("The two passwords do not match."); return; }
+    setBusy(true); setErr(null);
+    try {
+      const res = await api.auth.changePassword({ currentPassword: requireCurrent ? current : undefined, newPassword: next });
+      onDone(res.token, res.admin, res.expiresAt);
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <div className="grid gap-3">
+      {requireCurrent && <In label="Current password" type="password" value={current} onChange={setCurrent} />}
+      <In label="New password" type="password" value={next} onChange={setNext} hint="At least 8 characters." />
+      <In label="New password again" type="password" value={again} onChange={setAgain} />
+      {err && <Note kind="crit">{err}</Note>}
+      <div className="flex justify-end"><Btn disabled={busy} onClick={submit}>{busy ? "Saving…" : "Save password"}</Btn></div>
+    </div>
   );
 }
