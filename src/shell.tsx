@@ -53,10 +53,8 @@ const NAV: NavGroup[] = [
   ]},
   { g: "Commerce", items: [
     { to: "/products", label: "Products", icon: <ShoppingBag className={ic} />, perm: "products.view" },
-    { to: "/brands", label: "Brands & formulations", icon: <Tags className={ic} />, perm: "brands.view" },
     { to: "/coupons", label: "Coupons", icon: <TicketPercent className={ic} />, perm: "coupons.view" },
     { to: "/orders", label: "Orders", icon: <Truck className={ic} />, badge: "orders", perm: "orders.view" },
-    { to: "/bulk", label: "Bulk import / export", icon: <FolderTree className={ic} />, perm: ["bulk.import", "bulk.export"] },
   ]},
   { g: "Stock", items: [
     { to: "/inventory", label: "Inventory", icon: <Boxes className={ic} />, badge: "lowstock", perm: "inventory.view" },

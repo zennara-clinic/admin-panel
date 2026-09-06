@@ -51,14 +51,11 @@ export function Products() {
     status: fStatus === "All" ? undefined : fStatus, stockFilter: fStock === "all" ? undefined : fStock, hsn: dHsn || undefined,
   }), [debounced, kind, centre, scope, fCat, fSub, fVendor, fStatus, fStock, dHsn]);
   const facets = (q.data as { facets?: { categories: string[]; subCategories: string[]; vendors: string[]; statuses: string[] } } | undefined)?.facets;
-  const forms = useApi(() => api.formulations.list({ isActive: "true" }), []);
   const stats = useApi(() => api.products.statistics().catch(() => undefined), []);
 
   const rows = q.data?.data ?? [];
-  const formulationNames = useMemo(() => {
-    const fromForms = (forms.data ?? []).map((f) => f.name);
-    return [...new Set([...fromForms, ...rows.map((p) => p.formulation)])].filter(Boolean);
-  }, [forms.data, rows]);
+  // Formulations, brands and categories are whatever the catalogue says — no separate tables.
+  const formulationNames = useMemo(() => [...new Set(rows.map((p) => p.formulation))].filter(Boolean).sort(), [rows]);
 
   // One definition of "low": under 10 and not out — matches the statistics tile.
   const LOW = 10;
@@ -104,10 +101,6 @@ export function Products() {
           <button onClick={() => setGrid(false)} className={`px-3 py-2 text-[12.5px] font-bold ${!grid ? "bg-primary text-white" : "bg-surface text-ink2"}`}>☰ List</button>
           <button onClick={() => setGrid(true)} className={`px-3 py-2 text-[12.5px] font-bold ${grid ? "bg-primary text-white" : "bg-surface text-ink2"}`}>▦ Grid</button>
         </div>
-        <div className="flex overflow-hidden rounded-(--radius-btn) border border-border">
-          <button onClick={() => setScope("app")} className={`px-3 py-2 text-[12.5px] font-bold ${scope === "app" ? "bg-primary text-white" : "bg-surface text-ink2"}`}>Catalogue{buckets?.app !== undefined ? ` · ${buckets.app}` : ""}</button>
-          <button onClick={() => setScope("master")} className={`px-3 py-2 text-[12.5px] font-bold ${scope === "master" ? "bg-primary text-white" : "bg-surface text-ink2"}`}>Zenoti master</button>
-        </div>
         {can("products.manage") && <Btn kind="ghost" onClick={() => setImportOpen(true)}>Import template</Btn>}
         <Btn kind="ghost" onClick={() => download(api.products.appStockExportPath({ catalogue: scope === "app" ? "app" : "all" }), `AppStock_Template_${scope === "app" ? "Commerce" : "AllProducts"}.xlsx`).catch((e) => toastMsg((e as Error).message))}>Export template</Btn>
         {can("products.manage") && <Btn onClick={() => setAddOpen(true)}>+ New product</Btn>}
@@ -144,11 +137,7 @@ export function Products() {
         {() => (
           <>
             <div data-tour="prod-tabs" />
-            {scope === "master" && (
-              <Tabs active={Math.max(0, KINDS.findIndex((k) => k.key === kind))} onChange={(i) => setKind(KINDS[i].key)}
-                items={KINDS.map((k) => [k.label, buckets?.[k.key]]) as [string, number | undefined][]} />
-            )}
-            {scope === "app" && <Note className="mb-2">This is what the app sells: the pharmacy's OTC list. Stock, prices, HSN, vendor and re-order levels come from the App Stock template and are edited here. Nothing on this page is written to Zenoti.</Note>}
+            <Note className="mb-2">The app's catalogue — the pharmacy's OTC list, {buckets?.app ?? rows.length} products. Categories, brands and formulations come from the sheet and from each product's own page. Stock, prices, HSN, vendor and re-order levels are edited here or re-imported from the App Stock template. Nothing on this page is written to Zenoti.</Note>
             <div className="mb-2 flex flex-wrap items-end gap-3">
               <Sel label="Category" value={fCat} onChange={(v) => { setFCat(v); setFSub("All"); }} options={["All", ...(facets?.categories ?? [])]} />
               <Sel label="Sub category" value={fSub} onChange={setFSub} options={["All", ...(facets?.subCategories ?? [])]} />
@@ -258,8 +247,8 @@ function ProductEditor({ open, product, formulations, onClose, onSaved, onDelete
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const brands = useApi(() => api.brands.list({ isActive: "true" }).catch(() => [] as Brand[]), [open]);
-  const brandNames = (brands.data ?? []).map((b) => b.name);
+  const brands = useApi(() => api.products.list({ catalogue: "app" }).then((r) => [...new Set(((r.data ?? []) as Product[]).map((p) => p.brand || p.OrgName).filter((b): b is string => !!b && b !== "Zennara"))].sort()).catch(() => [] as string[]), [open]);
+  const brandNames = brands.data ?? [];
   const [stockReason, setStockReason] = useState("");
 
   useEffect(() => {
@@ -335,12 +324,8 @@ function ProductEditor({ open, product, formulations, onClose, onSaved, onDelete
         <In label="Product name" value={f.name ?? ""} onChange={set("name")} />
         <Area label="Description" value={f.description ?? ""} onChange={set("description")} rows={3} />
 
-        {brandNames.length
-          ? <Sel label="Brand" value={f.OrgName ?? brandNames[0]} onChange={set("OrgName")} options={brandNames} />
-          : <In label="Brand" value={f.OrgName ?? ""} onChange={set("OrgName")} hint="Add brands under Commerce → Brands & formulations" />}
-        {formulations.length
-          ? <Sel label="Formulation" value={f.formulation ?? formulations[0]} onChange={set("formulation")} options={formulations} />
-          : <In label="Formulation" value={f.formulation ?? ""} onChange={set("formulation")} hint="Add formulations under Commerce → Brands & formulations first" />}
+        <In label="Brand" value={f.brand ?? f.OrgName ?? ""} onChange={(v) => setF((s) => ({ ...s, brand: v, OrgName: v || "Zennara" }))} hint={brandNames.length ? `In the catalogue: ${brandNames.slice(0, 6).join(", ")}${brandNames.length > 6 ? "…" : ""}` : "Type the brand as it should appear in the app"} />
+        <In label="Formulation" value={f.formulation ?? ""} onChange={set("formulation")} hint={formulations.length ? `In the catalogue: ${formulations.slice(0, 6).join(", ")}${formulations.length > 6 ? "…" : ""}` : "The app groups products by this"} />
         <In label="Product code (optional)" value={f.code ?? ""} onChange={(v) => set("code")(v.toUpperCase())} />
 
         <div className="grid grid-cols-2 gap-3">
@@ -396,151 +381,6 @@ function ProductEditor({ open, product, formulations, onClose, onSaved, onDelete
 }
 
 /* ================= BRANDS & FORMULATIONS ================= */
-export function Brands() {
-  const { toast, audit, can } = useStore();
-  const [bOpen, setBOpen] = useState(false);
-  const [fOpen, setFOpen] = useState(false);
-  const [editBrand, setEditBrand] = useState<Brand | null>(null);
-  const [editForm, setEditForm] = useState<Formulation | null>(null);
-  const [delBrand, setDelBrand] = useState<Brand | null>(null);
-  const [delForm, setDelForm] = useState<Formulation | null>(null);
-  const [name, setName] = useState("");
-  const [desc, setDesc] = useState("");
-  const [logo, setLogo] = useState("");
-  const [website, setWebsite] = useState("");
-  const [active, setActive] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
-
-  const brands = useApi(() => api.brands.list(), []);
-  const forms = useApi(() => api.formulations.list(), []);
-
-  const openBrand = (b?: Brand) => { setEditBrand(b ?? null); setName(b?.name ?? ""); setDesc(b?.description ?? ""); setLogo(b?.logo ?? ""); setWebsite(b?.website ?? ""); setActive(b?.isActive ?? true); setErr(null); setBOpen(true); };
-  const openForm = (f?: Formulation) => { setEditForm(f ?? null); setName(f?.name ?? ""); setDesc(f?.description ?? ""); setActive(f?.isActive ?? true); setErr(null); setFOpen(true); };
-  const uploadLogo = (file: File) => api.media.upload([file]).then((r) => r?.[0]?.url ?? "");
-
-  return (
-    <Page title="Brands & formulations" sub="These power the app's product filters and the catalogue's grouping"
-      actions={can("brands.manage") ? <>
-        <Btn kind="ghost" onClick={() => openForm()}>+ Formulation</Btn>
-        <Btn onClick={() => openBrand()}>+ Brand</Btn>
-      </> : undefined}>
-      <div className="grid gap-3 xl:grid-cols-2">
-        <Card className="p-4">
-          <SecH t="Brands" em={`· ${(brands.data ?? []).length}`} />
-          <Async q={brands} label="Loading brands…" rows={4}>
-            {(list) => list.length === 0 ? <Empty title="No brands yet" hint="Add the brands you stock." /> : (
-              <div className="grid gap-2 md:grid-cols-2">
-                {list.map((b) => (
-                  <div key={b._id} className={`flex items-center justify-between gap-2 rounded-xl border border-border bg-ivory px-3 py-2 ${b.isActive ? "" : "opacity-55"}`}>
-                    <button className="min-w-0 flex-1 text-left" onClick={() => can("brands.manage") && openBrand(b)}>
-                      <span className="block truncate text-[12.5px] font-bold">{b.name}</span>
-                      {b.description && <span className="block truncate text-[10.5px] text-ink3">{b.description}</span>}
-                    </button>
-                    <span className="shrink-0 font-mono text-[11px] text-ink3">{b.productsCount ?? 0} SKUs</span>
-                    {can("brands.manage") && (
-                      <button onClick={() => setDelBrand(b)} className="shrink-0 text-[11px] font-bold text-err">×</button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </Async>
-        </Card>
-
-        <Card className="p-4">
-          <SecH t="Formulations" em={`· ${(forms.data ?? []).length}`} />
-          <Async q={forms} label="Loading formulations…" rows={4}>
-            {(list) => list.length === 0 ? <Empty title="No formulations yet" hint="Serum, Cream, Shampoo and so on." /> : (
-              <div className="grid gap-2 md:grid-cols-2">
-                {list.map((f) => (
-                  <div key={f._id} className={`flex items-center justify-between gap-2 rounded-xl border border-border bg-ivory px-3 py-2 ${f.isActive ? "" : "opacity-55"}`}>
-                    <button className="min-w-0 flex-1 text-left" onClick={() => can("brands.manage") && openForm(f)}>
-                      <span className="block truncate text-[12.5px] font-bold">{f.name}</span>
-                      {f.description && <span className="block truncate text-[10.5px] text-ink3">{f.description}</span>}
-                    </button>
-                    <span className="shrink-0 font-mono text-[11px] text-gold-dark">{f.productsCount ?? 0}</span>
-                    {can("brands.manage") && (
-                      <button onClick={() => setDelForm(f)} className="shrink-0 text-[11px] font-bold text-err">×</button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </Async>
-        </Card>
-      </div>
-
-      <Note>Deleting a brand or formulation that still has products attached is <B>blocked</B>, not cascaded — move the products first.</Note>
-
-      <Modal open={bOpen} onClose={() => setBOpen(false)} title={editBrand ? `Edit ${editBrand.name}` : "New brand"}>
-        <div className="grid gap-3">
-          <In label="Brand name" value={name} onChange={setName} />
-          <Area label="Description (optional)" value={desc} onChange={setDesc} rows={2} />
-          <UploadField label="Logo (optional)" value={logo} onChange={setLogo} upload={uploadLogo} />
-          <In label="Website (optional)" value={website} onChange={setWebsite} placeholder="https://" />
-          {editBrand && <Switch on={active} onChange={setActive} label="Active" sub="Inactive brands are kept but not offered on new products" />}
-        </div>
-        {err && <Note kind="crit">{err}</Note>}
-        <div className="mt-4 flex justify-end gap-2">
-          <Btn kind="ghost" onClick={() => setBOpen(false)}>Cancel</Btn>
-          <Btn disabled={name.trim().length < 2} onClick={async () => {
-            setErr(null);
-            try {
-              const body = { name: name.trim(), description: desc.trim(), logo: logo.trim() || undefined, website: website.trim() || undefined, isActive: active };
-              if (editBrand) { await api.brands.update(editBrand._id, body); toast("Brand updated"); }
-              else { await api.brands.create(body); toast(`${name.trim()} added`); }
-              audit("PRODUCT_UPDATED", `Brand ${name.trim()}`);
-              setBOpen(false); brands.reload();
-            } catch (e) { setErr((e as Error).message); }
-          }}>{editBrand ? "Save" : "Add brand"}</Btn>
-        </div>
-      </Modal>
-
-      <Modal open={fOpen} onClose={() => setFOpen(false)} title={editForm ? `Edit ${editForm.name}` : "New formulation"}>
-        <div className="grid gap-3">
-          <In label="Formulation name" value={name} onChange={setName} hint="Serums, Sunscreens, Cleansers… products are filed under one of these" />
-          <Area label="Description (optional)" value={desc} onChange={setDesc} rows={2} />
-          {editForm && <Switch on={active} onChange={setActive} label="Active" sub="Inactive formulations are kept but not offered on new products" />}
-        </div>
-        {err && <Note kind="crit">{err}</Note>}
-        <div className="mt-4 flex justify-end gap-2">
-          <Btn kind="ghost" onClick={() => setFOpen(false)}>Cancel</Btn>
-          <Btn disabled={name.trim().length < 2} onClick={async () => {
-            setErr(null);
-            try {
-              if (editForm) { await api.formulations.update(editForm._id, { name: name.trim(), description: desc.trim(), isActive: active }); toast("Formulation updated"); }
-              else { await api.formulations.create({ name: name.trim(), description: desc.trim() }); toast(`${name.trim()} added`); }
-              audit("PRODUCT_UPDATED", `Formulation ${name.trim()}`);
-              setFOpen(false); forms.reload();
-            } catch (e) { setErr((e as Error).message); }
-          }}>{editForm ? "Save" : "Add formulation"}</Btn>
-        </div>
-      </Modal>
-
-      <DeleteModal open={!!delBrand} onClose={() => setDelBrand(null)} what={delBrand ? `brand "${delBrand.name}"` : ""}
-        onConfirm={async (reason) => {
-          if (!delBrand) return;
-          try {
-            await api.brands.remove(delBrand._id);
-            audit("PRODUCT_UPDATED", `Deleted brand ${delBrand.name} · reason: ${reason}`);
-            toast("Brand deleted"); brands.reload();
-          } catch (e) { toast((e as Error).message); }
-        }} />
-
-      <DeleteModal open={!!delForm} onClose={() => setDelForm(null)} what={delForm ? `formulation "${delForm.name}"` : ""}
-        onConfirm={async (reason) => {
-          if (!delForm) return;
-          try {
-            await api.formulations.remove(delForm._id);
-            audit("PRODUCT_UPDATED", `Deleted formulation ${delForm.name} · reason: ${reason}`);
-            toast("Formulation deleted"); forms.reload();
-          } catch (e) { toast((e as Error).message); }
-        }} />
-    </Page>
-  );
-}
-
-/* ================= COUPONS ================= */
 export function Coupons() {
   const { toast, audit, can } = useStore();
   const [open, setOpen] = useState(false);
@@ -666,6 +506,13 @@ function CouponEditor({ open, coupon, onClose, onSaved, onDelete }: {
   // Optional product scoping — every product, searchable.
   const products = useApi(() => (open ? api.products.list({}).then((r) => r.data ?? []) : Promise.resolve([] as Product[])), [open]);
   const scoped = ((f.applicableProducts ?? []) as (string | { _id: string })[]).map((x) => (typeof x === "string" ? x : x._id));
+  const scopedCats = (f.applicableCategories ?? []) as string[];
+  // Categories and sub-categories are whatever the catalogue (the sheet) says.
+  const catOptions = useMemo(() => {
+    const seen = new Set<string>();
+    for (const p of products.data ?? []) for (const c of [p.productCategory, p.productSubCategory]) if (c) seen.add(c);
+    return [...seen].sort().map((c) => [c, c] as [string, string]);
+  }, [products.data]);
 
   const save = async () => {
     setErr(null);
@@ -682,6 +529,7 @@ function CouponEditor({ open, coupon, onClose, onSaved, onDelete }: {
       const body: Partial<Coupon> = {
         ...rest,
         applicableProducts: scoped as Coupon["applicableProducts"],
+        applicableCategories: scopedCats,
         code: f.code.trim().toUpperCase(),
         discountValue: Number(f.discountValue),
         minOrderValue: Number(f.minOrderValue) || 0,
@@ -725,6 +573,10 @@ function CouponEditor({ open, coupon, onClose, onSaved, onDelete }: {
             options={(products.data ?? []).map((p) => [p._id, `${p.name} · ${fmtINR(p.price)}`])} value={scoped}
             onChange={(next) => set("applicableProducts")(next as Coupon["applicableProducts"])}
             placeholder="Every product" searchPlaceholder="Search products…" />
+          <MultiSelect label={`Categories ${scopedCats.length ? `· ${scopedCats.length} chosen` : "· every category"}`}
+            options={catOptions} value={scopedCats}
+            onChange={(next) => set("applicableCategories")(next as string[])} />
+          <p className="text-[12px] text-ink3 sm:col-span-2">Leave both empty and the code works on every product in the catalogue.</p>
           <div className="mt-1 text-[10.5px] text-ink3">Leave empty to make the coupon store-wide.</div>
         </div>
         <In label="Valid from" type="date" value={dateVal(f.validFrom)} onChange={(v) => v && set("validFrom")(startOfDay(v))} />

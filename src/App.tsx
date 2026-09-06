@@ -11,10 +11,10 @@ import { Memberships } from "./pages/memberships";
 import { StockControl } from "./pages/stockcontrol";
 import { Templates } from "./pages/templates";
 import { Services, ServiceEditor, Categories, Packages, Doctors, DermatologistDetail, Therapists } from "./pages/care";
-import { Products, Brands, Coupons, Orders } from "./pages/commerce";
+import { Products, Coupons, Orders } from "./pages/commerce";
 import { Inventory, Vendors } from "./pages/stock";
 import { PurchaseOrders } from "./pages/procurement";
-import { BulkTools, Forms } from "./pages/tools";
+import { Forms } from "./pages/tools";
 import { AppHome, ConsultPage, MembershipCard, Announcements, ScreenCopy, AppControl } from "./pages/studio";
 import { Branches, Reviews, Analytics, Roles, AuditLog } from "./pages/org";
 import { ContactChanges } from "./pages/contact-change";
@@ -108,7 +108,6 @@ export default function App() {
           <Route path="/therapists" element={gated("therapists.view", <Therapists />)} />
 
           <Route path="/products" element={gated("products.view", <Products />)} />
-          <Route path="/brands" element={gated("brands.view", <Brands />)} />
           <Route path="/coupons" element={gated("coupons.view", <Coupons />)} />
           <Route path="/orders" element={gated("orders.view", <Orders />)} />
 
@@ -117,7 +116,6 @@ export default function App() {
           <Route path="/stock-control" element={gated(["inventory.view", "stockLedger.view"], <StockControl />)} />
           <Route path="/vendors" element={gated("vendors.view", <Vendors />)} />
           <Route path="/purchase-orders" element={gated("purchaseOrders.view", <PurchaseOrders />)} />
-          <Route path="/bulk" element={gated(["bulk.import", "bulk.export"], <BulkTools />)} />
           <Route path="/forms" element={gated("forms.view", <Forms />)} />
 
           <Route path="/studio/home" element={gated("appStudio.view", <AppHome />)} />
