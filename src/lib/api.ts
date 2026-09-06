@@ -21,7 +21,7 @@ import type {
   Invoice, InvoiceLine, GuestPackageBalance, PaymentMethod,
   AssignmentLedger, Membership, MembershipAssignment, GuestMembership,
   CurrentStockRow, StockSummary, StockCount, StockTransfer, StockValuation, StockImportResult,
-  MessageTemplate, StaffSalesRow, InvoiceSummary,
+  MessageTemplate, StaffSalesRow, InvoiceSummary, AppStockImportResult,
 } from "./types";
 import type { VisitCodeLog } from "./types";
 
@@ -412,6 +412,10 @@ export const products = {
     byFormulation?: Record<string, { count: number; stock: number; value: number }>;
   }>("/admin/products/statistics"),
   create: (body: Partial<Product>) => request<Product>("/admin/products", { method: "POST", body }),
+  /** App Stock template: preview / apply an import, or download the current catalogue in the same shape. */
+  appStockPreview: (file: File) => { const form = new FormData(); form.append("file", file); return request<AppStockImportResult>("/admin/products/app-stock/preview", { method: "POST", body: form }); },
+  appStockImport: (file: File) => { const form = new FormData(); form.append("file", file); return requestRaw<AppStockImportResult>("/admin/products/app-stock/import", { method: "POST", body: form }); },
+  appStockExportPath: (q?: Query) => `/admin/products/app-stock/export${q ? "?" + new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined && v !== null && v !== "").map(([k, v]) => [k, String(v)])).toString() : ""}`,
   update: (id: Id, body: Partial<Product>) => request<Product>(`/admin/products/${id}`, { method: "PUT", body }),
   remove: (id: Id) => requestRaw(`/admin/products/${id}`, { method: "DELETE" }),
   toggle: (id: Id) => request<Product>(`/admin/products/${id}/toggle-status`, { method: "PATCH" }),

@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
 import {
-  Page, Btn, Tag, Stats, Card, DataTable, B, Tabs, Note, Hint, In, Sel, Toggle, Area, Switch,
-  SecH, Modal, Drawer, Menu, DeleteModal, Async, Empty, Loading, StaleBanner, exportCsv, UploadField, MultiSelect,
+  Page, Btn, Tag, Stats, Card, DataTable, B, Tabs, Note, Hint, In, Sel, Toggle, Area, Switch, SecH, Modal, Drawer, Menu, DeleteModal, Async, Empty, Loading, StaleBanner, exportCsv, UploadField, MultiSelect,
 } from "../ui";
 import { useStore } from "../store";
 import api from "../lib/api";
 import { useApi, useDebounced } from "../lib/useApi";
 import { useQueryNumber, useQueryPage, useQueryString } from "../lib/useListState";
 import { fmtDate, fmtDateFull, fmtINR, fmtCompactINR, idOf, isoDay, nameOf } from "../lib/format";
-import type { Brand, Coupon, Formulation, OrderStatus, Product, ProductOrder } from "../lib/types";
+import type { Brand, Coupon, Formulation, OrderStatus, Product, ProductOrder, AppStockImportResult } from "../lib/types";
+import { download } from "../lib/http";
 
 /* ================= PRODUCTS ================= */
 export function Products() {
@@ -30,7 +30,27 @@ export function Products() {
   const [kind, setKind] = useQueryString("kind", "retail");
   const [centre, setCentre] = useState("");
   const { branches: allBranches } = useStore();
-  const q = useApi(() => api.products.list({ search: debounced || undefined, kind: kind === "all" ? undefined : kind, branchId: centre || undefined }), [debounced, kind, centre]);
+  /*
+   * Commerce shows the CATALOGUE — the curated OTC list the app sells — not
+   * Zenoti's whole product master. "Zenoti master" opens the rest, read-mostly,
+   * for when a product needs to be brought into the catalogue.
+   */
+  const [scope, setScope] = useQueryString("scope", "app");
+  const [fCat, setFCat] = useState("All");
+  const [fSub, setFSub] = useState("All");
+  const [fVendor, setFVendor] = useState("All");
+  const [fStatus, setFStatus] = useState("All");
+  const [fStock, setFStock] = useState("all");
+  const [fHsn, setFHsn] = useState("");
+  const dHsn = useDebounced(fHsn, 300);
+  const [importOpen, setImportOpen] = useState(false);
+  const q = useApi(() => api.products.list({
+    search: debounced || undefined, catalogue: scope === "app" ? "app" : "master",
+    kind: scope === "app" || kind === "all" ? undefined : kind, branchId: centre || undefined,
+    category: fCat === "All" ? undefined : fCat, subCategory: fSub === "All" ? undefined : fSub, vendor: fVendor === "All" ? undefined : fVendor,
+    status: fStatus === "All" ? undefined : fStatus, stockFilter: fStock === "all" ? undefined : fStock, hsn: dHsn || undefined,
+  }), [debounced, kind, centre, scope, fCat, fSub, fVendor, fStatus, fStock, dHsn]);
+  const facets = (q.data as { facets?: { categories: string[]; subCategories: string[]; vendors: string[]; statuses: string[] } } | undefined)?.facets;
   const forms = useApi(() => api.formulations.list({ isActive: "true" }), []);
   const stats = useApi(() => api.products.statistics().catch(() => undefined), []);
 
@@ -84,9 +104,12 @@ export function Products() {
           <button onClick={() => setGrid(false)} className={`px-3 py-2 text-[12.5px] font-bold ${!grid ? "bg-primary text-white" : "bg-surface text-ink2"}`}>☰ List</button>
           <button onClick={() => setGrid(true)} className={`px-3 py-2 text-[12.5px] font-bold ${grid ? "bg-primary text-white" : "bg-surface text-ink2"}`}>▦ Grid</button>
         </div>
-        <Btn kind="ghost" disabled={!list.length} onClick={() => exportCsv("zennara-products",
-          ["Code", "Name", "Brand", "Formulation", "Price", "GST %", "Stock", "Rating", "Active"],
-          list.map((p) => [p.code ?? "", p.name, p.OrgName, p.formulation, p.price, p.gstPercentage, p.stock, p.rating ?? 0, p.isActive ? "yes" : "no"]))}>Export CSV</Btn>
+        <div className="flex overflow-hidden rounded-(--radius-btn) border border-border">
+          <button onClick={() => setScope("app")} className={`px-3 py-2 text-[12.5px] font-bold ${scope === "app" ? "bg-primary text-white" : "bg-surface text-ink2"}`}>Catalogue{buckets?.app !== undefined ? ` · ${buckets.app}` : ""}</button>
+          <button onClick={() => setScope("master")} className={`px-3 py-2 text-[12.5px] font-bold ${scope === "master" ? "bg-primary text-white" : "bg-surface text-ink2"}`}>Zenoti master</button>
+        </div>
+        {can("products.manage") && <Btn kind="ghost" onClick={() => setImportOpen(true)}>Import template</Btn>}
+        <Btn kind="ghost" onClick={() => download(api.products.appStockExportPath({ catalogue: scope === "app" ? "app" : "all" }), `AppStock_Template_${scope === "app" ? "Commerce" : "AllProducts"}.xlsx`).catch((e) => toastMsg((e as Error).message))}>Export template</Btn>
         {can("products.manage") && <Btn onClick={() => setAddOpen(true)}>+ New product</Btn>}
       </>}>
       <Hint id="products-live" steps={[
@@ -121,9 +144,18 @@ export function Products() {
         {() => (
           <>
             <div data-tour="prod-tabs" />
-            <Tabs active={Math.max(0, KINDS.findIndex((k) => k.key === kind))} onChange={(i) => setKind(KINDS[i].key)}
-              items={KINDS.map((k) => [k.label, buckets?.[k.key]]) as [string, number | undefined][]} />
+            {scope === "master" && (
+              <Tabs active={Math.max(0, KINDS.findIndex((k) => k.key === kind))} onChange={(i) => setKind(KINDS[i].key)}
+                items={KINDS.map((k) => [k.label, buckets?.[k.key]]) as [string, number | undefined][]} />
+            )}
+            {scope === "app" && <Note className="mb-2">This is what the app sells: the pharmacy's OTC list. Stock, prices, HSN, vendor and re-order levels come from the App Stock template and are edited here. Nothing on this page is written to Zenoti.</Note>}
             <div className="mb-2 flex flex-wrap items-end gap-3">
+              <Sel label="Category" value={fCat} onChange={(v) => { setFCat(v); setFSub("All"); }} options={["All", ...(facets?.categories ?? [])]} />
+              <Sel label="Sub category" value={fSub} onChange={setFSub} options={["All", ...(facets?.subCategories ?? [])]} />
+              <Sel label="Vendor" value={fVendor} onChange={setFVendor} options={["All", ...(facets?.vendors ?? [])]} />
+              <In label="HSN" value={fHsn} onChange={setFHsn} placeholder="e.g. 3304" />
+              <Sel label="Stock" value={fStock === "all" ? "Any" : fStock === "in" ? "In stock" : fStock === "low" ? "At or below re-order" : "Out of stock"} onChange={(v) => setFStock(v === "Any" ? "all" : v === "In stock" ? "in" : v.startsWith("At") ? "low" : "out")} options={["Any", "In stock", "At or below re-order", "Out of stock"]} />
+              <Sel label="Price status" value={fStatus} onChange={setFStatus} options={["All", ...(facets?.statuses ?? [])]} />
               <Sel label="Formulation" value={formulation} onChange={setFormulation} options={["All", ...formulationNames]} />
               <Sel label="Carried at" value={centre ? allBranches.find((b) => b._id === centre)?.name ?? "All centres" : "All centres"}
                 options={["All centres", ...allBranches.map((b) => b.name)]}
@@ -161,9 +193,25 @@ export function Products() {
               </div>
             ) : (
               <DataTable
-                cols={["Product", "Code", "Category", "Type", "Price", "MRP", "GST", "Centres", "In app"]}
+                cols={scope === "app"
+                  ? ["Product", "Code", "Category / sub", "HSN", "Vendor", "Stock", "Buy / sell", "GST", "Status", "In app"]
+                  : ["Product", "Code", "Category", "Type", "Price", "MRP", "GST", "Centres", "In app"]}
                 onRow={(i) => setSel(list[i])}
-                rows={list.map((p) => [
+                rows={list.map((p) => scope === "app" ? [
+                  <span key={p._id}><B>{p.name}{p.isPopular ? " ★" : ""}</B>{p.packName || p.packSize ? <span className="ml-1 text-[10.5px] text-ink3">{[p.packSize, p.packName].filter(Boolean).join(" ")}</span> : null}{!p.image ? <span className="ml-1 text-[10px] text-warn">no photo</span> : null}</span>,
+                  <span key={`${p._id}c`} className="font-mono text-[11px]">{p.code ?? p.sku ?? "—"}</span>,
+                  <span key={`${p._id}cat`} className="text-[11.5px]">{p.productCategory ?? "—"}{p.productSubCategory ? <div className="text-[10.5px] text-ink3">{p.productSubCategory}</div> : null}</span>,
+                  <span key={`${p._id}h`} className="font-mono text-[11px]">{p.hsn ?? "—"}</span>,
+                  <span key={`${p._id}v`} className="text-[11.5px]">{p.vendorName ?? "—"}</span>,
+                  <span key={`${p._id}s`} className="tabular-nums">
+                    <B>{p.stock ?? 0}</B>
+                    {(p.reorderLevel ?? p.lowStockThreshold) ? <span className="text-[10.5px] text-ink3"> / re-order {p.reorderLevel ?? p.lowStockThreshold}{p.targetLevel ? ` · target ${p.targetLevel}` : ""}</span> : null}
+                    {(p.stock ?? 0) <= 0 ? <Tag kind="err">out</Tag> : (p.stock ?? 0) <= (p.reorderLevel ?? p.lowStockThreshold ?? 0) ? <Tag kind="warn">low</Tag> : null}
+                  </span>,
+                  <span key={`${p._id}p`} className="tabular-nums">{p.buyingPrice ? <span className="text-ink3">{fmtINR(p.buyingPrice)} / </span> : null}<B>{p.price ? fmtINR(p.price) : "not priced"}</B></span>,
+                  `${p.gstPercentage ?? 0}%`,
+                  <span key={`${p._id}st`} className="text-[11px]">{p.templateStatus ? <Tag kind={/confirmed/i.test(p.templateStatus) ? "ok" : /estimat/i.test(p.templateStatus) ? "warn" : "err"}>{p.templateStatus}</Tag> : <span className="text-ink3">—</span>}</span>,
+                ] : [
                   <span key={p._id}><B>{p.name}{p.isPopular ? " ★" : ""}</B>{p.packSize ? <span className="ml-1 text-[10.5px] text-ink3">{p.packSize}</span> : null}</span>,
                   <span key={`${p._id}c`} className="font-mono text-[11px]">{p.code ?? p.sku ?? "—"}</span>,
                   <span key={`${p._id}cat`} className="text-[11.5px]">{p.productCategory ?? "—"}{p.productSubCategory ? <div className="text-[10.5px] text-ink3">{p.productSubCategory}</div> : null}</span>,
@@ -175,13 +223,14 @@ export function Products() {
                   <span key={`${p._id}a`} onClick={(e) => e.stopPropagation()}>
                     <Toggle on={p.isActive} onChange={() => quickToggle(p)} />
                   </span>,
-                ])}
+                ]).map((cells) => cells)}
               />
             )}
           </>
         )}
       </Async>
 
+      <AppStockImportModal open={importOpen} onClose={() => setImportOpen(false)} onDone={() => { setImportOpen(false); q.reload(); stats.reload(); }} />
       <ProductEditor open={!!sel || addOpen} product={sel} formulations={formulationNames}
         onClose={() => { setSel(null); setAddOpen(false); }}
         onSaved={() => { q.reload(); stats.reload(); setSel(null); setAddOpen(false); }}
@@ -299,11 +348,31 @@ function ProductEditor({ open, product, formulations, onClose, onSaved, onDelete
           <In label="GST %" type="number" value={String(f.gstPercentage ?? 18)} onChange={(v) => set("gstPercentage")(Number(v) || 0)} />
         </div>
         <In label="Stock on hand" type="number" value={String(f.stock ?? 0)} onChange={(v) => set("stock")(Number(v) || 0)}
-          hint="Direct edits are recorded in the audit log" />
+          hint={product?.stockSource === "template" && product.stockUpdatedAt ? `From the App Stock template, ${fmtDateFull(product.stockUpdatedAt)}. Edits are recorded in the audit log.` : "Direct edits are recorded in the audit log"} />
         {stockChanged && (
           <In label="Reason for the stock change" value={stockReason} onChange={setStockReason} placeholder="e.g. goods received / stock count / damaged" />
         )}
 
+        <SecH t="Stock & sourcing" em="· the App Stock template's fields" />
+        <div className="grid grid-cols-2 gap-3">
+          <In label="Category" value={f.productCategory ?? ""} onChange={set("productCategory")} placeholder="e.g. Skincare" />
+          <In label="Sub category" value={f.productSubCategory ?? ""} onChange={set("productSubCategory")} placeholder="e.g. Hair Fall & Growth" />
+          <In label="HSN code" value={f.hsn ?? ""} onChange={set("hsn")} placeholder="e.g. 33049910" />
+          <In label="Vendor" value={f.vendorName ?? ""} onChange={set("vendorName")} placeholder="Supplier name" />
+          <In label="Re-order level" type="number" value={String(f.reorderLevel ?? "")} onChange={(v) => set("reorderLevel")(v === "" ? null : Number(v))} hint="Warn when stock falls to this" />
+          <In label="Target level" type="number" value={String(f.targetLevel ?? "")} onChange={(v) => set("targetLevel")(v === "" ? null : Number(v))} hint="What to top up to" />
+          <In label="Pack name" value={f.packName ?? ""} onChange={set("packName")} placeholder="btl, tube, box" />
+          <In label="Pack size" value={f.packSize ?? ""} onChange={set("packSize")} placeholder="1, 30 ml, 100 g" />
+          <In label="Buying price (₹)" type="number" value={String(f.buyingPrice ?? "")} onChange={(v) => set("buyingPrice")(v === "" ? null : Number(v))} />
+          <In label="MRP (₹)" type="number" value={String(f.mrp ?? "")} onChange={(v) => set("mrp")(v === "" ? null : Number(v))} hint="Printed price, from Zenoti" />
+          <Sel label="Batch tracking" value={f.batchTracking ?? "Non Batchable"} onChange={(v) => set("batchTracking")(v as Product["batchTracking"])} options={["Non Batchable", "Batchable"]} />
+          <Sel label="Consumption order" value={f.consumptionOrder ?? "FIFO"} onChange={(v) => set("consumptionOrder")(v as Product["consumptionOrder"])} options={["FIFO", "ByExpiry"]} />
+          <Sel label="Price status" value={f.templateStatus ?? "—"} onChange={(v) => set("templateStatus")(v === "—" ? null : v)} options={["—", "VPA confirmed", "estimated", "needs price"]} />
+          <Sel label="Prescription (Rx)" value={f.isRx === true ? "Yes — clinic only" : f.isRx === false ? "No — sell directly" : "Undecided"} onChange={(v) => set("isRx")(v.startsWith("Yes") ? true : v.startsWith("No") ? false : null)} options={["No — sell directly", "Yes — clinic only", "Undecided"]} />
+        </div>
+        {product?.zenotiProductId && <Note className="my-0">Mirrored from Zenoti (code, MRP, HSN, category arrive hourly). Everything you edit here stays here — nothing is written back to Zenoti.</Note>}
+
+        <Switch on={!!f.isAppProduct} onChange={set("isAppProduct")} label="In the Commerce catalogue" sub="The curated list the app can sell" />
         <Switch on={!!f.isActive} onChange={set("isActive")} label="Sold in the app" sub="Off hides it from the store" />
         <Switch on={!!f.isPopular} onChange={set("isPopular")} gold label="Popular" sub="Pins it to the app home rail" />
 
@@ -1178,6 +1247,60 @@ function RefundModal({ open, order, onClose, onDone }: { open: boolean; order: P
       <div className="mt-4 flex justify-end gap-2">
         <Btn kind="ghost" onClick={onClose}>Back</Btn>
         <Btn kind="gold" disabled={busy || !(Number(amount) > 0)} onClick={submit}>{busy ? "Working…" : online ? "Refund via Razorpay" : "Record refund"}</Btn>
+      </div>
+    </Modal>
+  );
+}
+
+
+/* ------------------------------ App Stock import ------------------------------ */
+/**
+ * The pharmacy's App Stock template (or its Rx/OTC classification sheet) →
+ * the Commerce catalogue. Preview first, then apply. Matches products that
+ * already exist here by code, then name; never creates and never writes to
+ * Zenoti.
+ */
+function AppStockImportModal({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: () => void }) {
+  const { toast } = useStore();
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<AppStockImportResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { if (open) { setFile(null); setPreview(null); setErr(null); } }, [open]);
+  const run = async (commit: boolean) => {
+    if (!file) return; setBusy(true); setErr(null);
+    try {
+      if (commit) { const r = await api.products.appStockImport(file); toast(r.message || "Imported"); onDone(); }
+      else setPreview(await api.products.appStockPreview(file));
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <Modal open={open} onClose={onClose} title="Import the App Stock template" wide>
+      <Note className="mt-0">Upload the <B>App Stock template</B> (stock, prices, GST, re-order and target levels, pack, vendor, status) or the <B>Rx vs OTC sheet</B> (which products sell directly and which are prescription). Rows match products by code, then by name. Nothing is written to Zenoti.</Note>
+      <div className="mt-3">
+        <input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => { setFile(e.target.files?.[0] ?? null); setPreview(null); setErr(null); }}
+          className="rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[12.5px] file:mr-2 file:rounded file:border-0 file:bg-ivory file:px-2 file:py-1 file:text-[12px]" />
+      </div>
+      {err && <Note kind="crit" className="mt-3">{err}</Note>}
+      {preview && (
+        <>
+          <div className="mt-3 grid gap-2 sm:grid-cols-5">
+            {[["Sheets", preview.sheets.map((s) => `${s.sheetName} ${s.rows}`).join(" · ")], ["Matched", String(preview.matched)], ["Not found", String(preview.unmatched)], ["Will publish", String(preview.willPublish)], ["Rx, off the app", String(preview.willUnpublish)]].map(([k, v]) => (
+              <div key={k} className="rounded-xl border border-border bg-ivory px-3 py-2"><div className="text-[10px] font-bold uppercase tracking-wider text-ink3">{k}</div><div className="text-[13px] font-extrabold">{v}</div></div>
+            ))}
+          </div>
+          {preview.samples.changes.length > 0 && (
+            <div className="mt-2 max-h-56 overflow-y-auto rounded-lg border border-border text-[12px]">
+              {preview.samples.changes.map((c) => <div key={c.name} className="flex flex-wrap items-center gap-x-2 border-b border-border/60 px-3 py-1.5"><B>{c.name}</B><span className="font-mono text-[10.5px] text-ink3">{c.code ?? ""}</span><span className="text-ink3">{c.fields.join(" · ")}</span></div>)}
+            </div>
+          )}
+          {preview.unmatched > 0 && <Note kind="crit" className="mt-2">{preview.unmatched} row{preview.unmatched === 1 ? "" : "s"} did not match any product here and will be skipped: {preview.samples.unmatched.slice(0, 5).join(", ")}. Products arrive from Zenoti on the hourly sync — nothing is created from the sheet.</Note>}
+        </>
+      )}
+      <div className="mt-4 flex justify-end gap-2">
+        <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
+        <Btn kind="ghost" disabled={busy || !file} onClick={() => run(false)}>{busy && !preview ? "Reading…" : "Check the file"}</Btn>
+        <Btn kind="gold" disabled={busy || !preview} onClick={() => run(true)}>Apply</Btn>
       </div>
     </Modal>
   );

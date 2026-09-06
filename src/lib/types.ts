@@ -687,6 +687,21 @@ export type Product = {
   /** Centres that list this product, from Zenoti's per-centre feed. */
   centres?: { branchId: Id | null; zenotiCenterId?: string | null; branchName?: string }[];
   zenotiProductId?: string | null;
+  /** Commerce catalogue: the curated list the app sells (the pharmacy's OTC sheet). */
+  isAppProduct?: boolean;
+  lowStockThreshold?: number | null;
+  /* App Stock template fields */
+  batchTracking?: "Batchable" | "Non Batchable" | null;
+  consumptionOrder?: "FIFO" | "ByExpiry" | null;
+  reorderLevel?: number | null;
+  targetLevel?: number | null;
+  packName?: string | null;
+  buyingPrice?: number | null;
+  vendorName?: string | null;
+  templateStatus?: string | null;
+  stockSource?: string | null;
+  stockUpdatedAt?: string | null;
+  priceSource?: "zenoti-mrp" | "panel" | null;
   image?: string;
   stock: number;
   rating?: number;
@@ -1590,4 +1605,12 @@ export type StockImportResult = {
   quantityDelta: number; valueAfter: number;
   applied?: number; created?: number; ledgerRows?: number;
   samples: { unmatched: string[]; changes: { name: string; code?: string | null; before: number; after: number; batchNo?: string | null; expiry?: string | null }[] };
+};
+
+/** What an App Stock template import would do (preview) or did (commit). */
+export type AppStockImportResult = {
+  sheets: { sheetName: string; kind: "template" | "classification"; classification: "otc" | "rx" | null; rows: number; skipped: number }[];
+  matched: number; unmatched: number; willUpdate: number; willPublish: number; willUnpublish: number; rxFlagged: number;
+  applied?: number; published?: number; unpublished?: number;
+  samples: { unmatched: string[]; changes: { name: string; code?: string | null; fields: string[] }[] };
 };
