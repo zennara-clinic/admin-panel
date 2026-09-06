@@ -1608,6 +1608,13 @@ export type StockImportResult = {
 };
 
 /** What an App Stock template import would do (preview) or did (commit). */
+export type ProductStockMovement = {
+  _id: string; productId: string;
+  source: "template" | "panel" | "app-order" | "zenoti-sale" | "adjustment";
+  refId: string | null; delta: number; before: number | null; after: number | null;
+  note: string | null; at: string; by?: { _id: string; name: string } | null;
+};
+
 export type AppStockImportResult = {
   sheets: { sheetName: string; kind: "template" | "classification"; classification: "otc" | "rx" | null; rows: number; skipped: number }[];
   matched: number; unmatched: number; willUpdate: number; willPublish: number; willUnpublish: number; rxFlagged: number;

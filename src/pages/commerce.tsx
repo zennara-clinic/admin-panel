@@ -8,7 +8,7 @@ import api from "../lib/api";
 import { useApi, useDebounced } from "../lib/useApi";
 import { useQueryNumber, useQueryPage, useQueryString } from "../lib/useListState";
 import { fmtDate, fmtDateFull, fmtINR, fmtCompactINR, idOf, isoDay, nameOf } from "../lib/format";
-import type { Brand, Coupon, Formulation, OrderStatus, Product, ProductOrder, AppStockImportResult } from "../lib/types";
+import type { Brand, Coupon, Formulation, OrderStatus, Product, ProductOrder, AppStockImportResult, ProductStockMovement } from "../lib/types";
 import { download } from "../lib/http";
 
 /* ================= PRODUCTS ================= */
@@ -355,7 +355,8 @@ function ProductEditor({ open, product, formulations, onClose, onSaved, onDelete
           <Sel label="Price status" value={f.templateStatus ?? "—"} onChange={(v) => set("templateStatus")(v === "—" ? null : v)} options={["—", "VPA confirmed", "estimated", "needs price"]} />
           <Sel label="Prescription (Rx)" value={f.isRx === true ? "Yes — clinic only" : f.isRx === false ? "No — sell directly" : "Undecided"} onChange={(v) => set("isRx")(v.startsWith("Yes") ? true : v.startsWith("No") ? false : null)} options={["No — sell directly", "Yes — clinic only", "Undecided"]} />
         </div>
-        {product?.zenotiProductId && <Note className="my-0">Mirrored from Zenoti (code, MRP, HSN, category arrive hourly). Everything you edit here stays here — nothing is written back to Zenoti.</Note>}
+        {product && <StockHistory productId={product._id} />}
+        {product?.zenotiProductId && <Note className="my-0">Linked to a Zenoti product (the id keeps the per-centre stock shelves attached). Zenoti no longer overwrites anything here, and nothing here is written to Zenoti.</Note>}
 
         <Switch on={!!f.isAppProduct} onChange={set("isAppProduct")} label="In the Commerce catalogue" sub="The curated list the app can sell" />
         <Switch on={!!f.isActive} onChange={set("isActive")} label="Sold in the app" sub="Off hides it from the store" />
@@ -1155,5 +1156,40 @@ function AppStockImportModal({ open, onClose, onDone }: { open: boolean; onClose
         <Btn kind="gold" disabled={busy || !preview} onClick={() => run(true)}>Apply</Btn>
       </div>
     </Modal>
+  );
+}
+
+
+const MOVEMENT_LABEL: Record<ProductStockMovement["source"], string> = {
+  template: "Template import", panel: "Edited in panel", "app-order": "App order", "zenoti-sale": "Zenoti bill", adjustment: "Adjustment",
+};
+
+/** The product's own stock ledger: every count change and where it came from. */
+function StockHistory({ productId }: { productId: string }) {
+  const q = useApi(() => api.products.stockMovements(productId, 60), [productId]);
+  const rows = q.data ?? [];
+  return (
+    <div className="mt-4">
+      <div className="mb-1.5 text-[12px] font-extrabold uppercase tracking-wide text-ink3">Stock history</div>
+      {q.loading ? <div className="text-[13px] text-ink3">Loading…</div>
+        : rows.length === 0 ? <div className="text-[13px] text-ink3">No movements recorded yet. The count changes with app orders, template imports, edits here, and product lines on mirrored Zenoti bills.</div>
+        : (
+          <div className="max-h-56 overflow-auto rounded-(--radius-card) border border-border">
+            <table className="w-full text-[12.5px]">
+              <tbody>
+                {rows.map((m) => (
+                  <tr key={m._id} className="border-b border-border last:border-0">
+                    <td className="px-2.5 py-1.5 whitespace-nowrap text-ink3">{new Date(m.at).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
+                    <td className="px-2.5 py-1.5 font-bold">{MOVEMENT_LABEL[m.source] ?? m.source}</td>
+                    <td className={`px-2.5 py-1.5 text-right font-extrabold tabular-nums ${m.delta < 0 ? "text-danger" : "text-primary"}`}>{m.delta > 0 ? `+${m.delta}` : m.delta}</td>
+                    <td className="px-2.5 py-1.5 text-right tabular-nums text-ink3">{m.after !== null ? `→ ${m.after}` : ""}</td>
+                    <td className="px-2.5 py-1.5 text-ink2">{m.note ?? ""}{m.by?.name ? ` · ${m.by.name}` : ""}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+    </div>
   );
 }

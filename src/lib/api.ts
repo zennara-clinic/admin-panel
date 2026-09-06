@@ -21,7 +21,7 @@ import type {
   Invoice, InvoiceLine, GuestPackageBalance, PaymentMethod,
   AssignmentLedger, Membership, MembershipAssignment, GuestMembership,
   CurrentStockRow, StockSummary, StockCount, StockTransfer, StockValuation, StockImportResult,
-  MessageTemplate, StaffSalesRow, InvoiceSummary, AppStockImportResult,
+  MessageTemplate, StaffSalesRow, InvoiceSummary, AppStockImportResult, ProductStockMovement,
 } from "./types";
 import type { VisitCodeLog } from "./types";
 
@@ -413,6 +413,7 @@ export const products = {
   }>("/admin/products/statistics"),
   create: (body: Partial<Product>) => request<Product>("/admin/products", { method: "POST", body }),
   /** App Stock template: preview / apply an import, or download the current catalogue in the same shape. */
+  stockMovements: (id: string, limit = 100) => request<{ success: boolean; data: ProductStockMovement[] }>(`/admin/products/${id}/stock-movements?limit=${limit}`).then((r) => r.data),
   appStockPreview: (file: File) => { const form = new FormData(); form.append("file", file); return request<AppStockImportResult>("/admin/products/app-stock/preview", { method: "POST", body: form }); },
   appStockImport: (file: File) => { const form = new FormData(); form.append("file", file); return requestRaw<AppStockImportResult>("/admin/products/app-stock/import", { method: "POST", body: form }); },
   appStockExportPath: (q?: Query) => `/admin/products/app-stock/export${q ? "?" + new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined && v !== null && v !== "").map(([k, v]) => [k, String(v)])).toString() : ""}`,
