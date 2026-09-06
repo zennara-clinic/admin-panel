@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Btn, Tag, Modal, Note, In, Sel, Area, B, Page, DataTable, Async, DateRange, Empty } from "../ui";
+import { Btn, Tag, Modal, Note, In, Sel, Area, B, Page, DataTable, Async, DateRange, Empty, Tabs, exportCsv } from "../ui";
 import { useStore } from "../store";
 import api, { type NewInvoiceLine } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { fmtINR, fmtWhen, fmtAgo, isoDay } from "../lib/format";
-import type { Invoice, InvoiceLine, GuestPackageBalance, GuestMembership, PaymentMethod, Consultation, Product, Inventory, Package, Doctor, Membership } from "../lib/types";
+import type { Invoice, InvoiceLine, GuestPackageBalance, GuestMembership, PaymentMethod, Consultation, Product, Inventory, Package, Doctor, Membership, InvoiceSummary } from "../lib/types";
 
 /* ------------------------------------------------------------------------- *
  * Billing — Zenoti's POS window, for our data.
@@ -112,7 +112,7 @@ function AddLine({ inv, onChanged }: { inv: Invoice; onChanged: (i: Invoice) => 
     if (tab === "product") return ((await api.products.list({ search: debounced, limit: 12 })).data ?? []) as Product[];
     return ((await api.inventory.list({ search: debounced, limit: 12, ...(branchId ? { branchId } : {}) })).data ?? []) as Inventory[];
   }, [tab, debounced, branchId]);
-  const pkgs = useApi(() => (tab === "package" ? api.packages.list({ isActive: "true" }) : Promise.resolve([] as Package[])), [tab]);
+  const pkgs = useApi(() => (tab === "package" ? api.packages.list({ isActive: "true", limit: 200 }).then((r) => (r.data ?? []) as Package[]) : Promise.resolve([] as Package[])), [tab]);
   const plans = useApi(() => (tab === "membership" ? api.memberships.list() : Promise.resolve([] as Membership[])), [tab]);
 
   const add = async (body: NewInvoiceLine) => {
@@ -225,7 +225,16 @@ export function InvoiceModal({ open, invoiceId, onClose, onChanged }: { open: bo
 
   const load = async (id: string) => {
     setLoadErr(null);
-    try { const i = await api.invoices.get(id); setInv(i); } catch (e) { setLoadErr(errMsg(e)); }
+    try {
+      const i = await api.invoices.get(id);
+      setInv(i);
+      // A mirrored bill whose lines have never been pulled costs two Zenoti
+      // calls; do it once, the moment someone actually looks at it.
+      if (i.source === "zenoti" && !i.zenotiSource?.detailFetchedAt) {
+        setBusy(true);
+        try { setInv(await api.invoices.zenotiRefresh(id)); } catch { /* header still shows */ } finally { setBusy(false); }
+      }
+    } catch (e) { setLoadErr(errMsg(e)); }
   };
   useEffect(() => { if (open && invoiceId) { setInv(null); setErr(null); changed.current = false; load(invoiceId); } }, [open, invoiceId]);
   useEffect(() => {
@@ -249,7 +258,8 @@ export function InvoiceModal({ open, invoiceId, onClose, onChanged }: { open: bo
   const close = () => { if (changed.current) onChanged?.(); onClose(); };
 
   if (!open) return null;
-  const editable = !!inv && inv.status === "open" && canManage;
+  const mirrored = inv?.source === "zenoti";
+  const editable = !!inv && inv.status === "open" && canManage && !mirrored;
   const t = inv?.totals;
   const guestName = inv?.guest?.name || (inv?.userId as { fullName?: string } | null)?.fullName || "Guest";
   const centre = (inv?.branchId as { name?: string } | null)?.name || inv?.seller?.name || "";
@@ -286,6 +296,12 @@ export function InvoiceModal({ open, invoiceId, onClose, onChanged }: { open: bo
               </table>
             </div>
             <div className="text-[10.5px] text-ink3">Prices in the table are before GST, as Zenoti shows them. Discounts are in rupees, before GST.</div>
+            {mirrored && (
+              <Note className="mt-2">
+                Raised in Zenoti{inv.zenotiSource?.invoiceDate ? ` on ${fmtWhen(inv.zenotiSource.invoiceDate)}` : ""} — shown here read-only. Change it in Zenoti, then refresh.
+                {" "}<button className="font-semibold underline underline-offset-2" onClick={async () => { setBusy(true); try { setInv(await api.invoices.zenotiRefresh(inv._id)); toast("Refreshed from Zenoti"); } catch (e) { setErr(errMsg(e)); } finally { setBusy(false); } }}>Refresh now</button>
+              </Note>
+            )}
             {editable && <AddLine inv={inv} onChanged={apply} />}
 
             <div className="mt-3 grid gap-2 text-[12.5px] md:grid-cols-2">
@@ -403,9 +419,9 @@ export function InvoiceModal({ open, invoiceId, onClose, onChanged }: { open: bo
             <div className="mt-3 grid grid-cols-2 gap-2">
               <Btn kind="ghost" disabled={busy} onClick={async () => { try { const r = await api.invoices.receipt(inv._id, true); if (!printReceipt(r.html, inv.invoiceNumber)) setErr("Allow pop-ups to print the receipt."); } catch (e) { setErr(errMsg(e)); } }}>Print</Btn>
               <Btn kind="ghost" disabled={busy || !canManage} onClick={() => setSendOpen(true)}>Email / WhatsApp</Btn>
-              {inv.status === "open" && canManage && <Btn disabled={busy || inv.lines.length === 0} onClick={() => (inv.totals.due > 0 ? setDueOpen(true) : run(() => api.invoices.close(inv._id), "Invoice closed"))}>Close invoice</Btn>}
-              {inv.status === "closed" && canVoid && <Btn kind="ghost" disabled={busy} onClick={() => run(() => api.invoices.reopen(inv._id), "Invoice reopened")}>Reopen</Btn>}
-              {inv.status !== "void" && canVoid && <Btn kind="danger" disabled={busy} onClick={() => setVoidOpen(true)}>Void</Btn>}
+              {!mirrored && inv.status === "open" && canManage && <Btn disabled={busy || inv.lines.length === 0} onClick={() => (inv.totals.due > 0 ? setDueOpen(true) : run(() => api.invoices.close(inv._id), "Invoice closed"))}>Close invoice</Btn>}
+              {!mirrored && inv.status === "closed" && canVoid && <Btn kind="ghost" disabled={busy} onClick={() => run(() => api.invoices.reopen(inv._id), "Invoice reopened")}>Reopen</Btn>}
+              {!mirrored && inv.status !== "void" && canVoid && <Btn kind="danger" disabled={busy} onClick={() => setVoidOpen(true)}>Void</Btn>}
               <Btn kind="ghost" onClick={close}>Close window</Btn>
             </div>
             {inv.status === "open" && inv.totals.due === 0 && inv.lines.length > 0 && <Note className="mt-2">Everything is settled — Close invoice to finish. Closing marks the visits paid, takes stock off the shelf and activates any package sold.</Note>}
@@ -457,8 +473,16 @@ export function useOpenInvoice() {
   const [busy, setBusy] = useState(false);
   const openForBooking = async (bookingId: string, branchId?: string | null) => {
     setBusy(true);
-    try { const r = await api.invoices.open({ bookingId, branchId: branchId || undefined }); setInvoiceId((r.data as Invoice)._id); }
-    catch (e) { toast(errMsg(e)); } finally { setBusy(false); }
+    try {
+      // A visit booked in Zenoti already has a bill there: mirror and show it
+      // rather than raising a second one here.
+      try {
+        const mirrored = await api.invoices.forBooking(bookingId);
+        if (mirrored?._id) { setInvoiceId(mirrored._id); return; }
+      } catch { /* no Zenoti bill — raise ours below */ }
+      const r = await api.invoices.open({ bookingId, branchId: branchId || undefined });
+      setInvoiceId((r.data as Invoice)._id);
+    } catch (e) { toast(errMsg(e)); } finally { setBusy(false); }
   };
   const openForGuest = async (userId: string, branchId: string) => {
     setBusy(true);
@@ -470,57 +494,137 @@ export function useOpenInvoice() {
 
 /* ------------------------------ the register ---------------------------- */
 
+const INVOICE_TABS = [
+  { key: "all", label: "All bills", q: {} as Record<string, string> },
+  { key: "closed", label: "Closed", q: { status: "closed" } },
+  { key: "open", label: "Open", q: { status: "open" } },
+  { key: "due", label: "Balance due", q: { due: "true" } },
+  { key: "void", label: "Void", q: { status: "void" } },
+];
+
+/**
+ * The invoice register — every bill the group has, whether it was raised at
+ * our desk, bought in the app, or billed in Zenoti. Zenoti bills are mirrored
+ * (see the backend's invoice sync) and shown read-only.
+ */
 export function Invoices() {
-  const { branchId, can } = useStore();
-  const [from, setFrom] = useState(isoDay());
+  const { branchId, branches, can } = useStore();
+  const [from, setFrom] = useState(isoDay(new Date(Date.now() - 29 * 86400000)));
   const [to, setTo] = useState(isoDay());
-  const [status, setStatus] = useState("all");
+  const [tab, setTab] = useState(0);
+  const [source, setSource] = useState("all");
+  const [centre, setCentre] = useState<string>("");
   const [search, setSearch] = useState("");
-  const [lookup, setLookup] = useState("");
   const [sel, setSel] = useState<string | null>(null);
+  const [lookup, setLookup] = useState("");
   const [lookErr, setLookErr] = useState<string | null>(null);
   const dq = useDebounced(search, 300);
-  const q = useApi(() => api.invoices.list({ from, to, status, search: dq || undefined, branchId: branchId || undefined, limit: 200 }), [from, to, status, dq, branchId]);
+  const scope = centre || branchId || undefined;
+  const query = { from, to, ...INVOICE_TABS[tab].q, source: source === "all" ? undefined : source, search: dq || undefined, branchId: scope, limit: 300 };
+  const q = useApi(() => api.invoices.list(query), [from, to, tab, source, dq, scope]);
+  const sum = useApi(() => api.invoices.summary({ from, to, branchId: scope }), [from, to, scope]);
   const rows = (q.data?.data ?? []) as Invoice[];
   const totals = q.data?.totals;
-  const kindOf = (i: Invoice) => i.status === "void" ? <Tag kind="mute">VOID</Tag> : i.status === "open" ? <Tag kind="gold">OPEN</Tag> : i.totals.due > 0 ? <Tag kind="warn">CLOSED · DUE</Tag> : <Tag kind="ok">CLOSED</Tag>;
+  const s = sum.data as InvoiceSummary | undefined;
+  const centreName = (i: Invoice) => (typeof i.branchId === "object" && i.branchId ? i.branchId.name : branches.find((b) => String(b._id) === String(i.branchId))?.name) ?? "—";
+  const stateTag = (i: Invoice) =>
+    i.status === "void" ? <Tag kind="mute">VOID</Tag>
+      : i.status === "open" ? <Tag kind="gold">OPEN</Tag>
+      : i.totals.due > 0 ? <Tag kind="warn">CLOSED · DUE</Tag>
+      : <Tag kind="ok">CLOSED</Tag>;
+
   return (
-    <Page title="Invoices" sub="Every desk bill — open, closed and void. Search by invoice or receipt number, guest or item."
-      actions={<div className="flex items-center gap-2"><input value={lookup} onChange={(e) => setLookup(e.target.value)} onKeyDown={async (e) => { if (e.key === "Enter" && lookup.trim()) { setLookErr(null); try { const i = await api.invoices.lookup(lookup.trim()); setSel(i._id); } catch (er) { setLookErr(errMsg(er)); } } }} placeholder="Invoice / receipt no. ↵" className="w-48 rounded-lg border border-border bg-surface px-3 py-1.5 text-[12.5px] outline-none focus:border-gold-dark" /></div>}>
+    <Page title="Invoices" sub="Every bill across the group — raised at the desk, bought in the app, or billed in Zenoti."
+      actions={
+        <div className="flex items-center gap-2">
+          <input value={lookup} onChange={(e) => setLookup(e.target.value)}
+            onKeyDown={async (e) => { if (e.key === "Enter" && lookup.trim()) { setLookErr(null); try { const i = await api.invoices.lookup(lookup.trim()); setSel(i._id); } catch (er) { setLookErr(errMsg(er)); } } }}
+            placeholder="Invoice / receipt no. ↵" className="w-52 rounded-lg border border-border bg-surface px-3 py-1.5 text-[12.5px] outline-none focus:border-gold-dark" />
+        </div>
+      }>
       {lookErr && <Note kind="crit">{lookErr}</Note>}
-      <div className="mb-3 flex flex-wrap items-end gap-3">
-        <DateRange from={from} to={to} onChange={(a, b) => { setFrom(a); setTo(b); }} />
-        <Sel label="Status" value={status} onChange={setStatus} options={["all", "open", "closed", "void"]} />
-        <div className="min-w-[220px] flex-1"><In label="Search" value={search} onChange={setSearch} placeholder="Guest, phone, patient id, item…" /></div>
-      </div>
-      {totals && (
-        <div className="mb-3 grid gap-2 sm:grid-cols-4">
-          {[["Bills", String(totals.count)], ["Billed", fmtINR(totals.amount)], ["Collected", fmtINR(totals.paid)], ["Due", fmtINR(totals.due)]].map(([k, v]) => (
-            <div key={k} className="rounded-xl border border-border bg-ivory px-3 py-2"><div className="text-[10px] font-bold uppercase tracking-wider text-ink3">{k}</div><div className="text-[15px] font-extrabold tabular-nums">{v}</div></div>
+      {s && (
+        <div className="mb-3 grid gap-2 sm:grid-cols-5">
+          {[
+            ["Bills", String(s.total.count), `${s.bySource?.zenoti?.count ?? 0} from Zenoti`],
+            ["Billed", fmtINR(s.total.amount), "excl. void"],
+            ["Collected", fmtINR(s.total.paid), ""],
+            ["Outstanding", fmtINR(s.total.due), `${s.byStatus?.open?.count ?? 0} open`],
+            ["Void", String(s.byStatus?.void?.count ?? 0), ""],
+          ].map(([k, v, d]) => (
+            <div key={k} className="rounded-xl border border-border bg-ivory px-3 py-2">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-ink3">{k}</div>
+              <div className="text-[15px] font-extrabold tabular-nums">{v}</div>
+              {d ? <div className="text-[10.5px] text-ink3">{d}</div> : null}
+            </div>
           ))}
         </div>
       )}
+      <Tabs active={tab} onChange={setTab} items={INVOICE_TABS.map((t) => [t.label, t.key === "all" ? s?.total.count : s?.byStatus?.[t.key]?.count]) as [string, number | undefined][]} />
+      <div className="mb-3 flex flex-wrap items-end gap-3">
+        <DateRange from={from} to={to} onChange={(a, b) => { setFrom(a); setTo(b); }} />
+        <Sel label="Raised in" value={source === "all" ? "Everywhere" : source === "zenoti" ? "Zenoti" : source === "desk" ? "Our desk" : "App"} options={["Everywhere", "Our desk", "Zenoti", "App"]}
+          onChange={(v) => setSource(v === "Everywhere" ? "all" : v === "Our desk" ? "desk" : v === "Zenoti" ? "zenoti" : "app")} />
+        <Sel label="Centre" value={centre ? branches.find((b) => b._id === centre)?.name ?? "" : "This centre"} options={["This centre", "All centres", ...branches.map((b) => b.name)]}
+          onChange={(v) => setCentre(v === "All centres" ? "all" : v === "This centre" ? "" : branches.find((b) => b.name === v)?._id ?? "")} />
+        <div className="min-w-[220px] flex-1"><In label="Search" value={search} onChange={setSearch} placeholder="Guest, phone, patient id, item, number" /></div>
+        <Btn kind="ghost" disabled={!rows.length} onClick={() => exportCsv(`invoices-${from}-${to}`, ["Invoice no", "Receipt no", "Date", "Centre", "Customer", "Patient id", "Items", "Net", "Tax", "Total", "Paid", "Due", "Status", "Source"],
+          rows.map((i) => [i.invoiceNumber, i.receiptNumber ?? "", fmtWhen(i.closedAt || i.issuedAt), centreName(i), i.guest?.name ?? "", i.guest?.patientId ?? "", i.lines.map((l) => `${l.name} x${l.qty}`).join("; "), i.totals.net, i.totals.tax, i.totals.total, i.totals.paid, i.totals.due, i.status, i.source]))}>Export</Btn>
+      </div>
       <Async q={q} label="Loading invoices…" rows={5}>
-        {() => rows.length === 0 ? <Empty title="No invoices in this range" hint="Bills are raised from a booking's Take payment button or from the guest's record." /> : (
-          <DataTable cols={["Invoice no", "Receipt no", "Date", "Customer", "Sale items (qty)", "Amount", "Due", "Status", "Source", ""]}
-            onRow={(i) => setSel(rows[i]._id)}
-            rows={rows.map((i) => [
-              <span key="n" className="font-mono text-[11.5px] font-semibold">{i.invoiceNumber}</span>,
-              <span key="r" className="font-mono text-[11px] text-ink3">{i.receiptNumber ?? "—"}</span>,
-              fmtWhen(i.closedAt || i.issuedAt),
-              <span key="c"><B>{i.guest?.name ?? "—"}</B>{i.guest?.phone ? <span className="ml-1 text-[11px] text-ink3">{i.guest.phone}</span> : null}</span>,
-              <span key="i" className="text-[11.5px]">{i.lines.map((l) => `${l.name} (${l.qty})`).join(", ") || "—"}</span>,
-              <span key="a" className="tabular-nums">{fmtINR(i.totals.total)}</span>,
-              <span key="d" className={`tabular-nums ${i.totals.due > 0 && i.status !== "void" ? "font-bold text-err" : ""}`}>{fmtINR(i.status === "void" ? 0 : i.totals.due)}</span>,
-              kindOf(i),
-              i.source === "zenoti" ? "Zenoti" : i.source === "app" ? "App" : "Desk",
-              <button key="o" className="text-[11.5px] font-semibold text-primary underline-offset-2 hover:underline" onClick={(e) => { e.stopPropagation(); setSel(i._id); }}>Show</button>,
-            ])} />
+        {() => rows.length === 0 ? (
+          <Empty title="No bills in this range"
+            hint={source === "zenoti" ? "Zenoti bills mirror hourly for recent visits. Run scripts/backfillZenotiInvoices.js for older history." : "Bills are raised from a visit's Take payment button, or mirrored from Zenoti."} />
+        ) : (
+          <>
+            <DataTable cols={["Invoice no", "Receipt no", "Date", "Centre", "Customer", "Sale items (qty)", "Amount", "Due", "Status", "Raised in"]}
+              onRow={(i) => setSel(rows[i]._id)}
+              rows={rows.map((i) => [
+                <span key="n" className="font-mono text-[11.5px] font-semibold">{i.invoiceNumber}</span>,
+                <span key="r" className="font-mono text-[11px] text-ink3">{i.receiptNumber ?? "—"}</span>,
+                fmtWhen(i.closedAt || i.issuedAt),
+                <span key="c" className="text-[11.5px]">{centreName(i)}</span>,
+                <span key="g"><B>{i.guest?.name ?? "—"}</B>{i.guest?.patientId ? <span className="ml-1 font-mono text-[10px] text-ink3">{i.guest.patientId}</span> : null}</span>,
+                <span key="i" className="text-[11.5px]">{i.lines.length ? i.lines.map((l) => `${l.name} (${l.qty})`).join(", ") : <span className="text-ink3">open on the bill to pull its items</span>}</span>,
+                <span key="a" className="tabular-nums">{fmtINR(i.totals.total)}</span>,
+                <span key="d" className={`tabular-nums ${i.totals.due > 0 && i.status !== "void" ? "font-bold text-err" : ""}`}>{fmtINR(i.status === "void" ? 0 : i.totals.due)}</span>,
+                stateTag(i),
+                i.source === "zenoti" ? <Tag key="s" kind="info">Zenoti</Tag> : i.source === "app" ? "App" : "Desk",
+              ])} />
+            {totals && <div className="mt-2 flex flex-wrap justify-end gap-4 text-[12px]"><span>Billed <B>{fmtINR(totals.amount)}</B></span><span>Collected <B>{fmtINR(totals.paid)}</B></span><span>Due <B>{fmtINR(totals.due)}</B></span></div>}
+          </>
         )}
       </Async>
-      <InvoiceModal open={!!sel} invoiceId={sel} onClose={() => setSel(null)} onChanged={q.reload} />
-      {!can("billing.manage") && !can("bookings.manage") && <Note className="mt-3">You can view bills but not take payments — ask for the "Raise invoices, take payments" permission.</Note>}
+      <InvoiceModal open={!!sel} invoiceId={sel} onClose={() => setSel(null)} onChanged={() => { q.reload(); sum.reload(); }} />
+      {!can("billing.manage") && !can("bookings.manage") && <Note className="mt-3">You can view bills but not take payments — ask for the “Raise invoices, take payments” permission.</Note>}
     </Page>
+  );
+}
+
+/** A guest's bills, for the patient record. */
+export function GuestInvoices({ userId, onOpen }: { userId: string; onOpen?: (id: string) => void }) {
+  const q = useApi(() => api.invoices.list({ userId, limit: 100, from: undefined, to: undefined }), [userId]);
+  const [sel, setSel] = useState<string | null>(null);
+  const rows = (q.data?.data ?? []) as Invoice[];
+  return (
+    <Async q={q} label="Loading bills…" rows={3}>
+      {() => rows.length === 0 ? <div className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-[12px] text-ink3">No bills on this guest yet.</div> : (
+        <>
+          <DataTable cols={["Invoice no", "Date", "Items", "Amount", "Due", "Status", "Raised in"]}
+            onRow={(i) => (onOpen ? onOpen(rows[i]._id) : setSel(rows[i]._id))}
+            rows={rows.map((i) => [
+              <span key="n" className="font-mono text-[11.5px]">{i.invoiceNumber}</span>,
+              fmtWhen(i.closedAt || i.issuedAt),
+              <span key="i" className="text-[11.5px]">{i.lines.map((l) => `${l.name} (${l.qty})`).join(", ") || "—"}</span>,
+              <span key="a" className="tabular-nums">{fmtINR(i.totals.total)}</span>,
+              <span key="d" className={`tabular-nums ${i.totals.due > 0 ? "font-bold text-err" : ""}`}>{fmtINR(i.totals.due)}</span>,
+              i.status === "void" ? <Tag key="s" kind="mute">VOID</Tag> : i.status === "open" ? <Tag key="s" kind="gold">OPEN</Tag> : <Tag key="s" kind="ok">CLOSED</Tag>,
+              i.source === "zenoti" ? "Zenoti" : i.source === "app" ? "App" : "Desk",
+            ])} />
+          <InvoiceModal open={!!sel} invoiceId={sel} onClose={() => setSel(null)} onChanged={q.reload} />
+        </>
+      )}
+    </Async>
   );
 }
 

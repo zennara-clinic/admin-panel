@@ -8,7 +8,7 @@ import {
 import { useStore } from "../store";
 import api from "../lib/api";
 import { DayBookGrid, TodaysSalesModal } from "./daybook";
-import { InvoiceModal, useOpenInvoice } from "./billing";
+import { InvoiceModal, useOpenInvoice, GuestInvoices } from "./billing";
 import { TemplatePicker } from "./templates";
 import { ZenotiMembershipCard, ZenotiPackageCard, appointmentState, fmtZDate, fmtZWhen, membershipActive, money, pkgActive } from "./zenoti";
 import { getSocket, type ChatUpdate, type DeletedEvent, type PresenceEvent, type TypingEvent } from "../lib/socket";
@@ -18,9 +18,9 @@ import { CLINIC_TZ,
   ageFrom, bookingProvider, bookingServiceName, bookingSlotDate, bookingSlotLabel, bookingSource, fmtAgo, fmtCompactINR,
   fmtDate, fmtDateFull, fmtINR, fmtWhen, idOf, initials, isoDay, isVip, nameOf, patientFlags, pct,
   statusKey, mapToRows, isConsultationBooking, clinicHM, addClinicDays, clinicMonthEnd,
-  clinicMonthStart, clinicWeekday, dayKeyDate, fmtDayKey,
+  clinicMonthStart, clinicWeekday, dayKeyDate, fmtDayKey, zenotiDiaryLabel, visitTimes,
 } from "../lib/format";
-import type { ConsultationStage, Booking, Branch, Chat as ChatThread, ChatMessage, Consultation, Doctor, PackageAssignment, User } from "../lib/types";
+import type { ConsultationStage, Booking, Branch, Chat as ChatThread, ChatMessage, Consultation, Doctor, PackageAssignment, User, Package } from "../lib/types";
 
 /* ================= OVERVIEW ================= */
 const RANGE_PRESETS: [string, () => { startDate: string; endDate: string }][] = [
@@ -231,14 +231,6 @@ function DermPicker({ booking, value, onChange }: { booking: Booking; value: Der
 }
 
 /** Zenoti's diary status codes, as observed live: -2 no show, -1 cancelled, 0 booked, 1 closed, 2 checked in, 4 confirmed, 21 voided. */
-function zenotiDiaryLabel(src?: Booking["zenotiSource"]): string {
-  if (!src) return "—";
-  const s = String(src.status ?? "");
-  if (s === "vanished") return "Removed from diary";
-  const base = s === "-2" ? "No show" : s === "-1" ? "Cancelled" : s === "21" ? "Voided" : s === "1" ? "Closed" : s === "2" ? "Checked in" : s === "4" ? "Confirmed" : s === "0" ? "Booked" : s || "—";
-  const p = Number(src.progress ?? 0);
-  return p === 2 ? `${base} · service completed` : p === 1 ? `${base} · service started` : base;
-}
 
 
 const STAGE_LABEL: Record<string, string> = {
@@ -422,6 +414,7 @@ function BookingDrawer({ id, onClose, onChanged }: {
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                     <Tag kind="info">Zenoti</Tag>
                     <span>Diary status <B>{zenotiDiaryLabel(bk.zenotiSource)}</B></span>
+                    {visitTimes(bk) && <span>· <B>{visitTimes(bk)}</B></span>}
                     {bk.zenotiSource?.invoiceNumber && <span>· invoice <B>{bk.zenotiSource.invoiceNumber}</B></span>}
                     {bk.zenotiTherapistName && <span>· with <B>{bk.zenotiTherapistName}</B></span>}
                     {bk.zenotiSource?.packageName && <span>· package <B>{bk.zenotiSource.packageName}</B></span>}
@@ -1222,7 +1215,11 @@ export function Today() {
                         b.specialistName || b.therapistName ? bookingProvider(b) : <span className="text-err">Not assigned</span>,
                         bookingSlotLabel(b),
                         b.paymentStatus === "paid" ? <Tag kind="ok">Paid</Tag> : <Tag kind="warn">{fmtINR(b.amount)}</Tag>,
-                        STATUS[statusKey(b)],
+                        <span key="st">
+                          {STATUS[statusKey(b)]}
+                          {b.source === "zenoti" && <div className="mt-0.5 text-[10.5px] text-ink3">Zenoti: {zenotiDiaryLabel(b.zenotiSource)}</div>}
+                          {visitTimes(b) && <div className="text-[10.5px] text-ink3">{visitTimes(b)}</div>}
+                        </span>,
                       ])}
                     />
                   )}
@@ -1479,7 +1476,11 @@ export function Bookings() {
               b.preferredLocation,
               bookingSlotLabel(b),
               b.paymentStatus === "paid" ? <Tag kind="ok">Paid</Tag> : <Tag kind="warn">{fmtINR(b.amount)}</Tag>,
-              STATUS[statusKey(b)],
+              <span key={`${b._id}s`}>
+                {STATUS[statusKey(b)]}
+                {b.source === "zenoti" && <div className="mt-0.5 text-[10.5px] text-ink3">Zenoti: {zenotiDiaryLabel(b.zenotiSource)}</div>}
+                {visitTimes(b) && <div className="text-[10.5px] text-ink3">{visitTimes(b)}</div>}
+              </span>,
               <Tag kind={b.source === "zenoti" ? "info" : "mute"}>{b.source === "zenoti" ? "Clinic (Zenoti)" : bookingSource(b)}</Tag>,
             ])}
           />
@@ -1904,7 +1905,7 @@ export function PatientDetail() {
   // Viewing a record is `patients.view`; changing membership or account status
   // is `patients.manage`, so those controls are hidden without it.
   const canManagePatient = can("patients.manage");
-  const [tab, setTab] = useQueryNumber("tab", 0, { min: 0, max: 4 });
+  const [tab, setTab] = useQueryNumber("tab", 0, { min: 0, max: 5 });
   const [bookOpen, setBookOpen] = useState(false);
   const [pkgOpen, setPkgOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -2166,6 +2167,9 @@ export function PatientDetail() {
                 c.treatmentProcedure, c.doctorName, fmtDateFull(c.consentDate || c.createdAt),
                 <Tag key={c._id} kind={c.status === "Approved" || c.status === "Signed" ? "ok" : "warn"}>{c.status}</Tag>,
               ])} />,
+          ,
+          /* bills — every invoice on this guest, ours and Zenoti's */
+          <GuestInvoices key="bills" userId={id} />
         ];
 
         return (
@@ -2198,6 +2202,7 @@ export function PatientDetail() {
                   ["Packages", assignments.length + zPkgs.length],
                   ["Orders", orders.length + zOrders.length],
                   ["Consents", consents.length],
+                  ["Bills"],
                 ]} />
                 {tabBody[tab] ?? tabBody[0]}
               </div>
@@ -2618,7 +2623,7 @@ export function AssignPackageModal({ open, onClose, user, onAssigned }: {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const q = useApi(() => api.packages.list({ isActive: "true" }), [open]);
+  const q = useApi(() => api.packages.list({ isActive: "true", limit: 200 }).then((r) => (r.data ?? []) as Package[]), [open]);
   const branchesQ = useApi(() => api.branches.list({ isActive: "true" }), [open]);
   const doctorsQ = useApi(() => api.doctors.list({ isActive: "true" }), [open]);
   const list = q.data ?? [];

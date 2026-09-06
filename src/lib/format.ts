@@ -298,3 +298,28 @@ export function mapToRows(
     .sort((a, b) => Number(b[1]) - Number(a[1]))
     .map(([k, v]) => [k || "Unknown", Number(v), fmt(Number(v))]);
 }
+
+/**
+ * Zenoti's own view of an appointment, in words — the status the front desk
+ * sees in Zenoti's book, not our lifecycle. Prefers the label the mirror
+ * stored; falls back to the numeric codes we have confirmed.
+ */
+export function zenotiDiaryLabel(src?: {
+  status?: number | string | null; progress?: number | null; statusLabel?: string | null; vanishedAt?: string | null;
+} | null): string {
+  if (!src) return "—";
+  const s = String(src.status ?? "");
+  if (s === "vanished") return "Removed from diary";
+  const base = src.statusLabel
+    || (s === "-2" ? "No show" : s === "-1" ? "Cancelled" : s === "21" ? "Voided" : s === "1" ? "Serviced (closed)"
+      : s === "2" ? "Checked in" : s === "3" ? "Confirmed" : s === "4" ? "In service" : s === "11" ? "Reserved" : s === "0" ? "Booked" : s || "—");
+  const p = Number(src.progress ?? 0);
+  return p === 2 ? `${base} · service completed` : p === 1 ? `${base} · service started` : base;
+}
+
+/** "in 10:42 · out 11:30" for a visit, or an empty string. */
+export function visitTimes(b: { checkInTime?: string | null; checkOutTime?: string | null }): string {
+  const t = (v?: string | null) => (v ? new Date(v).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false }) : null);
+  const parts = [t(b.checkInTime) ? `in ${t(b.checkInTime)}` : "", t(b.checkOutTime) ? `out ${t(b.checkOutTime)}` : ""].filter(Boolean);
+  return parts.join(" · ");
+}

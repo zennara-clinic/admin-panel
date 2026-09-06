@@ -24,7 +24,13 @@ export function Products() {
   const [del, setDel] = useState<Product | null>(null);
   const debounced = useDebounced(search);
 
-  const q = useApi(() => api.products.list({ search: debounced || undefined }), [debounced]);
+  // Zenoti's master splits into what the app sells and what only the clinic
+  // uses; the tabs follow that split, and a centre filter answers "what does
+  // Jubilee Hills Pharmacy carry?".
+  const [kind, setKind] = useQueryString("kind", "retail");
+  const [centre, setCentre] = useState("");
+  const { branches: allBranches } = useStore();
+  const q = useApi(() => api.products.list({ search: debounced || undefined, kind: kind === "all" ? undefined : kind, branchId: centre || undefined }), [debounced, kind, centre]);
   const forms = useApi(() => api.formulations.list({ isActive: "true" }), []);
   const stats = useApi(() => api.products.statistics().catch(() => undefined), []);
 
@@ -36,9 +42,17 @@ export function Products() {
 
   // One definition of "low": under 10 and not out — matches the statistics tile.
   const LOW = 10;
-  const tabs = ["All", ...formulationNames];
+  const KINDS = [
+    { key: "retail", label: "Retail" },
+    { key: "consumable", label: "Consumables" },
+    { key: "rx", label: "Prescription (Rx)" },
+    { key: "unpriced", label: "Needs a price" },
+    { key: "all", label: "Everything" },
+  ];
+  const buckets = (q.data as { buckets?: Record<string, number> } | undefined)?.buckets;
+  const [formulation, setFormulation] = useState("All");
   const list = rows.filter((p) =>
-    (tab === 0 || p.formulation === tabs[tab]) &&
+    (formulation === "All" || p.formulation === formulation) &&
     (!lowOnly || (p.stock > 0 && p.stock < LOW)));
 
   // Deep-link from global search / a notification — fetch it if it isn't in the loaded rows.
@@ -107,8 +121,17 @@ export function Products() {
         {() => (
           <>
             <div data-tour="prod-tabs" />
-            <Tabs active={tab} onChange={setTab}
-              items={tabs.map((c, i) => [c, i === 0 ? rows.length : rows.filter((p) => p.formulation === c).length]) as [string, number][]} />
+            <Tabs active={Math.max(0, KINDS.findIndex((k) => k.key === kind))} onChange={(i) => setKind(KINDS[i].key)}
+              items={KINDS.map((k) => [k.label, buckets?.[k.key]]) as [string, number | undefined][]} />
+            <div className="mb-2 flex flex-wrap items-end gap-3">
+              <Sel label="Formulation" value={formulation} onChange={setFormulation} options={["All", ...formulationNames]} />
+              <Sel label="Carried at" value={centre ? allBranches.find((b) => b._id === centre)?.name ?? "All centres" : "All centres"}
+                options={["All centres", ...allBranches.map((b) => b.name)]}
+                onChange={(v) => setCentre(v === "All centres" ? "" : allBranches.find((b) => b.name === v)?._id ?? "")} />
+              {kind === "consumable" && <Note className="my-0 flex-1">Treatment-room stock. These never appear in the app; the clinic consumes them against a visit and counts them under Stock.</Note>}
+              {kind === "rx" && <Note className="my-0 flex-1">Prescription medicines. The app shows them with their description but cannot sell them — the pharmacy dispenses them against a prescription.</Note>}
+              {kind === "unpriced" && <Note className="my-0 flex-1">Mirrored from Zenoti with no price of ours yet. Set a price (or the MRP) before publishing to the app.</Note>}
+            </div>
             <div data-tour="prod-table" />
 
             {list.length === 0 ? (
@@ -138,19 +161,17 @@ export function Products() {
               </div>
             ) : (
               <DataTable
-                cols={["Product", "Code", "Brand", "Formulation", "Price", "GST", "Stock", "Rating", "In app"]}
+                cols={["Product", "Code", "Category", "Type", "Price", "MRP", "GST", "Centres", "In app"]}
                 onRow={(i) => setSel(list[i])}
                 rows={list.map((p) => [
-                  <B key={p._id}>{p.name}{p.isPopular ? " ★" : ""}</B>,
-                  <span key={`${p._id}c`} className="font-mono text-[11px]">{p.code ?? "—"}</span>,
-                  p.OrgName,
-                  p.formulation,
-                  fmtINR(p.price),
-                  `${p.gstPercentage}%`,
-                  p.stock === 0
-                    ? <span key={`${p._id}s`}>0 <Tag kind="err">out</Tag></span>
-                    : p.stock < LOW ? <span key={`${p._id}s`}>{p.stock} <Tag kind="warn">low</Tag></span> : p.stock,
-                  p.rating ? `${p.rating.toFixed(1)} (${p.reviews ?? 0})` : "—",
+                  <span key={p._id}><B>{p.name}{p.isPopular ? " ★" : ""}</B>{p.packSize ? <span className="ml-1 text-[10.5px] text-ink3">{p.packSize}</span> : null}</span>,
+                  <span key={`${p._id}c`} className="font-mono text-[11px]">{p.code ?? p.sku ?? "—"}</span>,
+                  <span key={`${p._id}cat`} className="text-[11.5px]">{p.productCategory ?? "—"}{p.productSubCategory ? <div className="text-[10.5px] text-ink3">{p.productSubCategory}</div> : null}</span>,
+                  <span key={`${p._id}t`} className="text-[11.5px]">{p.isRetail === false ? "Consumable" : "Retail"}{p.isRx ? <Tag kind="warn">Rx</Tag> : null}</span>,
+                  <span key={`${p._id}p`} className="tabular-nums">{p.price ? fmtINR(p.price) : <span className="text-warn">not priced</span>}</span>,
+                  <span key={`${p._id}m`} className="tabular-nums text-ink3">{p.mrp ? fmtINR(p.mrp) : "—"}</span>,
+                  `${p.gstPercentage ?? 0}%`,
+                  <span key={`${p._id}ce`} className="text-[11.5px] text-ink3">{(p.centres ?? []).length ? `${(p.centres ?? []).length} centre${(p.centres ?? []).length === 1 ? "" : "s"}` : "—"}</span>,
                   <span key={`${p._id}a`} onClick={(e) => e.stopPropagation()}>
                     <Toggle on={p.isActive} onChange={() => quickToggle(p)} />
                   </span>,

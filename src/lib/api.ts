@@ -21,7 +21,7 @@ import type {
   Invoice, InvoiceLine, GuestPackageBalance, PaymentMethod,
   AssignmentLedger, Membership, MembershipAssignment, GuestMembership,
   CurrentStockRow, StockSummary, StockCount, StockTransfer, StockValuation,
-  MessageTemplate, StaffSalesRow,
+  MessageTemplate, StaffSalesRow, InvoiceSummary,
 } from "./types";
 import type { VisitCodeLog } from "./types";
 
@@ -257,7 +257,8 @@ export const categories = {
 
 /* ============================ packages ============================ */
 export const packages = {
-  list: (q?: Query) => request<Package[]>("/packages", { query: q }),
+  /** Envelope: `data` plus `buckets` (catalogue / sold / ours) for the tabs. */
+  list: (q?: Query) => requestRaw<Package[]>("/packages", { query: q }) as Promise<Envelope<Package[]> & { total?: number; buckets?: { catalogue: number; sold: number; ours: number } }>,
   stats: () => request<Record<string, number>>("/packages/stats"),
   get: (id: Id) => request<Package>(`/packages/${id}`),
   create: (body: Partial<Package>) => request<Package>("/packages", { method: "POST", body }),
@@ -875,6 +876,11 @@ export const invoices = {
   close: (id: Id, allowDue = false) => request<Invoice>(`/invoices/${id}/close`, { method: "POST", body: { allowDue } }),
   reopen: (id: Id) => request<Invoice>(`/invoices/${id}/reopen`, { method: "POST" }),
   void: (id: Id, reason: string) => request<Invoice>(`/invoices/${id}/void`, { method: "POST", body: { reason } }),
+  summary: (q?: Query) => request<InvoiceSummary>("/invoices/summary", { query: q }),
+  /** The bill behind a visit — a Zenoti visit is mirrored in full on first open. */
+  forBooking: (bookingId: Id) => request<Invoice>(`/invoices/for-booking/${bookingId}`),
+  /** Re-read a mirrored bill's lines and payments from Zenoti. */
+  zenotiRefresh: (id: Id) => request<Invoice>(`/invoices/${id}/zenoti-refresh`, { method: "POST" }),
   receipt: (id: Id, print = false) => request<{ html: string; text: string; invoiceNumber: string; receiptNumber: string | null }>(`/invoices/${id}/receipt`, { query: print ? { print: 1 } : undefined }),
   send: (id: Id, body: { channel: "email" | "whatsapp" | "both"; email?: string; phone?: string }) =>
     requestRaw<{ email?: { ok: boolean; to?: string; error?: string }; whatsapp?: { ok: boolean; to?: string; error?: string } }>(`/invoices/${id}/send`, { method: "POST", body }),

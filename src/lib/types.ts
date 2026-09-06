@@ -159,6 +159,9 @@ export type Branch = {
   legalName?: string | null;
   stateCode?: string | null;
   messaging?: { whatsappEnabled?: boolean; zenotiSendsGuestMessages?: boolean; whatsappNumber?: string | null };
+  /** clinic = bookable; pharmacy = retail stock and pharmacy bills; training = Zenoti's practice centre. */
+  centreType?: "clinic" | "pharmacy" | "training";
+  parentBranchId?: Id | null;
   isActive: boolean;
   displayOrder?: number;
   description?: string;
@@ -345,6 +348,9 @@ export type Booking = {
     status?: number | string | null; progress?: number | null; invoiceNumber?: string | null; receiptNumber?: string | null;
     packageName?: string | null; startTime?: string | null; endTime?: string | null; vanishedAt?: string | null;
     createdByName?: string | null; createdAt?: string | null;
+    /** Zenoti's own status, in words, as the mirror recorded it. */
+    statusLabel?: string | null;
+    checkinTime?: string | null;
   } | null;
   therapistId?: Id | null;
   therapistName?: string;
@@ -494,7 +500,13 @@ export type Package = {
   /* Zenoti "Create package" terms (2026-09-06) */
   code?: string | null;
   category?: string;
-  packageType?: "series" | "custom";
+  packageType?: "series" | "custom" | "day" | "offer";
+  /** Where the row came from and whether Zenoti still lists it. */
+  origin?: "zenoti" | "panel";
+  inCatalogue?: boolean;
+  contentsKnown?: boolean;
+  centres?: { branchId: Id | null; zenotiCenterId?: string | null; branchName?: string }[];
+  zenotiCategoryId?: string | null;
   neverExpires?: boolean;
   validityDays?: number | null;
   validityStartsAt?: "sale" | "firstRedemption";
@@ -661,7 +673,20 @@ export type Product = {
   mrp?: number | null;
   hsn?: string | null;
   isRx?: boolean | null;
+  rxReason?: string | null;
   trackStock?: boolean;
+  isRetail?: boolean | null;
+  productType?: string | null;
+  productCategory?: string | null;
+  productSubCategory?: string | null;
+  packSize?: string | null;
+  sku?: string | null;
+  brand?: string | null;
+  barcodes?: string[];
+  isKit?: boolean;
+  /** Centres that list this product, from Zenoti's per-centre feed. */
+  centres?: { branchId: Id | null; zenotiCenterId?: string | null; branchName?: string }[];
+  zenotiProductId?: string | null;
   image?: string;
   stock: number;
   rating?: number;
@@ -1418,6 +1443,13 @@ export type Invoice = {
   status: InvoiceStatus;
   source: "desk" | "app" | "zenoti";
   membership?: { kind?: string | null; name?: string | null; memberNumber?: string | null; assignmentId?: Id | null };
+  /** Set on bills mirrored from Zenoti (read-only here). */
+  zenotiInvoiceId?: string | null;
+  zenotiSource?: {
+    invoiceNumber?: string | null; receiptNumber?: string | null; isClosed?: boolean | null; isRefund?: boolean | null;
+    appointmentGroupId?: string | null; guestCode?: string | null; centerId?: string | null; invoiceDate?: string | null;
+    detailFetchedAt?: string | null; syncedAt?: string | null;
+  };
   lines: InvoiceLine[];
   payments: InvoicePayment[];
   invoiceDiscount: { percent: number; amount: number; reason?: string };
@@ -1538,3 +1570,10 @@ export type MessageTemplate = {
   subject?: string; body: string; twilioContentSid?: string | null; contentVariables?: string[]; isActive: boolean; branchIds?: Id[]; usageCount?: number; lastUsedAt?: string | null; createdAt?: string;
 };
 export type StaffSalesRow = { staff: string; services: number; products: number; packages: number; memberships: number; other: number; total: number; items: number; bills: number };
+
+/** Headline numbers for the invoice register. */
+export type InvoiceSummary = {
+  total: { count: number; amount: number; paid: number; due: number };
+  byStatus: Record<string, { count: number; amount: number; due: number }>;
+  bySource: Record<string, { count: number; amount: number }>;
+};

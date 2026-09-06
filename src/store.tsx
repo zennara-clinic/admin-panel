@@ -212,12 +212,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!loggedIn) return;
     setBranchesLoading(true);
     api.branches
-      .list({ activeOnly: "true" })
+      // The panel manages every centre Zenoti has, pharmacies and the training
+      // centre included; only the app filters down to bookable clinics.
+      .list({ activeOnly: "false" })
       .then((list) => {
         setBranches(list ?? []);
         setBranchId((current) => {
           if (current && (list ?? []).some((b) => b._id === current)) return current;
-          const first = (list ?? [])[0]?._id ?? "";
+          const first = (list ?? []).find((b) => (b.centreType ?? "clinic") === "clinic")?._id ?? (list ?? [])[0]?._id ?? "";
           if (first) localStorage.setItem(BRANCH_KEY, first);
           return first;
         });

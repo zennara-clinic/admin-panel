@@ -815,7 +815,9 @@ export function Packages() {
   const [del, setDel] = useState<Package | null>(null);
   const [cloneSeed, setCloneSeed] = useState<Partial<Package> | null>(null);
 
-  const [tab, setTab] = useQueryNumber("tab", 0, { min: 0, max: 2 });
+  const [tab, setTab] = useQueryNumber("tab", 0, { min: 0, max: 3 });
+  const [search, setSearch] = useState("");
+  const dq = useDebounced(search, 300);
   const [pickOpen, setPickOpen] = useState(false);
   const [assignFor, setAssignFor] = useState<User | null>(null);
   const assignUi = (
@@ -825,15 +827,32 @@ export function Packages() {
     </>
   );
 
-  const q = useApi(() => api.packages.list({ includeInactive: "true" }), []);
+  /*
+   * Zenoti keeps three different things in one list; we separate them:
+   *   0 Catalogue      — what Zenoti's centres sell today (its package master)
+   *   1 Custom & sold  — built for one guest at the desk, or retired, and kept
+   *                      because guests still hold sessions on them
+   *   2 Our packages   — created here, sold through the app
+   *   3 Assignments    — who holds what
+   */
+  const PACKAGE_TABS = [
+    { label: "Catalogue", q: { origin: "zenoti", inCatalogue: "true" } },
+    { label: "Custom & sold", q: { origin: "zenoti", inCatalogue: "false" } },
+    { label: "Our packages", q: { origin: "panel" } },
+  ];
+  const q = useApi(() => api.packages.list({ includeInactive: "true", limit: 200, search: dq || undefined, ...(PACKAGE_TABS[tab]?.q ?? PACKAGE_TABS[0].q) }), [tab, dq]);
   const assignments = useApi(() => api.packageAssignments.stats().catch(() => undefined), []);
-  const list = q.data ?? [];
+  const list = (q.data?.data ?? []) as Package[];
+  const buckets = q.data?.buckets;
+  const total = q.data?.total ?? list.length;
 
-  // Two tabs: the catalogue (every package, including those mirrored from
-  // Zenoti — one list, not two) and the assignments. Packages a customer bought
-  // at the clinic are part of that customer's record, not a third list here.
-  const tabs: [string, number?][] = [["Catalogue", list.length], ["Assignments"]];
-  if (tab === 1) {
+  const tabs: [string, number?][] = [
+    ["Catalogue", buckets?.catalogue],
+    ["Custom & sold", buckets?.sold],
+    ["Our packages", buckets?.ours],
+    ["Assignments"],
+  ];
+  if (tab === 3) {
     return (
       <Page title="Packages" sub="Packages assigned to patients — sessions, payment and cancellation"
         actions={<Btn kind="gold" onClick={() => setPickOpen(true)}>+ Assign package</Btn>}>
@@ -847,9 +866,10 @@ export function Packages() {
     <Page title="Packages" sub="Bundles of services and consultations, assignable to any patient"
       actions={<>
         <Btn kind="ghost" disabled={!list.length} onClick={() => exportCsv("zennara-packages",
-          ["Name", "Price", "Original", "Discount %", "Services", "Bookings", "Active"],
-          list.map((p) => [p.name, p.price, p.originalPrice ?? "", p.discount ?? 0,
-            (p.services?.length ?? 0) + (p.consultationServices?.length ?? 0), p.bookingsCount ?? 0, p.isActive ? "yes" : "no"]))}>Export CSV</Btn>
+          ["Name", "Code", "Kind", "Price", "Services", "Validity (days)", "Grace", "Centres", "Bookings", "In app"],
+          list.map((p) => [p.name, p.code ?? "", p.packageType ?? "", p.price,
+            (p.services?.length ?? 0) + (p.consultationServices?.length ?? 0), p.validityDays ?? (p.neverExpires ? "never" : ""), p.graceDays ?? 0,
+            (p.centres ?? []).map((c) => c.branchName).join("; "), p.bookingsCount ?? 0, p.isActive ? "yes" : "no"]))}>Export CSV</Btn>
         <Btn kind="gold" onClick={() => setPickOpen(true)}>+ Assign package</Btn>
         {can("packages.manage") && <Btn onClick={() => { setCreating(true); setEdit(null); }}>+ New package</Btn>}
       </>}>
@@ -861,7 +881,7 @@ export function Packages() {
           <>
             {assignments.data && (
               <Stats items={[
-                { k: "Packages", v: list.length, d: `${list.filter((p) => p.isActive).length} live in the app` },
+                { k: tabs[tab][0] as string, v: total, d: `${list.filter((p) => p.isActive).length} of these live in the app` },
                 ...(assignments.data.statusCounts ?? []).slice(0, 3).map((s) => ({
                   k: `${s._id} assignments`, v: s.count,
                 })),
@@ -873,25 +893,37 @@ export function Packages() {
               ]} />
             )}
 
+            <div className="mb-2 flex flex-wrap items-end gap-3">
+              <div className="min-w-[240px] flex-1"><In label="Search" value={search} onChange={setSearch} placeholder="Package name, code or description" /></div>
+              {tab === 0 && <Note className="my-0 flex-1">Zenoti's own package list, mirrored hourly. It does not publish what is inside a package, so sessions are filled in from real sales — add the rest here before selling it in the app.</Note>}
+              {tab === 1 && <Note className="my-0 flex-1">Built for one guest at the desk, or retired from the catalogue. Kept because guests still hold sessions on them.</Note>}
+            </div>
             {list.length === 0 ? (
-              <Empty title="No packages yet" hint="Bundle a course of treatments into a package the app can sell."
-                action={can("packages.manage") ? <Btn onClick={() => setCreating(true)}>+ New package</Btn> : undefined} />
+              <Empty title={tab === 2 ? "No packages of our own yet" : "Nothing here"} hint={tab === 2 ? "Bundle a course of treatments into a package the app can sell." : "Nothing in this group right now."}
+                action={can("packages.manage") && tab === 2 ? <Btn onClick={() => setCreating(true)}>+ New package</Btn> : undefined} />
             ) : (
-              <DataTable cols={["Package", "Includes", "Price", "Discount", "Assigned", "In app"]}
+              <DataTable cols={["Package", "Code", "Kind", "Includes", "Price", "Validity", "Centres", "In app"]}
                 onRow={(i) => can("packages.manage") && setEdit(list[i])}
-                rows={list.map((p) => [
-                  <B key={p._id}>{p.name}{p.isPopular ? " ★" : ""}</B>,
-                  `${(p.services?.length ?? 0) + (p.consultationServices?.length ?? 0)} services`,
-                  <span key={`${p._id}pr`}>
-                    <B>{fmtINR(p.price)}</B>
-                    {!!p.originalPrice && p.originalPrice > p.price && (
-                      <s className="ml-1.5 text-[11px] text-ink3">{fmtINR(p.originalPrice)}</s>
-                    )}
-                  </span>,
-                  p.discount ? `${p.discount}%` : "—",
-                  p.bookingsCount ?? 0,
-                  p.isActive ? <Tag key={`${p._id}a`} kind="ok">shown</Tag> : <Tag key={`${p._id}a`} kind="mute">hidden</Tag>,
-                ])} />
+                rows={list.map((p) => {
+                  const lines = (p.services?.length ?? 0) + (p.consultationServices?.length ?? 0);
+                  const sessions = (p.services ?? []).reduce((n, s) => n + (s.sessions ?? 1), 0);
+                  return [
+                    <span key={p._id}><B>{p.name}{p.isPopular ? " ★" : ""}</B>{p.origin === "zenoti" ? <Tag kind="info">Zenoti</Tag> : null}</span>,
+                    <span key={`${p._id}c`} className="font-mono text-[11px] text-ink3">{p.code ?? "—"}</span>,
+                    <span key={`${p._id}t`} className="text-[11.5px]">{p.packageType === "custom" ? "Custom" : p.packageType === "day" ? "Day package" : p.packageType === "offer" ? "Offer" : "Series"}</span>,
+                    lines
+                      ? <span key={`${p._id}i`}>{lines} service{lines === 1 ? "" : "s"} <span className="text-ink3">· {sessions} sessions</span></span>
+                      : <span key={`${p._id}i`} className="text-[11.5px] text-warn">contents not published by Zenoti — add them</span>,
+                    <span key={`${p._id}pr`}>
+                      <B>{fmtINR(p.price)}</B>
+                      {!p.price ? <span className="ml-1 text-[10.5px] text-warn">set a price</span> : null}
+                      {!!p.originalPrice && p.originalPrice > p.price && <s className="ml-1.5 text-[11px] text-ink3">{fmtINR(p.originalPrice)}</s>}
+                    </span>,
+                    <span key={`${p._id}v`} className="text-[11.5px]">{p.neverExpires ? "never expires" : p.validityDays ? `${p.validityDays} days` : `${p.validityMonths ?? 12} months`}{p.graceDays ? ` +${p.graceDays}d grace` : ""}</span>,
+                    <span key={`${p._id}ce`} className="text-[11.5px] text-ink3">{(p.centres ?? []).length ? (p.centres ?? []).map((c) => c.branchName).filter(Boolean).join(", ") : "—"}</span>,
+                    p.isActive ? <Tag key={`${p._id}a`} kind="ok">shown</Tag> : <Tag key={`${p._id}a`} kind="mute">hidden</Tag>,
+                  ];
+                })} />
             )}
           </>
         )}
