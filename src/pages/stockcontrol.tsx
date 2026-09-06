@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { Btn, Tag, Modal, Note, In, Sel, Area, B, Page, DataTable, Async, Tabs, Empty, SecH, exportCsv, HBars } from "../ui";
+import { Btn, Tag, Modal, Note, In, Sel, Area, B, Page, DataTable, Async, Tabs, Empty, SecH, exportCsv, HBars, Card } from "../ui";
 import { useStore } from "../store";
 import api from "../lib/api";
 import { useApi, useDebounced } from "../lib/useApi";
 import { fmtINR, fmtCompactINR, fmtDate, fmtWhen } from "../lib/format";
-import type { CurrentStockRow, StockSummary, StockCount, StockTransfer, StockValuation } from "../lib/types";
+import type { CurrentStockRow, StockSummary, StockCount, StockTransfer, StockValuation, StockImportResult } from "../lib/types";
 
 /* ------------------------------------------------------------------------- *
  * Stock control — Zenoti's Inventory module beyond the item list:
@@ -21,11 +21,12 @@ export function StockControl() {
   const [tab, setTab] = useState(0);
   return (
     <Page title="Stock control" sub="Current stock by centre with valuation, audits that reconcile the shelf, transfers between centres.">
-      <Tabs active={tab} onChange={setTab} items={[["Current stock"], ["Audits"], ["Transfers"], ["Valuation"]]} />
+      <Tabs active={tab} onChange={setTab} items={[["Current stock"], ["Audits"], ["Transfers"], ["Valuation"], ["Import from Zenoti"]]} />
       {tab === 0 && <CurrentStock />}
       {tab === 1 && <Audits />}
       {tab === 2 && <Transfers />}
       {tab === 3 && <Valuation />}
+      {tab === 4 && <ZenotiStockImport />}
     </Page>
   );
 }
@@ -392,5 +393,102 @@ function Valuation() {
         ) : null}
       </Async>
     </>
+  );
+}
+
+
+/* ------------------------------ Zenoti import ------------------------------ */
+
+/**
+ * Zenoti's inventory API is not open to our key (stock, adjustments, purchase
+ * orders and transfers all answer 401), but the clinic already exports these
+ * screens to Excel. Dropping either export in here brings the quantities,
+ * batches, expiry dates, vendor and stock value onto this centre's shelf, and
+ * writes a ledger row for every change.
+ */
+function ZenotiStockImport() {
+  const { branches, toast, can } = useStore();
+  const bc = useBranchChoice();
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<StockImportResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [done, setDone] = useState<StockImportResult | null>(null);
+  const branchId = bc.sel && bc.sel !== "all" && bc.sel !== "none" ? bc.sel : "";
+  const branchName = branches.find((b) => b._id === branchId)?.name ?? "";
+  const canImport = can("inventory.reconcile") || can("inventory.manage");
+
+  const run = async (commit: boolean) => {
+    if (!branchId || !file) return;
+    setBusy(true); setErr(null);
+    try {
+      if (commit) {
+        const r = await api.stockControl.importCommit(branchId, file);
+        setDone(r.data as StockImportResult); setPreview(null); toast(r.message || "Stock imported");
+      } else setPreview(await api.stockControl.importPreview(branchId, file));
+    } catch (e) { setErr(errMsg(e)); } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+      <div>
+        <SecH t="Import a Zenoti stock export" em="· Current stock or Audit inventory" />
+        <Note className="mt-0">
+          In Zenoti open <B>Inventory › Retail (or Consumable) › Current stock</B> — or <B>Audit inventory</B> if you want batch numbers and expiry dates — choose the centre, then <B>Export</B>. Upload that file here without editing its columns.
+        </Note>
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <Sel label="Centre this export came from" value={bc.label} onChange={bc.set} options={bc.options.filter((o) => o[0] !== "all" && o[0] !== "none").map((o) => o[1])} />
+          <label className="flex flex-col gap-1">
+            <span className="text-[11px] font-bold tracking-[0.02em] text-ink2">Export file (.csv or .xlsx)</span>
+            <input type="file" accept=".csv,.xlsx,.xls" onChange={(e) => { setFile(e.target.files?.[0] ?? null); setPreview(null); setDone(null); setErr(null); }}
+              className="rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[12.5px] file:mr-2 file:rounded file:border-0 file:bg-ivory file:px-2 file:py-1 file:text-[12px]" />
+          </label>
+        </div>
+        {err && <Note kind="crit" className="mt-3">{err}</Note>}
+        <div className="mt-3 flex gap-2">
+          <Btn kind="ghost" disabled={busy || !file || !branchId} onClick={() => run(false)}>{busy && !preview ? "Reading…" : "Check the file"}</Btn>
+          <Btn kind="gold" disabled={busy || !preview || !canImport} onClick={() => run(true)}>Apply to {branchName || "the centre"}</Btn>
+        </div>
+
+        {preview && (
+          <>
+            <SecH t="What this will do" em={`· ${preview.rows} rows read`} />
+            <div className="grid gap-2 sm:grid-cols-4">
+              {[["Matched", String(preview.matched)], ["Not found here", String(preview.unmatched)], ["Quantities change", String(preview.changed)], ["Stock value after", fmtINR(preview.valueAfter)]].map(([k, v]) => (
+                <div key={k} className="rounded-xl border border-border bg-ivory px-3 py-2"><div className="text-[10px] font-bold uppercase tracking-wider text-ink3">{k}</div><div className="text-[15px] font-extrabold tabular-nums">{v}</div></div>
+              ))}
+            </div>
+            {preview.samples.changes.length > 0 && (
+              <DataTable cols={["Product", "Code", "On hand now", "After import", "Batch", "Expiry"]}
+                rows={preview.samples.changes.map((c) => [<B key={c.name}>{c.name}</B>, c.code ?? "—", String(c.before), <B key={`${c.name}a`}>{String(c.after)}</B>, c.batchNo ?? "—", c.expiry ? fmtDate(c.expiry) : "—"])} />
+            )}
+            {preview.unmatched > 0 && (
+              <Note kind="crit" className="mt-2">
+                {preview.unmatched} row{preview.unmatched === 1 ? "" : "s"} did not match anything on this centre's shelf and will be skipped — check you picked the right centre, and that those products exist in Zenoti's product master (they arrive with the hourly sync). For example: {preview.samples.unmatched.slice(0, 4).join(", ")}.
+              </Note>
+            )}
+          </>
+        )}
+
+        {done && (
+          <>
+            <SecH t="Imported" />
+            <Note>{done.applied ?? 0} shelf rows updated{done.created ? `, ${done.created} created` : ""}{done.ledgerRows ? `, ${done.ledgerRows} ledger entries written` : ""}. Every quantity change is in the stock ledger with your name on it.</Note>
+          </>
+        )}
+      </div>
+
+      <div className="grid content-start gap-3">
+        <Card className="p-3 text-[12.5px]">
+          <SecH t="Why an import" />
+          <p className="text-ink2">Zenoti's own inventory API refuses our key: stock, adjustments, purchase orders and transfers all answer <span className="font-mono">401</span>. Products, prices (MRP), vendors, invoices and appointments come through live; quantities do not.</p>
+          <p className="mt-2 text-ink2">Two ways to close that gap: ask Zenoti to add the Inventory scope to our API key, after which this becomes automatic — or keep importing the export, which is what the clinic already produces each week.</p>
+        </Card>
+        <Card className="p-3 text-[12.5px]">
+          <SecH t="Columns we read" />
+          <p className="text-ink2">Code, Product, Unit, Vendor, Current On-Hand Qty, Value Considered / Avg. Value, Batch #, Expiry date, Notes. Column order does not matter and extra columns are ignored.</p>
+        </Card>
+      </div>
+    </div>
   );
 }

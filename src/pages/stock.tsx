@@ -110,7 +110,7 @@ function ProductSearch({ products, value, loading, error, onChange, onSelect }: 
 }
 
 export function Inventory() {
-  const { toast, audit, can } = useStore();
+  const { toast, audit, can, branchId, branches } = useStore();
   const [sp] = useSearchParams();
   const [tab, setTab] = useState(0);
   const [search, setSearch] = useState("");
@@ -120,9 +120,16 @@ export function Inventory() {
   const [del, setDel] = useState<Item | null>(null);
   const debounced = useDebounced(search);
 
+  /*
+   * Stock is held per centre — one shelf row per product per centre — so this
+   * list must be scoped or every centre's rows pile up and everything reads as
+   * out of stock. Defaults to the centre the panel is on.
+   */
+  const [centre, setCentre] = useState<string>(branchId || "");
+  useEffect(() => { if (branchId) setCentre(branchId); }, [branchId]);
   const q = useApi(
-    () => api.inventory.list({ search: debounced || undefined, category: category === "All" ? undefined : category }),
-    [debounced, category],
+    () => api.inventory.list({ search: debounced || undefined, category: category === "All" ? undefined : category, branchId: centre || undefined }),
+    [debounced, category, centre],
   );
 
   const rows = q.data?.data ?? [];
@@ -157,8 +164,10 @@ export function Inventory() {
   const list = rows.filter(buckets[tab].filter);
 
   return (
-    <Page title="Inventory" sub="Live stock, batches and expiry across the clinic"
+    <Page title="Inventory" sub={`Live stock, batches and expiry at ${branches.find((b) => b._id === centre)?.name ?? "every centre"}`}
       actions={<>
+        <Menu button={<Btn kind="ghost">{branches.find((b) => b._id === centre)?.name ?? "All centres"} ▾</Btn>}
+          items={[{ label: "All centres", onClick: () => setCentre("") }, ...branches.map((b) => ({ label: b.name, onClick: () => setCentre(b._id) }))]} />
         <Menu button={<Btn kind="ghost">{category} ▾</Btn>}
           items={["All", "Retail products", "Consumables"].map((c) => ({ label: c, onClick: () => setCategory(c) }))} />
         <Btn kind="ghost" disabled={!list.length} onClick={() => exportCsv("zennara-inventory",

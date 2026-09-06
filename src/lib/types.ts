@@ -979,6 +979,10 @@ export type Inventory = {
   inventorySellingPrice?: number;
   inventoryAfterTaxSellingPrice?: number;
   vendorName?: string;
+  branchId?: Id | null;
+  productId?: Id | { _id: Id; name: string; isRx?: boolean | null; mrp?: number | null; price?: number } | null;
+  avgCost?: number | null;
+  lastCountedAt?: string | null;
   packName?: string;
   packSize?: number;
   createdAt?: string;
@@ -1576,4 +1580,14 @@ export type InvoiceSummary = {
   total: { count: number; amount: number; paid: number; due: number };
   byStatus: Record<string, { count: number; amount: number; due: number }>;
   bySource: Record<string, { count: number; amount: number }>;
+};
+
+/** What a Zenoti stock export would do (preview) or did (commit). */
+export type StockImportResult = {
+  branch?: string | null;
+  headerMap?: Record<string, string>;
+  rows: number; matched: number; unmatched: number; changed: number; unchanged: number;
+  quantityDelta: number; valueAfter: number;
+  applied?: number; created?: number; ledgerRows?: number;
+  samples: { unmatched: string[]; changes: { name: string; code?: string | null; before: number; after: number; batchNo?: string | null; expiry?: string | null }[] };
 };

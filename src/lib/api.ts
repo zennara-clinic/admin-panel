@@ -20,7 +20,7 @@ import type {
   GuestStats,
   Invoice, InvoiceLine, GuestPackageBalance, PaymentMethod,
   AssignmentLedger, Membership, MembershipAssignment, GuestMembership,
-  CurrentStockRow, StockSummary, StockCount, StockTransfer, StockValuation,
+  CurrentStockRow, StockSummary, StockCount, StockTransfer, StockValuation, StockImportResult,
   MessageTemplate, StaffSalesRow, InvoiceSummary,
 } from "./types";
 import type { VisitCodeLog } from "./types";
@@ -565,6 +565,7 @@ export const formTemplates = {
 };
 
 export const inventory = {
+  /** Pass `branchId` — stock is held per centre, so an unscoped list mixes them. */
   list: (q?: Query) => requestRaw<Inventory[]>("/admin/inventory", { query: q }),
   get: (id: Id) => request<Inventory>(`/admin/inventory/${id}`),
   statistics: () => request<Record<string, unknown>>("/admin/inventory/statistics"),
@@ -901,6 +902,16 @@ export const stockControl = {
   current: (q?: Query) => requestRaw<CurrentStockRow[]>("/admin/stock/current", { query: q }) as Promise<Envelope<CurrentStockRow[]> & { totals?: StockSummary; basis?: string; lastReconcile?: { at: string; ref: string } | null }>,
   valuation: (q?: Query) => request<StockValuation>("/admin/stock/valuation", { query: q }),
   adjust: (body: { inventoryId: Id; newQty?: number; delta?: number; reason: string }) => requestRaw("/admin/stock/adjust", { method: "POST", body }),
+  /** Zenoti's Current stock / Audit inventory export → this centre's shelf. */
+  importPreview: (branchId: Id, file: File) => {
+    const form = new FormData(); form.append("file", file); form.append("branchId", String(branchId));
+    return request<StockImportResult>("/admin/stock/import/preview", { method: "POST", body: form });
+  },
+  importCommit: (branchId: Id, file: File, reason?: string) => {
+    const form = new FormData(); form.append("file", file); form.append("branchId", String(branchId));
+    if (reason) form.append("reason", reason);
+    return requestRaw<StockImportResult>("/admin/stock/import", { method: "POST", body: form });
+  },
   counts: (q?: Query) => request<StockCount[]>("/admin/stock/counts", { query: q }),
   count: (id: Id) => request<StockCount>(`/admin/stock/counts/${id}`),
   createCount: (body: { branchId?: Id | "none" | "all" | null; category?: string; vendorId?: Id; search?: string; title?: string }) => requestRaw<StockCount>("/admin/stock/counts", { method: "POST", body }),
