@@ -2462,16 +2462,7 @@ function EditPatientModal({ open, onClose, user, onSaved }: {
   );
 }
 
-/** "2:30 PM" from a datetime-local value ("2026-08-15T14:30"), read in the
- * clinic's own timezone — so the label the guest later sees matches what the
- * receptionist typed, independent of the server's timezone. */
-function slotLabelFromLocal(dt: string): string {
-  const d = new Date(dt);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleTimeString("en-US", { timeZone: CLINIC_TZ, hour: "numeric", minute: "2-digit", hour12: true });
-}
 
-type DraftSession = { serviceId: string; serviceName: string; dt: string; specialistId: string };
 
 /* ---- record what was actually charged for an existing membership ---- */
 function RecordMembershipPaymentModal({ open, onClose, user, onDone }: {
@@ -2652,65 +2643,58 @@ export function PatientPickerModal({ open, onClose, onPick, title = "Choose a pa
   );
 }
 
+/**
+ * Assign a package to a guest.
+ *
+ * Deliberately short. It used to demand a date, a time AND a dermatologist for
+ * every session in the package before it would save — a six-session course was
+ * eighteen fields — because sessions were auto-booked 24 hours ahead. That
+ * stopped being true: the guest books each session themselves from the app when
+ * they want it. So the desk answers only what it actually knows at the counter:
+ * which package, which centre, and whether the money has been taken.
+ *
+ * Suggested dates are still possible, but they are a nudge, not a booking, and
+ * they are tucked away because most assignments do not need them.
+ */
 export function AssignPackageModal({ open, onClose, user, onAssigned }: {
   open: boolean; onClose: () => void; user: User; onAssigned: () => void;
 }) {
   const { toast, audit } = useStore();
   const [pkgId, setPkgId] = useState("");
+  const [search, setSearch] = useState("");
   const [paid, setPaid] = useState(false);
-  const [payMethod, setPayMethod] = useState("Pay at clinic");
+  const [payMethod, setPayMethod] = useState("Cash");
   const [payRef, setPayRef] = useState("");
   const [notes, setNotes] = useState("");
   const [branchId, setBranchId] = useState("");
-  const [sessions, setSessions] = useState<DraftSession[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const q = useApi(() => api.packages.list({ isActive: "true", limit: 200 }).then((r) => (r.data ?? []) as Package[]), [open]);
+  const q = useApi(() => api.packages.list({ isActive: "true", limit: 300 }).then((r) => (r.data ?? []) as Package[]), [open]);
   const branchesQ = useApi(() => api.branches.list({ isActive: "true", kind: "clinic" }), [open]);
-  const doctorsQ = useApi(() => api.doctors.list({ isActive: "true" }), [open]);
   const list = q.data ?? [];
   const branches = branchesQ.data ?? [];
-  useEffect(() => { if (!pkgId && list.length) setPkgId(list[0]._id); }, [list.length]);
   useEffect(() => { if (!branchId && branches.length) setBranchId(branches[0]._id); }, [branches.length]);
+  useEffect(() => { if (!open) { setPkgId(""); setSearch(""); setPaid(false); setPayRef(""); setNotes(""); setErr(null); } }, [open]);
 
   const pkg = list.find((p) => p._id === pkgId);
+  const branch = branches.find((b) => b._id === branchId);
   const zenDiscount = isVip(user) ? 0.15 : 0;
   const final = pkg ? Math.round(pkg.price * (1 - zenDiscount)) : 0;
 
-  // Rebuild the flat session schedule whenever the chosen package changes: each
-  // included treatment is expanded to one dated slot per session count.
-  useEffect(() => {
-    if (!pkg) { setSessions([]); return; }
-    const src = [...(pkg.services ?? []), ...(pkg.consultationServices ?? [])];
-    const flat: DraftSession[] = [];
-    for (const it of src) {
-      const n = Math.max(1, it.sessions ?? 1);
-      for (let k = 0; k < n; k++) {
-        flat.push({ serviceId: it.serviceId ?? "", serviceName: it.serviceName ?? it.name ?? "Treatment", dt: "", specialistId: "" });
-      }
-    }
-    setSessions(flat);
-  }, [pkgId]);
+  /** Every treatment in the package, with how many sittings it includes. */
+  const contents = pkg ? [...(pkg.services ?? []), ...(pkg.consultationServices ?? [])] : [];
+  const totalSessions = contents.reduce((n, it) => n + Math.max(1, it.sessions ?? 1), 0);
 
-  const branch = branches.find((b) => b._id === branchId);
-  // Only dermatologists who actually practise at the chosen centre — assigning
-  // someone who never sits there would produce an unrunnable appointment.
-  const centreDoctors = (doctorsQ.data?.data ?? []).filter(
-    (d) => !branch || !(d.availableCentres ?? []).length || (d.availableCentres ?? []).includes(branch.name),
-  );
-  const setSession = (i: number, patch: Partial<DraftSession>) =>
-    setSessions((s) => s.map((x, j) => (j === i ? { ...x, ...patch } : x)));
-  const applyDoctorToAll = (specialistId: string) =>
-    setSessions((s) => s.map((x) => ({ ...x, specialistId })));
+  const shown = list.filter((p) => {
+    const t = search.trim().toLowerCase();
+    return !t || p.name.toLowerCase().includes(t) || (p.code ?? "").toLowerCase().includes(t);
+  });
 
   const submit = async () => {
-    if (!pkg) return;
-    if (paid && payMethod !== "Cash" && !payRef.trim()) { setErr("Enter the receipt / transaction number for the payment."); return; }
-    if (!branch) { setErr("Pick the centre these sessions will run at"); return; }
-    if (sessions.length === 0) { setErr("This package has no treatments to schedule"); return; }
-    if (sessions.some((s) => !s.dt)) { setErr("Give every session a date and time"); return; }
-    if (sessions.some((s) => !s.specialistId)) { setErr("Pick the dermatologist for every session"); return; }
+    if (!pkg) { setErr("Choose a package"); return; }
+    if (!branch) { setErr("Choose the centre these sessions run at"); return; }
+    if (paid && payMethod !== "Cash" && !payRef.trim()) { setErr("Enter the receipt or transaction number."); return; }
     setBusy(true); setErr(null);
     try {
       await api.packageAssignments.create({
@@ -2719,131 +2703,134 @@ export function AssignPackageModal({ open, onClose, user, onAssigned }: {
         notes,
         preferredLocation: branch.name,
         branchId: branch._id,
-        sessions: sessions.map((s) => {
-          const doc = centreDoctors.find((d) => d.doctorId === s.specialistId);
-          return {
-            serviceId: s.serviceId,
-            serviceName: s.serviceName,
-            scheduledDate: new Date(s.dt).toISOString(),
-            scheduledTime: slotLabelFromLocal(s.dt),
-            specialistId: s.specialistId || null,
-            specialistName: doc?.name ?? null,
-            specialistTier: doc?.designation ?? null,
-          };
-        }),
+        // No dates: the guest books each session from the app when they want it.
+        sessions: [],
         paymentMethod: payMethod,
         transactionId: payRef || undefined,
         payment: { isReceived: paid, receivedDate: paid ? new Date().toISOString() : null, method: payMethod },
       });
       audit("CATALOGUE_UPDATED", `Assigned ${pkg.name} to ${user.fullName}`, { userId: user._id, packageId: pkg._id });
-      toast(`${pkg.name} assigned`); onAssigned(); onClose();
+      toast(`${pkg.name} assigned to ${user.fullName}`); onAssigned(); onClose();
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
 
   return (
-    <Modal open={open} onClose={onClose} title={`Assign package to ${user.fullName}`} xl>
+    <Modal open={open} onClose={onClose} title={`Assign a package to ${user.fullName}`} wide>
       {q.initial ? <Loading label="Loading packages…" /> : list.length === 0 ? (
         <Empty title="No active packages" hint="Create one under Care → Packages first." />
       ) : (
-        <>
+        <div className="grid gap-3.5">
+          {/* 1 — which package */}
+          <div>
+            <div className="mb-1.5 flex items-baseline justify-between">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-ink3">Package</span>
+              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search…"
+                className="w-44 rounded-lg border border-border bg-surface px-2.5 py-1 text-[12px] outline-none focus:border-gold-dark" />
+            </div>
+            <div className="max-h-56 overflow-y-auto rounded-(--radius-card) border border-border">
+              {shown.length === 0 && <div className="px-3 py-4 text-center text-[12px] text-ink3">Nothing matches “{search}”.</div>}
+              {shown.map((p) => {
+                const items = [...(p.services ?? []), ...(p.consultationServices ?? [])];
+                const n = items.reduce((a, it) => a + Math.max(1, it.sessions ?? 1), 0);
+                const on = p._id === pkgId;
+                return (
+                  <button key={p._id} type="button" onClick={() => setPkgId(p._id)}
+                    className={`flex w-full items-center justify-between gap-3 border-b border-border/60 px-3 py-2 text-left last:border-0 ${on ? "bg-cream" : "hover:bg-ivory"}`}>
+                    <span className="min-w-0">
+                      <span className="flex items-center gap-1.5">
+                        <B>{p.name}</B>
+                        {p.packageType === "custom" && <Tag kind="info">custom</Tag>}
+                        {!items.length && <Tag kind="warn">contents not set</Tag>}
+                      </span>
+                      <span className="block text-[11px] text-ink3">
+                        {items.length ? `${items.length} treatment${items.length === 1 ? "" : "s"} · ${n} session${n === 1 ? "" : "s"}` : "no treatments listed"}
+                        {p.validityDays ? ` · valid ${p.validityDays} days` : p.neverExpires ? " · never expires" : ""}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-right">
+                      <B>{p.price ? fmtINR(p.price) : "—"}</B>
+                      {on && <span className="block text-[10.5px] font-bold text-ok">selected</span>}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 2 — what the guest gets */}
+          {pkg && (
+            <div className="rounded-(--radius-card) border border-gold-dark bg-cream px-3.5 py-3">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <span className="text-[13px]"><B>{pkg.name}</B></span>
+                <span className="text-[13px]">
+                  {zenDiscount
+                    ? <>List <s className="text-ink3">{fmtINR(pkg.price)}</s> → <B>{fmtINR(final)}</B> <span className="text-[11px] text-ink3">Zen member 15% off</span></>
+                    : <B>{fmtINR(pkg.price)}</B>}
+                </span>
+              </div>
+              {contents.length === 0 ? (
+                <Note kind="crit" className="mt-2 mb-0">
+                  This package has no treatments on it, so the guest will see an empty package in the app.
+                  Add its contents under Care → Packages first.
+                </Note>
+              ) : (
+                <div className="mt-2 grid gap-1">
+                  {contents.map((it, i) => (
+                    <div key={i} className="flex items-center justify-between gap-2 text-[12.5px]">
+                      <span className="min-w-0 truncate">{it.serviceName ?? it.name ?? "Treatment"}</span>
+                      <span className="shrink-0 font-bold text-primary">×{Math.max(1, it.sessions ?? 1)}</span>
+                    </div>
+                  ))}
+                  <div className="mt-1 border-t border-gold-dark/40 pt-1 text-[11.5px] text-ink3">
+                    {totalSessions} session{totalSessions === 1 ? "" : "s"} in total. The guest books each one from the app
+                    when they want it; you confirm it here like any other appointment.
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 3 — where and money */}
           <div className="grid gap-3 md:grid-cols-2">
             <div className="flex flex-col gap-1">
-              <label className="text-[11px] font-bold text-ink2">Package</label>
-              <select value={pkgId} onChange={(e) => setPkgId(e.target.value)}
-                className="rounded-lg border border-border bg-ivory px-2.5 py-2 text-[12.5px] outline-none focus:border-gold-dark">
-                {list.map((p) => <option key={p._id} value={p._id}>{p.name} — {fmtINR(p.price)}</option>)}
-              </select>
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-[11px] font-bold text-ink2">Centre</label>
+              <label className="text-[11px] font-bold text-ink2">Centre these sessions run at</label>
               <select value={branchId} onChange={(e) => setBranchId(e.target.value)}
                 className="rounded-lg border border-border bg-ivory px-2.5 py-2 text-[12.5px] outline-none focus:border-gold-dark">
                 {branches.length === 0 && <option value="">No centres</option>}
                 {branches.map((b) => <option key={b._id} value={b._id}>{b.name}</option>)}
               </select>
             </div>
-          </div>
-
-          {pkg && (
-            <div className="mt-2 text-[12.5px] text-ink2">
-              {pkg.description}
-              <div className="mt-1">
-                {sessions.length} session{sessions.length === 1 ? "" : "s"} ·{" "}
-                {zenDiscount ? <>List <s>{fmtINR(pkg.price)}</s> → <B>{fmtINR(final)}</B> (Zen member 15%)</> : <B>{fmtINR(pkg.price)}</B>}
+            <div className="flex flex-col gap-1">
+              <label className="text-[11px] font-bold text-ink2">Payment</label>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={() => setPaid(!paid)}
+                  className={`rounded-full border px-3 py-1.5 text-[11.5px] font-bold ${paid ? "border-ok bg-ok-bg text-ok" : "border-border bg-surface text-ink2"}`}>
+                  {paid ? "Paid" : "Not paid yet"}
+                </button>
+                {paid && (
+                  <select value={payMethod} onChange={(e) => setPayMethod(e.target.value)}
+                    className="rounded-lg border border-border bg-ivory px-2 py-1.5 text-[12px] outline-none focus:border-gold-dark">
+                    {["Cash", "Card", "UPI", "Bank Transfer", "Other"].map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                )}
               </div>
             </div>
-          )}
-
-          <SecH t="Session schedule" em={`· ${sessions.length} appointment${sessions.length === 1 ? "" : "s"}`}
-            right={sessions.length > 1 && centreDoctors.length > 0 ? (
-              <label className="flex items-center gap-1.5 text-[11px] text-ink3">
-                Same dermatologist for all
-                <select defaultValue="" onChange={(e) => { if (e.target.value) applyDoctorToAll(e.target.value); }}
-                  className="rounded-lg border border-border bg-ivory px-2 py-1 text-[11px] outline-none focus:border-gold-dark">
-                  <option value="">Choose…</option>
-                  {centreDoctors.map((d) => <option key={d._id} value={d.doctorId}>{d.name}</option>)}
-                </select>
-              </label>
-            ) : undefined} />
-          <div className="text-[11.5px] text-ink3">
-            Each session's appointment is created automatically ~24 h before its time, assigned to the dermatologist
-            you pick here, and shows in the guest's app marked “included in your package”.
           </div>
-          {sessions.length === 0 ? (
-            <div className="mt-2 text-[12px] text-ink3">This package has no treatments to schedule.</div>
-          ) : centreDoctors.length === 0 ? (
-            <Note kind="crit" className="mt-2">No dermatologist practises at {branch?.name ?? "this centre"} yet — assign one under Care → Dermatologists first.</Note>
-          ) : (
-            <div className="mt-2 grid gap-2">
-              {sessions.map((s, i) => {
-                const nth = sessions.slice(0, i + 1).filter((x) => x.serviceId === s.serviceId).length;
-                const total = sessions.filter((x) => x.serviceId === s.serviceId).length;
-                return (
-                  <div key={i} className="rounded-xl border border-border bg-ivory px-3 py-2.5">
-                    <div className="flex items-baseline gap-2">
-                      <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-sage font-mono text-[10px] font-bold text-secondary">{i + 1}</span>
-                      <B>{s.serviceName}</B>
-                      {total > 1 && <span className="text-[11px] text-ink3">session {nth} of {total}</span>}
-                    </div>
-                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                      <label className="flex flex-col gap-1">
-                        <span className="text-[11px] font-bold text-ink2">Date &amp; time</span>
-                        <input type="datetime-local" value={s.dt} onChange={(e) => setSession(i, { dt: e.target.value })}
-                          className="rounded-lg border border-border bg-surface px-2.5 py-2 text-[12.5px] text-ink outline-none focus:border-gold-dark" />
-                      </label>
-                      <label className="flex flex-col gap-1">
-                        <span className="text-[11px] font-bold text-ink2">Dermatologist</span>
-                        <select value={s.specialistId} onChange={(e) => setSession(i, { specialistId: e.target.value })}
-                          className="rounded-lg border border-border bg-surface px-2.5 py-2 text-[12.5px] outline-none focus:border-gold-dark">
-                          <option value="">Choose a dermatologist…</option>
-                          {centreDoctors.map((d) => <option key={d._id} value={d.doctorId}>{d.name}{d.designation ? ` · ${d.designation}` : ""}</option>)}
-                        </select>
-                      </label>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
 
-          <div className="mt-3 grid gap-3 md:grid-cols-2">
-            <Sel label="Payment method" value={payMethod} onChange={(v) => { setPayMethod(v); setPaid(v !== "Pay at clinic" && v !== "COD"); }}
-              options={["Pay at clinic", "Cash", "Credit Card", "Debit Card", "UPI", "Bank Transfer", "COD"]} />
-            <In label={paid && payMethod !== "Cash" ? "Receipt / transaction no. (required)" : "Receipt / transaction no."} value={payRef} onChange={setPayRef}
-              hint={paid && payMethod !== "Cash" ? "Required when a payment is recorded" : undefined} />
-          </div>
-          <label className="mt-3 flex items-center gap-2.5 rounded-xl border border-border bg-ivory px-3 py-2.5 text-[12.5px]">
-            <input type="checkbox" checked={paid} onChange={(e) => setPaid(e.target.checked)} className="h-4 w-4 accent-[var(--color-primary)]" />
-            <span>{payMethod === "Pay at clinic" ? "Already paid at the desk" : "Payment collected"}</span>
-          </label>
-          {!paid && <Note className="mb-0 mt-2">Sessions stay bookable; the package shows as <B>payment due</B> until it's marked paid — when the guest pays at the clinic, tick it in the assignment.</Note>}
-          <div className="mt-3"><Area label="Notes (optional)" value={notes} onChange={setNotes} rows={2} /></div>
-          {err && <Note kind="crit">{err}</Note>}
-          <div className="mt-4 flex justify-end gap-2">
+          {paid && payMethod !== "Cash" && (
+            <In label="Receipt / transaction number" value={payRef} onChange={setPayRef} placeholder="Required for anything but cash" />
+          )}
+          <In label="Note (optional)" value={notes} onChange={setNotes} placeholder="Anything the desk should know" />
+
+          {err && <Note kind="crit" className="my-0">{err}</Note>}
+
+          <div className="flex items-center justify-end gap-2 border-t border-border pt-3">
             <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
-            <Btn disabled={busy || !pkg} onClick={submit}>{busy ? "Assigning…" : "Assign package"}</Btn>
+            <Btn kind="gold" disabled={busy || !pkg || !branch} onClick={submit}>
+              {busy ? "Assigning…" : pkg ? `Assign ${pkg.name}` : "Choose a package"}
+            </Btn>
           </div>
-        </>
+        </div>
       )}
     </Modal>
   );
