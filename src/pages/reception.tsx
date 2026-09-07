@@ -206,7 +206,21 @@ const dermReady = (bk: Booking | undefined, d: DermChoice) =>
   !!bk && (d.mode === "keep" ? !!(bk.specialistName || bk.therapistName) : d.mode === "roster" ? !!d.id : d.name.trim().length >= 2);
 const dermBody = (d: DermChoice) => (d.mode === "roster" ? { specialistId: d.id } : d.mode === "custom" ? { specialistName: d.name.trim() } : undefined);
 
-function DermPicker({ booking, value, onChange }: { booking: Booking; value: DermChoice; onChange: (v: DermChoice) => void }) {
+/**
+ * Pick who is running a session.
+ *
+ * `onSave` makes the choice stick on its own. Without it the selection only
+ * travelled with a lifecycle action, so choosing a name on a booking that was
+ * already confirmed — and whose check-in is still hours away — did nothing at
+ * all: there was no action left to carry it, and no button to press.
+ */
+function DermPicker({ booking, value, onChange, onSave, busy }: {
+  booking: Booking;
+  value: DermChoice;
+  onChange: (v: DermChoice) => void;
+  onSave?: (body: { specialistId?: string; specialistName?: string }) => void;
+  busy?: boolean;
+}) {
   const docs = useApi(() => api.doctors.list().catch(() => ({ success: true, data: [] as Doctor[] })), []);
   const list = (docs.data?.data ?? []).filter((d) => !booking.preferredLocation || !d.availableCentres?.length || d.availableCentres.includes(booking.preferredLocation));
   const current = booking.specialistName || booking.therapistName || "";
@@ -226,6 +240,15 @@ function DermPicker({ booking, value, onChange }: { booking: Booking; value: Der
       )}
       {value.mode === "custom" && (
         <input value={value.name} onChange={(e) => onChange({ ...value, name: e.target.value })} placeholder="e.g. Dr Varsha (visiting)" className="mt-2 w-full rounded-lg border border-border bg-surface px-2.5 py-2 text-[12.5px] outline-none" />
+      )}
+      {onSave && value.mode !== "keep" && (
+        <div className="mt-2 flex items-center gap-2">
+          <Btn kind="gold" disabled={busy || !dermReady(booking, value)}
+            onClick={() => { const b = dermBody(value); if (b) onSave(b); }}>
+            {busy ? "Saving…" : current ? "Change dermatologist" : "Assign dermatologist"}
+          </Btn>
+          <span className="text-[11.5px] text-ink3">Saved on the booking straight away.</span>
+        </div>
       )}
     </div>
   );
@@ -319,7 +342,6 @@ function BookingDrawer({ id, onClose, onChanged }: {
   const [resDate, setResDate] = useState(isoDay());
   const [resTime, setResTime] = useState("");
   const [derm, setDerm] = useState<DermChoice>({ mode: "keep", id: "", name: "" });
-  useEffect(() => { setDerm({ mode: "keep", id: "", name: "" }); setDermOpen(false); }, [id]);
   const [dermOpen, setDermOpen] = useState(false);
   const [therOpen, setTherOpen] = useState(false);
   // Floor staff at this centre — loaded when the assign modal opens.
@@ -337,6 +359,20 @@ function BookingDrawer({ id, onClose, onChanged }: {
 
   const q = useApi(() => (id ? api.bookings.get(id) : Promise.resolve(undefined as unknown as Booking)), [id]);
   const bk = q.data;
+
+  /*
+   * Open on the roster when nobody is assigned yet.
+   *
+   * "Keep" is meaningless with nothing to keep, and it hides the Save button,
+   * so a booking with no dermatologist opened on a mode that could not do
+   * anything. Starting on the roster puts the dropdown and its Save in front of
+   * the desk immediately.
+   */
+  useEffect(() => {
+    const assigned = !!(bk?.specialistName || bk?.therapistName);
+    setDerm({ mode: assigned ? "keep" : "roster", id: "", name: "" });
+    setDermOpen(false);
+  }, [id, bk?.specialistName, bk?.therapistName]);
   // What the desk may do to this appointment right now — the server decides,
   // including whether check-in is inside its time window.
   const life = useLifecycle(id);
@@ -481,7 +517,19 @@ function BookingDrawer({ id, onClose, onChanged }: {
                 canOverride={can("bookings.manage")}
                 extraFor={(action) => (action === "confirm" || action === "check_in"
                   ? {
-                      node: <DermPicker booking={bk} value={derm} onChange={setDerm} />,
+                      node: (
+                        <DermPicker
+                          booking={bk}
+                          value={derm}
+                          onChange={setDerm}
+                          busy={act.busy}
+                          onSave={(body) => act.run(
+                            () => api.bookings.setDermatologist(bk._id, body)
+                              .then(() => audit("BOOKING_UPDATED", `${bk.fullName} · dermatologist set`, { bookingId: bk._id })),
+                            "Dermatologist assigned",
+                          )}
+                        />
+                      ),
                       blocked: dermReady(bk, derm)
                         ? null
                         : action === "confirm"
