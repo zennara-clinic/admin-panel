@@ -552,12 +552,12 @@ export const purchaseOrders = {
  * rather than trusting the preview.
  */
 export const bulk = {
-  preview: (entity: "services" | "categories" | "products", file: File) => {
+  preview: (entity: "services" | "categories" | "products" | "packages", file: File) => {
     const form = new FormData();
     form.append("file", file);
     return request<BulkPreview>(`/bulk/${entity}/preview`, { method: "POST", body: form });
   },
-  commit: (entity: "services" | "categories" | "products", file: File, mode: "create" | "update" | "both") => {
+  commit: (entity: "services" | "categories" | "products" | "packages", file: File, mode: "create" | "update" | "both") => {
     const form = new FormData();
     form.append("file", file);
     form.append("mode", mode);

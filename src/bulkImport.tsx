@@ -19,7 +19,7 @@ import { download } from "./lib/http";
 import type { BulkPreview, BulkResult, BulkTaxonomyLevel } from "./lib/types";
 import { B, Btn, Modal, Note } from "./ui";
 
-type Entity = "services" | "categories" | "products";
+type Entity = "services" | "categories" | "products" | "packages";
 
 function Taxonomy({ label, level }: { label: string; level: BulkTaxonomyLevel }) {
   if (!level.new.length && !level.nearDuplicates.length) {
@@ -135,6 +135,21 @@ export function BulkImport({
                   <Taxonomy label="Categories" level={preview.taxonomy.categories} />
                   {preview.taxonomy.subCategories && <Taxonomy label="Sub-categories" level={preview.taxonomy.subCategories} />}
                 </div>
+              )}
+
+              {(preview.warnings ?? 0) > 0 && (
+                <details className="text-[12px]" open>
+                  <summary className="cursor-pointer font-semibold text-warn">
+                    {preview.warnings} rows import, but something in them could not be matched
+                  </summary>
+                  <div className="mt-1 max-h-40 overflow-y-auto">
+                    {preview.rows.filter((r) => r.warnings?.length).slice(0, 40).map((r) => (
+                      <div key={r.row} className="border-t border-border/60 py-1">
+                        Row {r.row}: <span className="text-warn">{r.warnings!.join("; ")}</span>
+                      </div>
+                    ))}
+                  </div>
+                </details>
               )}
 
               {preview.errors > 0 && (

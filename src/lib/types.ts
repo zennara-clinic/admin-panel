@@ -874,6 +874,8 @@ export type BulkPreviewRow = {
   existingId?: Id | null;
   existingName?: string | null;
   errors: string[];
+  /** Row imports, but something in it could not be resolved (an unknown service name). */
+  warnings?: string[];
 };
 
 /** What a file does to the category / sub-category lists, before it is committed. */
@@ -889,6 +891,7 @@ export type BulkPreview = {
   creates: number;
   updates: number;
   errors: number;
+  warnings?: number;
   taxonomy?: { categories: BulkTaxonomyLevel; subCategories: BulkTaxonomyLevel | null } | null;
   rows: BulkPreviewRow[];
 };

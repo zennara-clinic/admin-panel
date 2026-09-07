@@ -71,7 +71,9 @@ export function Services() {
 
   const types = useApi(() => api.serviceTypes.list(), []);
   const cats = useApi(() => api.categories.list(), []);
-  const q = useApi(() => api.services.list({ limit: 500, includeInactive: "true" }), []);
+  // The service master is ~800 rows and the tree counts every one of them; a
+  // 500 cap made the sidebar say "All services 500" and hid 300 real services.
+  const q = useApi(() => api.services.list({ limit: 1000, includeInactive: "true" }), []);
 
   const services = q.data?.data ?? [];
   const typeRows = types.data?.data ?? [];
@@ -917,6 +919,7 @@ export function Packages() {
   const [search, setSearch] = useState("");
   const dq = useDebounced(search, 300);
   const [pickOpen, setPickOpen] = useState(false);
+  const [pkgImportOpen, setPkgImportOpen] = useState(false);
   const [assignFor, setAssignFor] = useState<User | null>(null);
   const assignUi = (
     <>
@@ -968,9 +971,24 @@ export function Packages() {
           list.map((p) => [p.name, p.code ?? "", p.packageType ?? "", p.price,
             (p.services?.length ?? 0) + (p.consultationServices?.length ?? 0), p.validityDays ?? (p.neverExpires ? "never" : ""), p.graceDays ?? 0,
             (p.centres ?? []).map((c) => c.branchName).join("; "), p.bookingsCount ?? 0, p.isActive ? "yes" : "no"]))}>Export CSV</Btn>
+        {can("packages.manage") && (
+          <Menu align="right" button={<Btn kind="ghost">Import / Export ▾</Btn>} items={[
+            { label: "Import prices & contents…", onClick: () => setPkgImportOpen(true) },
+            { label: "Export all packages", onClick: () => download(api.bulk.downloadUrl("packages", "export"), "zennara-packages.csv").catch((e) => toast((e as Error).message)) },
+            { label: "Download blank template", onClick: () => download(api.bulk.downloadUrl("packages", "template"), "zennara-packages-template.csv").catch((e) => toast((e as Error).message)) },
+          ]} />
+        )}
         <Btn kind="gold" onClick={() => setPickOpen(true)}>+ Assign package</Btn>
         {can("packages.manage") && <Btn onClick={() => { setCreating(true); setEdit(null); }}>+ New package</Btn>}
       </>}>
+      <BulkImport
+        open={pkgImportOpen}
+        onClose={() => setPkgImportOpen(false)}
+        entity="packages"
+        title="Import package prices & contents"
+        onDone={() => q.reload()}
+        formatHint="Zenoti does not publish a package's price or what is inside it, so this is how you fill them in. Export first — every package comes out with its name and code already filled — then type the Price and the Services (“Exosome Therapy x3; GFC Hair x2”) and upload it back."
+      />
       {assignUi}
       <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
       <Tabs active={tab} onChange={setTab} items={tabs} />
@@ -1060,7 +1078,7 @@ function PackageEditor({ open, pkg, seed, onClose, onSaved, onDelete, onClone }:
   const [busy, setBusy] = useState(false);
   const [svcSearch, setSvcSearch] = useState("");
 
-  const services = useApi(() => api.services.list({ isActive: "true", limit: 500 }), [open]);
+  const services = useApi(() => api.services.list({ isActive: "true", limit: 1000 }), [open]);
   const catalogue = services.data?.data ?? [];
 
   /** Stored rows key on the Consultation `id`; the picker keys on `_id`. Match either. */
