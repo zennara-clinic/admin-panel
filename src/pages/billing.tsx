@@ -4,7 +4,7 @@ import { Btn, Tag, Modal, Note, In, Sel, Area, B, Page, DataTable, Async, DateRa
 import { useStore } from "../store";
 import api, { type NewInvoiceLine } from "../lib/api";
 import { useApi } from "../lib/useApi";
-import { fmtINR, fmtWhen, fmtAgo, isoDay } from "../lib/format";
+import { fmtDate, fmtINR, fmtWhen, fmtAgo, isoDay } from "../lib/format";
 import type { Invoice, InvoiceLine, GuestPackageBalance, GuestMembership, PaymentMethod, Consultation, Product, Inventory, Package, Doctor, Membership, InvoiceSummary } from "../lib/types";
 
 /* ------------------------------------------------------------------------- *
@@ -64,7 +64,7 @@ function LineRow({ inv, l, editable, onChanged, onBusy }: { inv: Invoice; l: Inv
         <div className="font-semibold">{l.name}{l.kind === "package" && <Tag kind="gold">Package</Tag>}</div>
         <div className="text-[11px] text-ink3">
           {l.soldByName ? <>Sale by: {l.soldByName}</> : <span className="text-warn">No sale-by</span>}
-          {l.code ? ` · ${l.code}` : ""}{l.hsn ? ` · ${l.kind === "service" ? "SAC" : "HSN"} ${l.hsn}` : ""}{l.batchNo ? ` · B.No ${l.batchNo}` : ""}{l.expiryDate ? ` · Exp ${new Date(l.expiryDate).toLocaleDateString("en-GB")}` : ""}
+          {l.code ? ` · ${l.code}` : ""}{l.hsn ? ` · ${l.kind === "service" ? "SAC" : "HSN"} ${l.hsn}` : ""}{l.batchNo ? ` · B.No ${l.batchNo}` : ""}{l.expiryDate ? ` · Exp ${fmtDate(l.expiryDate)}` : ""}
           {l.taxPercent ? ` · GST ${l.taxPercent}%${l.priceIncludesTax ? " incl." : ""}` : " · no GST"}
         </div>
         {redeemed && (
@@ -178,7 +178,7 @@ function AddLine({ inv, onChanged }: { inv: Invoice; onChanged: (i: Invoice) => 
                 </div>); }
               const s = r as Inventory; return (
                 <button key={s._id} className="flex w-full items-center justify-between gap-2 border-b border-border/60 px-3 py-2 text-left text-[12.5px] hover:bg-ivory" disabled={busy} onClick={() => add({ inventoryId: s._id })}>
-                  <span><B>{s.inventoryName}</B> <span className="text-ink3">{s.batchNo ? `B.No ${s.batchNo}` : ""}{s.batchExpiryDate ? ` · Exp ${new Date(s.batchExpiryDate).toLocaleDateString("en-GB")}` : ""} · {s.qohAllBatches ?? 0} on shelf</span></span>
+                  <span><B>{s.inventoryName}</B> <span className="text-ink3">{s.batchNo ? `B.No ${s.batchNo}` : ""}{s.batchExpiryDate ? ` · Exp ${fmtDate(s.batchExpiryDate)}` : ""} · {s.qohAllBatches ?? 0} on shelf</span></span>
                   <span className="tabular-nums">{fmtINR(s.inventoryAfterTaxSellingPrice || s.inventorySellingPrice || 0)}</span>
                 </button>);
             })}
@@ -342,7 +342,7 @@ export function InvoiceModal({ open, invoiceId, onClose, onChanged }: { open: bo
                     <Tag kind="gold">{guestMem.name}{guestMem.memberNumber ? ` · ${guestMem.memberNumber}` : ""}</Tag>
                     <span className="text-[11.5px] text-ink2">
                       {[guestMem.discounts.servicesPercent ? `${guestMem.discounts.servicesPercent}% off services` : "", guestMem.discounts.productsPercent ? `${guestMem.discounts.productsPercent}% off products` : "", guestMem.discounts.packagesPercent ? `${guestMem.discounts.packagesPercent}% off packages` : ""].filter(Boolean).join(" · ") || "no % discount"}
-                      {guestMem.validUntil ? ` · valid to ${new Date(guestMem.validUntil).toLocaleDateString("en-GB")}` : ""}
+                      {guestMem.validUntil ? ` · valid to ${fmtDate(guestMem.validUntil)}` : ""}
                     </span>
                     {guestMem.credits.length > 0 && (
                       <span className="flex items-center gap-2 text-[11.5px]">

@@ -46,7 +46,7 @@ export function Overview() {
 
   const streamRows = (d?.revenue.streams ?? []).map((s) => [s.label, s.revenue, `${s.count} · app ${fmtCompactINR(s.app)}${s.clinic ? ` · clinic ${fmtCompactINR(s.clinic)}` : ""}`] as [string, number, string]);
   const dailyPts = d?.daily.map((x) => x.total) ?? [];
-  const dailyLabels = d?.daily.map((x) => fmtDayKey(String(x.date).slice(0, 10), { day: "numeric", month: "short" })) ?? [];
+  const dailyLabels = d?.daily.map((x) => fmtDayKey(String(x.date).slice(0, 10), { day: "numeric", month: "short", year: "2-digit" })) ?? [];
   const byKind = d ? [
     { n: "Consultations", v: d.daily.map((x) => x.consultations) },
     { n: "Treatments", v: d.daily.map((x) => x.treatments) },
@@ -1378,7 +1378,7 @@ export function Bookings() {
   const kindLabel = applied.kind === "consultation" ? "Dermatologist consultations" : applied.kind === "treatment" ? "Treatments" : "All services";
   const sortLabel = BOOKING_SORTS.find(([v]) => v === applied.sortBy)?.[1] ?? "Appointment date";
   const fmtAnchor = view === "week"
-    ? `${fmtDayKey(isoOf(startOfWeek(anchor)), { day: "numeric", month: "short" })} – ${fmtDayKey(isoOf(addDays(startOfWeek(anchor), 6)), { day: "numeric", month: "short", year: "numeric" })}`
+    ? `${fmtDayKey(isoOf(startOfWeek(anchor)), { day: "numeric", month: "short", year: "2-digit" })} – ${fmtDayKey(isoOf(addDays(startOfWeek(anchor), 6)), { day: "numeric", month: "short", year: "numeric" })}`
     : fmtDayKey(isoOf(anchor), { month: "long", year: "numeric" });
   const shift = (n: number) => {
     const d = new Date(anchor);

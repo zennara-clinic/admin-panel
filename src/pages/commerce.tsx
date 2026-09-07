@@ -1179,7 +1179,7 @@ function StockHistory({ productId }: { productId: string }) {
               <tbody>
                 {rows.map((m) => (
                   <tr key={m._id} className="border-b border-border last:border-0">
-                    <td className="px-2.5 py-1.5 whitespace-nowrap text-ink3">{new Date(m.at).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
+                    <td className="px-2.5 py-1.5 whitespace-nowrap text-ink3">{new Date(m.at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</td>
                     <td className="px-2.5 py-1.5 font-bold">{MOVEMENT_LABEL[m.source] ?? m.source}</td>
                     <td className={`px-2.5 py-1.5 text-right font-extrabold tabular-nums ${m.delta < 0 ? "text-danger" : "text-primary"}`}>{m.delta > 0 ? `+${m.delta}` : m.delta}</td>
                     <td className="px-2.5 py-1.5 text-right tabular-nums text-ink3">{m.after !== null ? `→ ${m.after}` : ""}</td>

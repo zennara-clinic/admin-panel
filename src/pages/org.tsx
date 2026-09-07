@@ -338,7 +338,7 @@ function BranchEditor({ open, branch, onClose, onSaved, onDelete }: {
   return (
     <Drawer open={open} onClose={onClose} title={branch ? branch.name : "New branch"}>
       <div className="grid gap-3">
-        <In label="Branch name" value={f.name ?? ""} onChange={set("name")} placeholder="e.g. Gachibowli" />
+        <In label="Branch name" value={f.name ?? ""} onChange={set("name")} placeholder="e.g. Kondapur" />
         <In label="Description (optional)" value={f.description ?? ""} onChange={set("description")} />
 
         <SecH t="Centre image" />
@@ -599,7 +599,7 @@ function bucketSeries<T>(rows: T[], n: number, pick: (r: T) => number): number[]
 function bucketLabels(rows: { date: string }[], n: number): string[] {
   const size = Math.max(1, Math.ceil(rows.length / n));
   const out: string[] = [];
-  for (let i = 0; i < rows.length; i += size) out.push(fmtDayKey(rows[i].date.slice(0, 10), { day: "numeric", month: "short" }));
+  for (let i = 0; i < rows.length; i += size) out.push(fmtDayKey(rows[i].date.slice(0, 10), { day: "numeric", month: "short", year: "2-digit" }));
   return out;
 }
 
@@ -678,7 +678,7 @@ export function Analytics() {
         {({ dash: d, financial, appointments, patients, services, inventory, monthly, acquisition, demographics, sources, top, orders, products, pkgStats }) => {
           const a = appointments.overview;
           const growth = d.revenue.growthPercent;
-          const dailyLabels = d.daily.map((x) => fmtDayKey(x.date.slice(0, 10), { day: "numeric", month: "short" }));
+          const dailyLabels = d.daily.map((x) => fmtDayKey(x.date.slice(0, 10), { day: "numeric", month: "short", year: "2-digit" }));
           const streams = d.revenue.streams;
           const consultTrend = bucketSeries(d.daily, 10, (x) => x.consultations);
           const treatTrend = bucketSeries(d.daily, 10, (x) => x.treatments);

@@ -40,7 +40,7 @@ function fmt(s: string | null): string {
   if (!s) return "—";
   const d = new Date(s);
   if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleString("en-IN", { timeZone: CLINIC_TZ, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleString("en-IN", { timeZone: CLINIC_TZ, day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 export function ContactChanges() {
