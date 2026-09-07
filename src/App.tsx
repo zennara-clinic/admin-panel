@@ -6,7 +6,6 @@ import type { PermissionKey } from "./lib/types";
 import { Tours } from "./tours";
 import { ErrorBoundary } from "./lib/ErrorBoundary";
 import { Overview, Today, Bookings, Patients, PatientDetail, Chat, SupportInbox } from "./pages/reception";
-import { Invoices } from "./pages/billing";
 import { Memberships } from "./pages/memberships";
 import { StockControl } from "./pages/stockcontrol";
 import { Templates } from "./pages/templates";
@@ -87,7 +86,6 @@ export default function App() {
           <Route path="/overview" element={gated("overview.view", <Overview />)} />
           <Route path="/today" element={gated("today.view", <Today />)} />
           <Route path="/bookings" element={gated("bookings.view", <Bookings />)} />
-          <Route path="/invoices" element={gated(["billing.view", "billing.manage", "bookings.manage"], <Invoices />)} />
           <Route path="/patients" element={gated("patients.view", <Patients />)} />
           <Route path="/patient" element={gated("patients.view", <PatientDetail />)} />
           <Route path="/deleted-accounts" element={gated("patients.delete", <DeletedAccounts />)} />

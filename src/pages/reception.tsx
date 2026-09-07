@@ -2076,8 +2076,16 @@ export function PatientDetail() {
                 <Tag key={c._id} kind={c.status === "Approved" || c.status === "Signed" ? "ok" : "warn"}>{c.status}</Tag>,
               ])} />,
           ,
-          /* bills — every invoice on this guest, ours and Zenoti's */
-          <GuestInvoices key="bills" userId={id} />
+          /*
+           * Billing — every transaction on this guest in one place: services,
+           * products, packages and memberships, ours and Zenoti's. The page
+           * has already loaded most of it, so it is handed over rather than
+           * fetched twice.
+           */
+          <GuestInvoices key="bills" userId={id}
+            orders={orders} assignments={assignments}
+            zOrders={zOrders} zPkgs={zPkgs} zMems={zMems}
+            onOpenOrder={(oid) => nav("/orders", { state: { id: oid } })} />
         ];
 
         return (
@@ -2110,7 +2118,7 @@ export function PatientDetail() {
                   ["Packages", assignments.length + zPkgs.length],
                   ["Orders", orders.length + zOrders.length],
                   ["Consents", consents.length],
-                  ["Bills"],
+                  ["Billing"],
                 ]} />
                 {tabBody[tab] ?? tabBody[0]}
               </div>

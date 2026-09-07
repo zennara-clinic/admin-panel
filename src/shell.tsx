@@ -34,7 +34,6 @@ const NAV: NavGroup[] = [
   ]},
   { g: "Operations", items: [
     { to: "/bookings", label: "Bookings", icon: <BookOpenCheck className={ic} />, badge: "bookings", perm: "bookings.view" },
-    { to: "/invoices", label: "Invoices", icon: <Receipt className={ic} />, perm: ["billing.view", "billing.manage", "bookings.manage"] },
     { to: "/patients", label: "Patients", icon: <Users className={ic} />, perm: "patients.view" },
     { to: "/deleted-accounts", label: "Deleted accounts", icon: <UserCog className={ic} />, perm: "patients.delete" },
     { to: "/contact-changes", label: "Contact changes", icon: <UserCog className={ic} />, perm: "contactChanges.view" },

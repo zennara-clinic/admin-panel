@@ -4,8 +4,9 @@ import { Btn, Tag, Modal, Note, In, Sel, Area, B, Page, DataTable, Async, DateRa
 import { useStore } from "../store";
 import api, { type NewInvoiceLine } from "../lib/api";
 import { useApi } from "../lib/useApi";
+import { buildGuestLedger, type LedgerRow } from "../lib/guestLedger";
 import { fmtDate, fmtINR, fmtWhen, fmtAgo, isoDay } from "../lib/format";
-import type { Invoice, InvoiceLine, GuestPackageBalance, GuestMembership, PaymentMethod, Consultation, Product, Inventory, Package, Doctor, Membership, InvoiceSummary } from "../lib/types";
+import type { Invoice, InvoiceLine, GuestPackageBalance, GuestMembership, PaymentMethod, Consultation, Product, Inventory, Package, Doctor, Membership, InvoiceSummary, ProductOrder, PackageAssignment, MembershipAssignment } from "../lib/types";
 
 /* ------------------------------------------------------------------------- *
  * Billing — Zenoti's POS window, for our data.
@@ -494,125 +495,53 @@ export function useOpenInvoice() {
 
 /* ------------------------------ the register ---------------------------- */
 
-const INVOICE_TABS = [
-  { key: "all", label: "All bills", q: {} as Record<string, string> },
-  { key: "closed", label: "Closed", q: { status: "closed" } },
-  { key: "open", label: "Open", q: { status: "open" } },
-  { key: "due", label: "Balance due", q: { due: "true" } },
-  { key: "void", label: "Void", q: { status: "void" } },
-];
-
-/**
- * The invoice register — every bill the group has, whether it was raised at
- * our desk, bought in the app, or billed in Zenoti. Zenoti bills are mirrored
- * (see the backend's invoice sync) and shown read-only.
- */
-export function Invoices() {
-  const { branchId, branches, can } = useStore();
-  const [from, setFrom] = useState(isoDay(new Date(Date.now() - 29 * 86400000)));
-  const [to, setTo] = useState(isoDay());
-  const [tab, setTab] = useState(0);
-  const [source, setSource] = useState("all");
-  const [centre, setCentre] = useState<string>("");
-  const [search, setSearch] = useState("");
-  const [sel, setSel] = useState<string | null>(null);
-  const [lookup, setLookup] = useState("");
-  const [lookErr, setLookErr] = useState<string | null>(null);
-  const dq = useDebounced(search, 300);
-  const scope = centre || branchId || undefined;
-  const query = { from, to, ...INVOICE_TABS[tab].q, source: source === "all" ? undefined : source, search: dq || undefined, branchId: scope, limit: 300 };
-  const q = useApi(() => api.invoices.list(query), [from, to, tab, source, dq, scope]);
-  const sum = useApi(() => api.invoices.summary({ from, to, branchId: scope }), [from, to, scope]);
-  const rows = (q.data?.data ?? []) as Invoice[];
-  const totals = q.data?.totals;
-  const s = sum.data as InvoiceSummary | undefined;
-  const centreName = (i: Invoice) => (typeof i.branchId === "object" && i.branchId ? i.branchId.name : branches.find((b) => String(b._id) === String(i.branchId))?.name) ?? "—";
-  const stateTag = (i: Invoice) =>
-    i.status === "void" ? <Tag kind="mute">VOID</Tag>
-      : i.status === "open" ? <Tag kind="gold">OPEN</Tag>
-      : i.totals.due > 0 ? <Tag kind="warn">CLOSED · DUE</Tag>
-      : <Tag kind="ok">CLOSED</Tag>;
-
-  return (
-    <Page title="Invoices" sub="Every bill across the group — raised at the desk, bought in the app, or billed in Zenoti."
-      actions={
-        <div className="flex items-center gap-2">
-          <input value={lookup} onChange={(e) => setLookup(e.target.value)}
-            onKeyDown={async (e) => { if (e.key === "Enter" && lookup.trim()) { setLookErr(null); try { const i = await api.invoices.lookup(lookup.trim()); setSel(i._id); } catch (er) { setLookErr(errMsg(er)); } } }}
-            placeholder="Invoice / receipt no. ↵" className="w-52 rounded-lg border border-border bg-surface px-3 py-1.5 text-[12.5px] outline-none focus:border-gold-dark" />
-        </div>
-      }>
-      {lookErr && <Note kind="crit">{lookErr}</Note>}
-      {s && (
-        <div className="mb-3 grid gap-2 sm:grid-cols-5">
-          {[
-            ["Bills", String(s.total.count), `${s.bySource?.zenoti?.count ?? 0} from Zenoti`],
-            ["Billed", fmtINR(s.total.amount), "excl. void"],
-            ["Collected", fmtINR(s.total.paid), ""],
-            ["Outstanding", fmtINR(s.total.due), `${s.byStatus?.open?.count ?? 0} open`],
-            ["Void", String(s.byStatus?.void?.count ?? 0), ""],
-          ].map(([k, v, d]) => (
-            <div key={k} className="rounded-xl border border-border bg-ivory px-3 py-2">
-              <div className="text-[10px] font-bold uppercase tracking-wider text-ink3">{k}</div>
-              <div className="text-[15px] font-extrabold tabular-nums">{v}</div>
-              {d ? <div className="text-[10.5px] text-ink3">{d}</div> : null}
-            </div>
-          ))}
-        </div>
-      )}
-      <Tabs active={tab} onChange={setTab} items={INVOICE_TABS.map((t) => [t.label, t.key === "all" ? s?.total.count : s?.byStatus?.[t.key]?.count]) as [string, number | undefined][]} />
-      <div className="mb-3 flex flex-wrap items-end gap-3">
-        <DateRange from={from} to={to} onChange={(a, b) => { setFrom(a); setTo(b); }} />
-        <Sel label="Raised in" value={source === "all" ? "Everywhere" : source === "zenoti" ? "Zenoti" : source === "desk" ? "Our desk" : "App"} options={["Everywhere", "Our desk", "Zenoti", "App"]}
-          onChange={(v) => setSource(v === "Everywhere" ? "all" : v === "Our desk" ? "desk" : v === "Zenoti" ? "zenoti" : "app")} />
-        <Sel label="Centre" value={centre ? branches.find((b) => b._id === centre)?.name ?? "" : "This centre"} options={["This centre", "All centres", ...branches.map((b) => b.name)]}
-          onChange={(v) => setCentre(v === "All centres" ? "all" : v === "This centre" ? "" : branches.find((b) => b.name === v)?._id ?? "")} />
-        <div className="min-w-[220px] flex-1"><In label="Search" value={search} onChange={setSearch} placeholder="Guest, phone, patient id, item, number" /></div>
-        <Btn kind="ghost" disabled={!rows.length} onClick={() => exportCsv(`invoices-${from}-${to}`, ["Invoice no", "Receipt no", "Date", "Centre", "Customer", "Patient id", "Items", "Net", "Tax", "Total", "Paid", "Due", "Status", "Source"],
-          rows.map((i) => [i.invoiceNumber, i.receiptNumber ?? "", fmtWhen(i.closedAt || i.issuedAt), centreName(i), i.guest?.name ?? "", i.guest?.patientId ?? "", i.lines.map((l) => `${l.name} x${l.qty}`).join("; "), i.totals.net, i.totals.tax, i.totals.total, i.totals.paid, i.totals.due, i.status, i.source]))}>Export</Btn>
-      </div>
-      <Async q={q} label="Loading invoices…" rows={5}>
-        {() => rows.length === 0 ? (
-          <Empty title="No bills in this range"
-            hint={source === "zenoti" ? "Zenoti bills mirror hourly for recent visits. Run scripts/backfillZenotiInvoices.js for older history." : "Bills are raised from a visit's Take payment button, or mirrored from Zenoti."} />
-        ) : (
-          <>
-            <DataTable cols={["Invoice no", "Receipt no", "Date", "Centre", "Customer", "Sale items (qty)", "Amount", "Due", "Status", "Raised in"]}
-              onRow={(i) => setSel(rows[i]._id)}
-              rows={rows.map((i) => [
-                <span key="n" className="font-mono text-[11.5px] font-semibold">{i.invoiceNumber}</span>,
-                <span key="r" className="font-mono text-[11px] text-ink3">{i.receiptNumber ?? "—"}</span>,
-                fmtWhen(i.closedAt || i.issuedAt),
-                <span key="c" className="text-[11.5px]">{centreName(i)}</span>,
-                <span key="g"><B>{i.guest?.name ?? "—"}</B>{i.guest?.patientId ? <span className="ml-1 font-mono text-[10px] text-ink3">{i.guest.patientId}</span> : null}</span>,
-                <span key="i" className="text-[11.5px]">{i.lines.length ? i.lines.map((l) => `${l.name} (${l.qty})`).join(", ") : <span className="text-ink3">open on the bill to pull its items</span>}</span>,
-                <span key="a" className="tabular-nums">{fmtINR(i.totals.total)}</span>,
-                <span key="d" className={`tabular-nums ${i.totals.due > 0 && i.status !== "void" ? "font-bold text-err" : ""}`}>{fmtINR(i.status === "void" ? 0 : i.totals.due)}</span>,
-                stateTag(i),
-                i.source === "zenoti" ? <Tag key="s" kind="info">Zenoti</Tag> : i.source === "app" ? "App" : "Desk",
-              ])} />
-            {totals && <div className="mt-2 flex flex-wrap justify-end gap-4 text-[12px]"><span>Billed <B>{fmtINR(totals.amount)}</B></span><span>Collected <B>{fmtINR(totals.paid)}</B></span><span>Due <B>{fmtINR(totals.due)}</B></span></div>}
-          </>
-        )}
-      </Async>
-      <InvoiceModal open={!!sel} invoiceId={sel} onClose={() => setSel(null)} onChanged={() => { q.reload(); sum.reload(); }} />
-      {!can("billing.manage") && !can("bookings.manage") && <Note className="mt-3">You can view bills but not take payments — ask for the “Raise invoices, take payments” permission.</Note>}
-    </Page>
-  );
-}
-
-/** A guest's bills, for the patient record. */
-/**
- * Every bill on one guest, on the guest's own page.
+/*
+ * The standalone Invoices register was removed on 2026-09-07.
  *
- * The register mirrors Zenoti bills as headers only and pulls a bill's items
- * when someone opens it — sensible across hundreds of rows, useless here,
- * where a guest has a handful and the whole point is seeing what they bought.
- * So this expands the guest's un-expanded bills once, on open, then shows the
- * money at the top and the bills beneath it.
+ * A bill belongs to a guest, so it is read on the guest's record
+ * (`GuestInvoices` below), not from a top-level list nobody arrives at with a
+ * guest already in mind. The day's takings live in the day book's Today's
+ * sales, and finding a bill by its number moved there too — that was the one
+ * thing the register did that nothing else could.
  */
-export function GuestInvoices({ userId, onOpen }: { userId: string; onOpen?: (id: string) => void }) {
-  const q = useApi(() => api.invoices.list({ userId, limit: 100, from: undefined, to: undefined }), [userId]);
+
+/**
+ * Everything this guest has ever been charged for, on the guest's own page.
+ *
+ * The desk's question is never "show me service bills" — it is "what does this
+ * person owe, and what have they bought". So one ledger carries the lot:
+ * invoices raised here, invoices mirrored from Zenoti, product orders placed
+ * in the app, and package and membership purchases that were sold without a
+ * bill being raised.
+ *
+ * Double-counting is the whole difficulty, because the same purchase can reach
+ * us twice — once as a mirrored Zenoti invoice and once as a Zenoti product
+ * sale or package on the guest record. An invoice is the canonical row, so
+ * anything already carrying an invoice, or matching a mirrored invoice number,
+ * is folded into it rather than listed again. Only what has no invoice is
+ * added, and it is labelled so nobody mistakes it for one.
+ *
+ * The Zenoti register mirrors bills as headers and pulls items on open, which
+ * is right across hundreds of rows and useless here, where a guest has a
+ * handful and the point is seeing what they bought — so this expands the
+ * guest's un-expanded bills once, on open.
+ */
+export function GuestInvoices({ userId, orders = [], assignments = [], zOrders = [], zPkgs = [], zMems = [], onOpen, onOpenOrder }: {
+  userId: string;
+  /** App/clinic product orders already loaded by the patient page. */
+  orders?: ProductOrder[];
+  /** The guest's package purchases. */
+  assignments?: PackageAssignment[];
+  /** Zenoti-side product sales, packages and memberships from the guest record. */
+  zOrders?: { invoiceNumber?: string | null; name?: string | null; quantity?: number | null; price?: number | null; saleDate?: string | null; paymentType?: string | null; centerName?: string | null }[];
+  zPkgs?: { invoiceNumber?: string | null; name?: string | null; price?: number | null; purchaseDate?: string | null; centerName?: string | null }[];
+  zMems?: { invoiceNumber?: string | null; name?: string | null; price?: number | null; purchaseDate?: string | null; centerName?: string | null }[];
+  onOpen?: (id: string) => void;
+  onOpenOrder?: (id: string) => void;
+}) {
+  const q = useApi(() => api.invoices.list({ userId, limit: 200, from: undefined, to: undefined }), [userId]);
+  // Membership purchases are not on the patient page's own fetch, so read them here.
+  const mq = useApi(() => api.memberships.members({ userId, limit: 100 }).catch(() => [] as MembershipAssignment[]), [userId]);
   const [sel, setSel] = useState<string | null>(null);
   const [filling, setFilling] = useState(false);
   const filled = useRef<string | null>(null);
@@ -631,25 +560,36 @@ export function GuestInvoices({ userId, onOpen }: { userId: string; onOpen?: (id
       .finally(() => setFilling(false));
   }, [q.loading, rows, userId, q]);
 
+  const ledger = useMemo(
+    () => buildGuestLedger({ invoices: rows, orders, assignments, memberships: (mq.data ?? []) as MembershipAssignment[], zOrders, zPkgs, zMems }),
+    [rows, orders, assignments, mq.data, zOrders, zPkgs, zMems],
+  );
+
   const money = useMemo(() => {
-    const live = rows.filter((i) => i.status !== "void");
+    const live = ledger.filter((t) => t.status !== "void");
     return {
-      billed: live.reduce((n, i) => n + (i.totals?.total ?? 0), 0),
-      due: live.reduce((n, i) => n + (i.totals?.due ?? 0), 0),
-      bills: rows.length,
-      open: live.filter((i) => i.status === "open").length,
+      billed: live.reduce((n, t) => n + t.amount, 0),
+      due: live.reduce((n, t) => n + t.due, 0),
+      count: ledger.length,
+      open: live.filter((t) => t.status === "open").length,
     };
-  }, [rows]);
+  }, [ledger]);
+
+  const openRow = (t: LedgerRow) => {
+    if (t.invoiceId) return onOpen ? onOpen(t.invoiceId) : setSel(t.invoiceId);
+    if (t.orderId && onOpenOrder) return onOpenOrder(t.orderId);
+  };
 
   return (
     <Async q={q} label="Loading bills…" rows={3}>
-      {() => rows.length === 0 ? (
-        <Empty title="No bills on this guest yet" hint="Anything billed at the desk, bought in the app, or rung up in Zenoti appears here." />
+      {() => ledger.length === 0 ? (
+        <Empty title="Nothing billed to this guest yet"
+          hint="Services, products, packages and memberships all appear here — billed at the desk, bought in the app, or rung up in Zenoti." />
       ) : (
         <div className="grid gap-3">
           {/* What this guest is worth, and what they still owe. */}
           <div className="grid grid-cols-3 gap-2">
-            <Stat label="Billed" value={fmtINR(money.billed)} sub={`${money.bills} bill${money.bills === 1 ? "" : "s"}`} />
+            <Stat label="Billed" value={fmtINR(money.billed)} sub={`${money.count} transaction${money.count === 1 ? "" : "s"}`} />
             <Stat label="Collected" value={fmtINR(money.billed - money.due)} />
             <Stat label="Outstanding" value={fmtINR(money.due)} tone={money.due > 0 ? "err" : undefined}
               sub={money.open ? `${money.open} open` : "nothing owing"} />
@@ -657,26 +597,32 @@ export function GuestInvoices({ userId, onOpen }: { userId: string; onOpen?: (id
 
           {filling && <Note className="my-0">Reading the items on this guest's Zenoti bills…</Note>}
 
-          <DataTable cols={["Invoice no", "Date", "Items", "Amount", "Due", "Status", "Raised in"]}
-            onRow={(i) => (onOpen ? onOpen(rows[i]._id) : setSel(rows[i]._id))}
-            rows={rows.map((i) => {
-              const items = (i.lines ?? []);
-              const shown = items.slice(0, 3).map((l) => `${l.name}${l.qty > 1 ? ` ×${l.qty}` : ""}`).join(", ");
-              return [
-                <span key="n" className="font-mono text-[11.5px]">
-                  {i.invoiceNumber}
-                  {i.receiptNumber ? <span className="block text-[10.5px] text-ink3">{i.receiptNumber}</span> : null}
-                </span>,
-                fmtWhen(i.closedAt || i.issuedAt),
-                items.length
-                  ? <span key="i" className="text-[11.5px]">{shown}{items.length > 3 ? <span className="text-ink3"> +{items.length - 3} more</span> : null}</span>
-                  : <span key="i" className="text-[11.5px] text-ink3">{i.source === "zenoti" ? "Zenoti did not return any items for this bill" : "no items"}</span>,
-                <span key="a" className="tabular-nums font-bold">{fmtINR(i.totals?.total)}</span>,
-                <span key="d" className={`tabular-nums ${(i.totals?.due ?? 0) > 0 ? "font-bold text-err" : "text-ink3"}`}>{fmtINR(i.totals?.due)}</span>,
-                i.status === "void" ? <Tag key="s" kind="mute">VOID</Tag> : i.status === "open" ? <Tag key="s" kind="gold">OPEN</Tag> : <Tag key="s" kind="ok">CLOSED</Tag>,
-                i.source === "zenoti" ? <Tag key="r" kind="mute">Zenoti</Tag> : i.source === "app" ? <Tag key="r" kind="mute">App</Tag> : <Tag key="r" kind="mute">Desk</Tag>,
-              ];
-            })} />
+          <DataTable cols={["Number", "Date", "For", "Items", "Amount", "Due", "Status", "Raised in"]}
+            onRow={(i) => openRow(ledger[i])}
+            rows={ledger.map((t) => [
+              <span key="n" className="font-mono text-[11.5px]">
+                {t.number}
+                {t.subNumber ? <span className="block text-[10.5px] text-ink3">{t.subNumber}</span> : null}
+              </span>,
+              fmtWhen(t.at),
+              <Tag key="k" kind={t.kind === "Service" ? "info" : t.kind === "Product" ? "mute" : "gold"}>{t.kind}</Tag>,
+              <span key="i" className="text-[11.5px]">
+                {t.items || <span className="text-ink3">{t.itemsNote ?? "no items"}</span>}
+              </span>,
+              <span key="a" className="tabular-nums font-bold">{fmtINR(t.amount)}</span>,
+              <span key="d" className={`tabular-nums ${t.due > 0 ? "font-bold text-err" : "text-ink3"}`}>{fmtINR(t.due)}</span>,
+              t.status === "void" ? <Tag key="s" kind="mute">VOID</Tag>
+                : t.status === "open" ? <Tag key="s" kind="gold">OPEN</Tag>
+                : <Tag key="s" kind="ok">{t.statusLabel ?? "CLOSED"}</Tag>,
+              <Tag key="r" kind="mute">{t.source}</Tag>,
+            ])} />
+
+          <div className="flex justify-end">
+            <Btn kind="ghost" onClick={() => exportCsv(`guest-transactions-${userId}`,
+              ["Number", "Date", "For", "Items", "Amount", "Due", "Status", "Raised in"],
+              ledger.map((t) => [t.number, t.at ?? "", t.kind, t.items, t.amount, t.due, t.status, t.source]))}>Export</Btn>
+          </div>
+
           <InvoiceModal open={!!sel} invoiceId={sel} onClose={() => setSel(null)} onChanged={q.reload} />
         </div>
       )}

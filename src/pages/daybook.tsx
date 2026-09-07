@@ -243,6 +243,18 @@ export function TodaysSalesModal({ open, onClose, date }: { open: boolean; onClo
   const [status, setStatus] = useState("All");
   const [sel, setSel] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  // Find a bill by its number, whatever day it was raised. A guest phones
+  // quoting a number and reception has nothing else to search by — this was
+  // the one thing the retired Invoices register did that nothing else does.
+  const [lookup, setLookup] = useState("");
+  const [lookErr, setLookErr] = useState<string | null>(null);
+  const findBill = async () => {
+    const number = lookup.trim();
+    if (!number) return;
+    setLookErr(null);
+    try { const i = await api.invoices.lookup(number); setSel(i._id); }
+    catch (e) { setLookErr((e as Error).message || `No bill found for "${number}".`); }
+  };
   const data = q.data;
   const rows = (data?.rows ?? []).filter((r) => (source === "All" || r.source === source) && (status === "All" || r.status === status));
   const canVoid = can("billing.void");
@@ -260,12 +272,16 @@ export function TodaysSalesModal({ open, onClose, date }: { open: boolean; onClo
             <div className="mb-2 flex flex-wrap items-center gap-2 text-[12px]">
               <span className="text-ink3">By method:</span>
               {Object.entries(data.totals.byMethod).map(([m, v]) => <Tag key={m} kind="mute">{m} {fmtINR(v)}</Tag>)}
-              <span className="ml-auto flex gap-2">
+              <span className="ml-auto flex items-center gap-2">
+                <input value={lookup} onChange={(e) => setLookup(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") void findBill(); }}
+                  placeholder="Invoice / receipt no. ↵"
+                  className="w-44 rounded-lg border border-border bg-ivory px-2 py-1 text-[12px] outline-none focus:border-gold-dark" />
                 <select value={source} onChange={(e) => setSource(e.target.value)} className="rounded-lg border border-border bg-ivory px-2 py-1 text-[12px]"><option>All</option><option>Desk</option><option>App</option><option>Zenoti</option></select>
                 <select value={status} onChange={(e) => setStatus(e.target.value)} className="rounded-lg border border-border bg-ivory px-2 py-1 text-[12px]"><option>All</option>{[...new Set((data.rows ?? []).map((r) => r.status))].map((s) => <option key={s}>{s}</option>)}</select>
-                <button className="text-[11.5px] font-semibold text-primary underline-offset-2 hover:underline" onClick={() => { onClose(); nav("/invoices"); }}>All invoices →</button>
               </span>
             </div>
+            {lookErr && <Note kind="crit" className="my-0 mb-2">{lookErr}</Note>}
             {rows.length === 0 ? <div className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-[12px] text-ink3">No bills or payments on this day.</div> : (
               <DataTable cols={["Invoice no", "Receipt no", "Customer", "Sale items (qty)", "Amount", "Due", "Status", "Source", ""]}
                 rows={rows.map((r) => [
@@ -284,6 +300,9 @@ export function TodaysSalesModal({ open, onClose, date }: { open: boolean; onClo
                       else if (r.kind === "order") { onClose(); nav("/orders"); }
                       else { onClose(); nav("/packages"); }
                     }}>Show</button>
+                    {/* A guest's whole money history lives on their record. */}
+                    {r.userId && <button className="text-ink3 underline-offset-2 hover:underline"
+                      onClick={() => { onClose(); nav("/patient", { state: { id: String(r.userId) } }); }}>Guest</button>}
                     {r.kind === "invoice" && canVoid && r.status === "CLOSED" && <button className="text-ink3 underline-offset-2 hover:underline" disabled={busyId === r.id} onClick={() => quick(r.id, () => api.invoices.reopen(r.id), "Invoice reopened")}>Reopen</button>}
                     {r.kind === "invoice" && canVoid && r.status !== "VOID" && <button className="text-err underline-offset-2 hover:underline" disabled={busyId === r.id} onClick={() => { const reason = window.prompt(`Void ${r.ref}? Give a reason.`) || ""; if (reason.trim().length >= 3) quick(r.id, () => api.invoices.void(r.id, reason.trim()), "Invoice voided"); }}>Void</button>}
                   </span>,
