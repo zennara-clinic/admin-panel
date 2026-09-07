@@ -87,7 +87,7 @@ export function Memberships() {
 /* ------------------------------ plan editor ------------------------------ */
 
 function PlanEditor({ open, plan, onClose, onSaved }: { open: boolean; plan: Membership | null; onClose: () => void; onSaved: () => void }) {
-  const { toast, branches } = useStore();
+  const { toast, clinics: branches } = useStore();
   const [f, setF] = useState<Partial<Membership>>({});
   const [svc, setSvc] = useState("");
   const [busy, setBusy] = useState(false);

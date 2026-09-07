@@ -624,6 +624,8 @@ const statusTone = (s: string) =>
   s === "Delivered" ? "ok" : ["Cancelled", "Returned", "Delivery Failed"].includes(s) ? "err"
     : ["Order Placed", "Return Requested"].includes(s) ? "warn" : "info";
 
+const SOURCE_LABEL: Record<string, string> = { app: "App orders", zenoti: "Clinic counter", "": "Both" };
+
 export function Orders() {
   const { toast, audit, can } = useStore();
   const loc = useLocation();
@@ -632,6 +634,10 @@ export function Orders() {
   const [page, setPage] = useQueryPage();
   const [search, setSearch] = useQueryString("q");
   const [payFilter, setPayFilter] = useQueryString("payment");
+  // Counter sales mirrored from Zenoti share this collection. This screen is
+  // the app's fulfilment queue, so it opens on app orders; the other views are
+  // one click away rather than mixed in.
+  const [srcFilter, setSrcFilter] = useQueryString("source", "app");
   const debounced = useDebounced(search);
   const PAGE = 15;
 
@@ -639,11 +645,11 @@ export function Orders() {
   // Retail sales rung up at the clinic counter live in Zenoti; the last tab
   // lists them next to app orders so product history is complete in one place.
   const q = useApi(
-    () => api.orders.list({ status: tab === 0 ? undefined : tabs[tab], paymentStatus: payFilter || undefined, search: debounced || undefined, page, limit: PAGE }),
-    [tab, payFilter, debounced, page],
+    () => api.orders.list({ status: tab === 0 ? undefined : tabs[tab], paymentStatus: payFilter || undefined, source: srcFilter || undefined, search: debounced || undefined, page, limit: PAGE }),
+    [tab, payFilter, srcFilter, debounced, page],
   );
-  const stats = useApi(() => api.orders.stats().catch(() => undefined), []);
-  useEffect(() => { setPage(1); }, [tab, payFilter, debounced]);
+  const stats = useApi(() => api.orders.stats({ source: srcFilter || undefined }).catch(() => undefined), [srcFilter]);
+  useEffect(() => { setPage(1); }, [tab, payFilter, srcFilter, debounced]);
 
   const rows = q.data?.data ?? [];
   const total = (q.data as { total?: number } | undefined)?.total ?? rows.length;
@@ -663,7 +669,7 @@ export function Orders() {
     return () => window.clearInterval(timer);
     // The selected id is the only value that changes what the background refresh fetches.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sel]);
+  }, [sel, srcFilter]);
 
   const [sp] = useSearchParams();
   useEffect(() => {
@@ -728,11 +734,17 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
 
 
   return (
-    <Page title="Orders" sub="Product orders placed in the app — fulfilment, returns and refunds"
+    <Page title="Orders"
+      sub={srcFilter === "zenoti"
+        ? "Retail sold at the clinic counter, mirrored from Zenoti — read-only"
+        : srcFilter === "app"
+          ? "Product orders placed in the app — fulfilment, returns and refunds"
+          : "App orders and clinic counter sales together"}
       actions={<Btn kind="ghost" disabled={!rows.length} onClick={() => exportCsv("zennara-orders",
-        ["Order", "Guest", "Items", "Total", "Payment", "Method", "Status", "Placed"],
+        ["Order", "Guest", "Items", "Total", "Payment", "Method", "Source", "Status", "Placed"],
         rows.map((o) => [o.orderNumber, nameOf(o.userId, "—"), o.items?.length ?? 0,
-          o.pricing?.total ?? 0, o.paymentStatus ?? "", o.paymentMethod ?? "", o.orderStatus, fmtDate(o.createdAt)]))}>Export CSV (this page)</Btn>}>
+          o.pricing?.total ?? 0, o.paymentStatus ?? "", o.paymentMethod ?? "",
+          o.source === "zenoti" ? "Clinic" : "App", o.orderStatus, fmtDate(o.createdAt)]))}>Export CSV (this page)</Btn>}>
       <Stats items={[
         { k: "Total orders", v: (s?.totalOrders ?? total).toLocaleString("en-IN") },
         { k: "Awaiting action", v: (s?.newOrders ?? 0) + (s?.confirmedOrders ?? 0) + (s?.processingOrders ?? 0) + (s?.failedDeliveryOrders ?? 0) + (s?.returnRequestedOrders ?? 0),
@@ -743,9 +755,23 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
         { k: "Revenue", v: fmtCompactINR(s?.totalRevenue) },
       ]} />
 
+      <Note>
+        {srcFilter === "app"
+          ? <>These are <b>app orders</b> only — the ones you pack and ship. Products bought at the clinic counter are rung up in Zenoti and appear on the guest’s own record under <b>Patients</b>, not here.</>
+          : srcFilter === "zenoti"
+            ? <>Counter sales mirrored from Zenoti, shown for history. They are already handed over, so there is nothing to fulfil — the same rows appear on each guest’s record under <b>Patients</b>.</>
+            : <>App orders and clinic counter sales together. Only <b>app</b> orders can be fulfilled from here; clinic rows are history, and also appear on the guest’s record under <b>Patients</b>.</>}
+      </Note>
+
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search order no., guest name or phone…"
           className="w-72 rounded-(--radius-btn) border border-border bg-surface px-3.5 py-2 text-[13px] outline-none focus:border-gold-dark" />
+        <Menu button={<Btn kind="ghost">{SOURCE_LABEL[srcFilter] ?? SOURCE_LABEL.app} ▾</Btn>}
+          items={[
+            { label: `App orders${s?.appOrders !== undefined ? ` (${s.appOrders})` : ""}`, onClick: () => setSrcFilter("app") },
+            { label: `Clinic counter${s?.clinicOrders !== undefined ? ` (${s.clinicOrders})` : ""}`, onClick: () => setSrcFilter("zenoti") },
+            { label: "Both", onClick: () => setSrcFilter("") },
+          ]} />
         <Menu button={<Btn kind="ghost">{payFilter || "Any payment"} ▾</Btn>}
           items={[{ label: "Any payment", onClick: () => setPayFilter("") },
             ...["Pending", "Paid", "Failed", "Refunded"].map((p) => ({ label: p, onClick: () => setPayFilter(p) }))]} />
@@ -756,7 +782,7 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
       <Async q={q} label="Loading orders…" rows={8}>
         {() => rows.length === 0 ? <Empty title="No orders in this state" /> : (
           <>
-            <DataTable cols={["Order", "Guest", "Items", "Total", "Payment", "Status", "Placed"]}
+            <DataTable cols={["Order", "Guest", "Items", "Total", "Payment", "Source", "Status", "Placed"]}
               onRow={(i) => setSel(rows[i]._id)}
               rows={rows.map((o) => [
                 <B key={o._id}>{o.orderNumber}</B>,
@@ -769,6 +795,9 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
                 <Tag key={`${o._id}p`} kind={o.paymentStatus === "Paid" ? "ok" : o.paymentStatus === "Refunded" ? "info" : "warn"}>
                   {o.paymentStatus} · {o.paymentMethod}
                 </Tag>,
+                o.source === "zenoti"
+                  ? <Tag key={`${o._id}src`} kind="mute">Clinic</Tag>
+                  : <Tag key={`${o._id}src`} kind="info">App</Tag>,
                 <Tag key={`${o._id}s`} kind={statusTone(o.orderStatus)}>{o.orderStatus}</Tag>,
                 fmtDate(o.createdAt),
               ])} />

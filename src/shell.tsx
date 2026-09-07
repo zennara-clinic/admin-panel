@@ -346,7 +346,7 @@ function NotificationBell() {
 /* ================= shell ================= */
 export function Shell({ children }: { children: ReactNode }) {
   const {
-    role, admin, adminRole, branch, branchId, branches, setBranchById,
+    role, admin, adminRole, branch, branchId, branches, clinics, setBranchById,
     toast, setSearchOpen, loggedIn, booting, signIn, logout, can,
   } = useStore();
   const loc = useLocation();
@@ -451,15 +451,17 @@ export function Shell({ children }: { children: ReactNode }) {
               </button>
             }
             items={
-              branches.length
+              // The three clinics only. Pharmacies and the training centre are
+              // stock locations, not places a guest is seen, so switching the
+              // whole panel to one of them made no sense.
+              clinics.length
                 ? [
                     { label: <span className={!branchId ? "font-bold text-primary" : ""}>All branches</span>,
                       onClick: () => { setBranchById(""); toast("Showing all branches"); } },
-                    // Organisation › zone › centre, pharmacies grouped after clinics (Zenoti's centre tree).
-                    ...[...new Set(branches.map((b) => b.zone || "Hyderabad"))].flatMap((zone) => [
-                      ...(new Set(branches.map((b) => b.zone || "Hyderabad")).size > 1 ? [{ label: <span className="text-[10px] font-bold uppercase tracking-wider text-ink3">{zone}</span>, onClick: () => {} }] : []),
-                      ...branches.filter((b) => (b.zone || "Hyderabad") === zone).sort((a, b) => Number(!!a.isPharmacy) - Number(!!b.isPharmacy)).map((b) => ({
-                        label: <span className={b._id === branchId ? "font-bold text-primary" : ""}>{b.isPharmacy ? "💊 " : ""}{b.name}</span>,
+                    ...[...new Set(clinics.map((b) => b.zone || "Hyderabad"))].flatMap((zone) => [
+                      ...(new Set(clinics.map((b) => b.zone || "Hyderabad")).size > 1 ? [{ label: <span className="text-[10px] font-bold uppercase tracking-wider text-ink3">{zone}</span>, onClick: () => {} }] : []),
+                      ...clinics.filter((b) => (b.zone || "Hyderabad") === zone).map((b) => ({
+                        label: <span className={b._id === branchId ? "font-bold text-primary" : ""}>{b.name}</span>,
                         onClick: () => { setBranchById(b._id); toast(`Switched to ${b.name}`); },
                       })),
                     ]),

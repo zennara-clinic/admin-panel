@@ -895,7 +895,7 @@ export function Packages() {
 
             <div className="mb-2 flex flex-wrap items-end gap-3">
               <div className="min-w-[240px] flex-1"><In label="Search" value={search} onChange={setSearch} placeholder="Package name, code or description" /></div>
-              {tab === 0 && <Note className="my-0 flex-1">Zenoti's own package list, mirrored hourly. It does not publish what is inside a package, so sessions are filled in from real sales — add the rest here before selling it in the app.</Note>}
+              {tab === 0 && <Note className="my-0 flex-1">Zenoti's own package list, mirrored hourly — name, code, category, validity and the centres it is sold at. Zenoti's API does <B>not</B> publish a package's price or the services inside it, to anyone: that is a limit of the integration, not a sync that failed. Both are filled in from real sales where a guest has bought one; for the rest, set the price and add the services here before selling it in the app.</Note>}
               {tab === 1 && <Note className="my-0 flex-1">Built for one guest at the desk, or retired from the catalogue. Kept because guests still hold sessions on them.</Note>}
             </div>
             {list.length === 0 ? (
@@ -955,7 +955,8 @@ export function Packages() {
 function PackageEditor({ open, pkg, seed, onClose, onSaved, onDelete, onClone }: {
   open: boolean; pkg: Package | null; seed?: Partial<Package> | null; onClose: () => void; onSaved: () => void; onDelete: (p: Package) => void; onClone?: (p: Package) => void;
 }) {
-  const { toast, audit, branches } = useStore();
+  // Packages are sold and redeemed at clinics only.
+  const { toast, audit, clinics: branches } = useStore();
   const [f, setF] = useState<Partial<Package>>({});
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1259,9 +1260,15 @@ function AssignmentDrawer({ a, onClose, onChanged, canEdit, toast, audit }: {
   const { can } = useStore();
   const canRefund = can("packages.refund");
   const ledger = useApi(() => (a ? api.packageAssignments.ledger(a._id).catch(() => null) : Promise.resolve(null)), [a?._id, a?.status, a?.freeze?.isFrozen, (a?.transfers ?? []).length]);
+  // Sessions still owed — the reason an extension is worth granting at all.
+  const unusedUnits = (ledger.data?.balances ?? []).reduce((n, b) => n + (b.balance ?? 0), 0);
   const [freezeOpen, setFreezeOpen] = useState(false);
   const [freezeReason, setFreezeReason] = useState("");
   const [freezeUntil, setFreezeUntil] = useState("");
+  const [extendOpen, setExtendOpen] = useState(false);
+  const [extendDate, setExtendDate] = useState("");
+  const [extendDays, setExtendDays] = useState("");
+  const [extendReason, setExtendReason] = useState("");
   const [transferOpen, setTransferOpen] = useState(false);
   const [transferTo, setTransferTo] = useState<User | null>(null);
   const [transferQty, setTransferQty] = useState<Record<string, number>>({});
@@ -1366,6 +1373,21 @@ function AssignmentDrawer({ a, onClose, onChanged, canEdit, toast, audit }: {
               {ledger.data.redemptions.map((r, i) => <div key={i} className={`flex justify-between border-t border-border/60 py-1 ${r.reversed ? "text-ink3 line-through" : ""}`}><span>{fmtDate(r.at)} · {r.serviceName ?? r.serviceId}{r.byName ? ` · ${r.byName}` : ""}</span><span className="font-mono text-[11px] text-ink3">{r.invoiceNumber ?? ""}</span></div>)}
             </details>
           )}
+          {(a.expiryExtensions ?? []).length > 0 && (
+            <details className="mt-1 text-[12px]" open>
+              <summary className="cursor-pointer font-semibold">Expiry extensions · {(a.expiryExtensions ?? []).length}</summary>
+              {(a.expiryExtensions ?? []).map((x, i) => (
+                <div key={`x${i}`} className="border-t border-border/60 py-1">
+                  {x.from ? fmtDate(x.from) : "no expiry"} → <B>{x.to ? fmtDate(x.to) : "—"}</B>
+                  {x.days ? ` (+${x.days} day${x.days === 1 ? "" : "s"})` : ""} · {x.byName || "Admin"} on {fmtDate(x.at)}
+                  {x.reason ? ` · ${x.reason}` : ""}
+                  {x.zenotiStatus && x.zenotiStatus !== "synced" && (
+                    <span className="text-warn"> · Zenoti not updated{x.zenotiError ? `: ${x.zenotiError}` : ""}</span>
+                  )}
+                </div>
+              ))}
+            </details>
+          )}
           {(ledger.data.freezeHistory.length > 0 || ledger.data.transfers.length > 0) && (
             <details className="mt-1 text-[12px]"><summary className="cursor-pointer font-semibold">Freeze & transfer history</summary>
               {ledger.data.freezeHistory.map((h, i) => <div key={`f${i}`} className="border-t border-border/60 py-1">Frozen {fmtDate(h.frozenAt)} → {fmtDate(h.resumedAt)} ({h.days} day{h.days === 1 ? "" : "s"} added back){h.reason ? ` · ${h.reason}` : ""}</div>)}
@@ -1374,6 +1396,15 @@ function AssignmentDrawer({ a, onClose, onChanged, canEdit, toast, audit }: {
           )}
           {ledger.data.refund?.refundedAt && <Note kind="crit" className="mt-2 mb-0">Refunded {fmtINR(ledger.data.refund.amount ?? 0)} by {ledger.data.refund.method} on {fmtDate(ledger.data.refund.refundedAt)} — {ledger.data.refund.reason}</Note>}
         </>
+      )}
+
+      {canEdit && (a.status === "Active" || a.status === "Expired") && !a.terms?.neverExpires && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Btn kind={a.status === "Expired" ? "gold" : "ghost"} disabled={busy}
+            onClick={() => { setExtendDate(""); setExtendDays(""); setExtendReason(""); setExtendOpen(true); }}>
+            Extend expiry…
+          </Btn>
+        </div>
       )}
 
       {canEdit && a.status === "Active" && (
@@ -1455,6 +1486,40 @@ function AssignmentDrawer({ a, onClose, onChanged, canEdit, toast, audit }: {
         <div className="mt-4 flex justify-end gap-2"><Btn kind="ghost" onClick={() => setFreezeOpen(false)}>Back</Btn><Btn disabled={busy} onClick={async () => { if (await act(() => api.packageAssignments.freeze(a._id, { reason: freezeReason, resumeOn: freezeUntil || null }), "Package frozen")) setFreezeOpen(false); }}>Freeze package</Btn></div>
       </Modal>
 
+      <Modal open={extendOpen} onClose={() => setExtendOpen(false)} title="Extend this package">
+        <Note className="my-0">
+          Gives the guest longer to use the sessions they have already paid for. The app tells guests to
+          ask the clinic for this — they cannot do it themselves. The change is written to Zenoti too, and
+          recorded here with your name.
+          {unusedUnits > 0 ? ` This package has ${unusedUnits} session${unusedUnits === 1 ? "" : "s"} unused.` : " Every session in this package has been used."}
+        </Note>
+        <div className="mt-3 text-[12.5px] text-ink3">
+          Current expiry: <B>{a.validUntil ? fmtDate(a.validUntil) : "none set"}</B>
+          {a.status === "Expired" ? " · this package has lapsed" : ""}
+        </div>
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <In label="New expiry date" type="date" value={extendDate}
+            onChange={(v) => { setExtendDate(v); if (v) setExtendDays(""); }} />
+          <In label="…or add this many days" type="number" value={extendDays}
+            onChange={(v) => { setExtendDays(v); if (v) setExtendDate(""); }} placeholder="e.g. 90" />
+        </div>
+        <div className="mt-3">
+          <In label="Reason (required)" value={extendReason} onChange={setExtendReason}
+            placeholder="e.g. Guest was unwell through the validity period" />
+        </div>
+        {err && <Note kind="crit" className="mt-2">{err}</Note>}
+        <div className="mt-4 flex justify-end gap-2">
+          <Btn kind="ghost" onClick={() => setExtendOpen(false)}>Back</Btn>
+          <Btn disabled={busy || !extendReason.trim() || (!extendDate && !(Number(extendDays) > 0))}
+            onClick={async () => {
+              if (await act(() => api.packageAssignments.extendExpiry(a._id, {
+                ...(extendDate ? { validUntil: extendDate } : { days: Number(extendDays) }),
+                reason: extendReason.trim(),
+              }), "Expiry extended")) setExtendOpen(false);
+            }}>Extend package</Btn>
+        </div>
+      </Modal>
+
       <Modal open={transferOpen} onClose={() => setTransferOpen(false)} title="Transfer sessions to another guest" wide>
         <Note className="my-0">The chosen sessions move to a new package on the other guest's record (same terms, same expiry) and show as Transferred here.</Note>
         <div className="mt-3">
@@ -1512,7 +1577,8 @@ function AssignmentDrawer({ a, onClose, onChanged, canEdit, toast, audit }: {
 
 /* ================= DOCTORS ================= */
 export function Doctors() {
-  const { toast, audit, can, branches } = useStore();
+  // Dermatologists practise at clinics, never at a pharmacy shelf.
+  const { toast, audit, can, clinics: branches } = useStore();
   const nav = useNavigate();
   const [sel, setSel] = useState<Doctor | null>(null);
   const [addOpen, setAddOpen] = useState(false);
@@ -1885,7 +1951,7 @@ export function DermatologistDetail() {
   const nav = useNavigate();
   const [sp] = useSearchParams();
   const id = sp.get("id") ?? "";
-  const { toast, audit, can, branches, admin } = useStore();
+  const { toast, audit, can, clinics: branches, admin } = useStore();
   const [range, setRange] = useState("Last 90 days");
   const [editOpen, setEditOpen] = useState(false);
   const [acctEmail, setAcctEmail] = useState("");

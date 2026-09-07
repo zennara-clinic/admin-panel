@@ -45,6 +45,7 @@ export function Branches() {
   const [closeTo, setCloseTo] = useState("");
   const [closeReason, setCloseReason] = useState("");
 
+  // The one place that shows every Zenoti centre, stock locations included.
   const q = useApi(() => api.branches.list({ activeOnly: "false" }), []);
   const list = q.data ?? [];
   const docs = useApi(() => api.doctors.list({ includeInactive: "true" }).catch(() => ({ success: true, data: [] })), []);
@@ -604,7 +605,8 @@ function bucketLabels(rows: { date: string }[], n: number): string[] {
 }
 
 export function Analytics() {
-  const { branches } = useStore();
+  // Trade happens at the three clinics; a pharmacy filter would always be empty.
+  const { clinics: branches } = useStore();
   const [range, setRange] = useQueryString("range", "90 days");
   const [custom, setCustom] = useState<{ startDate: string; endDate: string } | null>(null);
   const [branchId, setBranchId] = useQueryString("branch", "");
@@ -1025,7 +1027,8 @@ export function Roles() {
 }
 
 function StaffTab({ roles }: { roles: Role[] }) {
-  const { toast, audit, canManageStaff, admin, can, branches } = useStore();
+  // Staff are posted to clinics; stock locations have no roster.
+  const { toast, audit, canManageStaff, admin, can, clinics: branches } = useStore();
   const [invOpen, setInvOpen] = useState(false);
   const [sel, setSel] = useState<StaffRow | null>(null);
   const [del, setDel] = useState<StaffRow | null>(null);

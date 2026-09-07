@@ -541,6 +541,8 @@ export type PackageAssignment = {
   firstRedeemedAt?: string | null;
   freeze?: { isFrozen?: boolean; frozenAt?: string | null; frozenBy?: string | null; reason?: string | null; resumeOn?: string | null };
   freezeHistory?: { frozenAt: string; resumedAt: string; days: number; by?: string; resumedBy?: string; reason?: string | null }[];
+  /** Every time the desk pushed the expiry out, and whether Zenoti took it. */
+  expiryExtensions?: { at: string; from?: string | null; to?: string | null; days?: number | null; reason?: string; byName?: string; zenotiStatus?: string | null; zenotiError?: string | null }[];
   transfers?: { at: string; by?: string; toUserId?: Id; toUserName?: string; toAssignmentId?: Id; services: { serviceId: string; serviceName?: string; qty: number }[]; reason?: string | null }[];
   transferredFrom?: { assignmentId?: Id | null; userId?: Id | null; userName?: string | null; at?: string | null };
   redemptions?: { at: string; serviceId: string; serviceName?: string | null; sessionId?: Id; bookingId?: Id; invoiceId?: Id; invoiceNumber?: string; byName?: string; reversed?: boolean }[];
@@ -944,6 +946,8 @@ export type ProductOrder = {
   coupon?: { code?: string; discount?: number };
   paymentMethod?: "COD" | "Razorpay" | "Online" | "Clinic";
   paymentStatus?: "Pending" | "Paid" | "Failed" | "Refunded" | "Partially Refunded";
+  /** 'zenoti' = rung up at the clinic counter and mirrored in; 'app' = placed in the app. */
+  source?: "app" | "zenoti";
   orderStatus: OrderStatus;
   statusHistory?: { status: string; timestamp: string; note?: string }[];
   deliveryDate?: string;

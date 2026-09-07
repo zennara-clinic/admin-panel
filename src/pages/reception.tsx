@@ -2624,7 +2624,7 @@ export function AssignPackageModal({ open, onClose, user, onAssigned }: {
   const [busy, setBusy] = useState(false);
 
   const q = useApi(() => api.packages.list({ isActive: "true", limit: 200 }).then((r) => (r.data ?? []) as Package[]), [open]);
-  const branchesQ = useApi(() => api.branches.list({ isActive: "true" }), [open]);
+  const branchesQ = useApi(() => api.branches.list({ isActive: "true", kind: "clinic" }), [open]);
   const doctorsQ = useApi(() => api.doctors.list({ isActive: "true" }), [open]);
   const list = q.data ?? [];
   const branches = branchesQ.data ?? [];

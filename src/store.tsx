@@ -57,6 +57,16 @@ type Store = {
   branch: string;
   branchId: string;
   branches: Branch[];
+  /**
+   * The three clinics — Jubilee Hills, Kondapur and Financial District.
+   *
+   * These are the centres the business runs: everything a guest can be booked
+   * into, sold, or assigned belongs to one of them. The pharmacies and the
+   * training centre exist in Zenoti and hold stock, but they are not places a
+   * guest attends, so they must never appear in a centre picker. Stock pages
+   * are the exception and use `branches` deliberately.
+   */
+  clinics: Branch[];
   branchesLoading: boolean;
   setBranchById: (id: string) => void;
   reloadBranches: () => void;
@@ -127,6 +137,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [booting, setBooting] = useState(() => hasLiveSession());
 
   const [branches, setBranches] = useState<Branch[]>([]);
+
+  // Only the clinics are centres in the operational sense — see the type above.
+
+  const clinics = useMemo(() => branches.filter((b) => (b.centreType ?? "clinic") === "clinic"), [branches]);
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [branchId, setBranchId] = useState<string>(() => localStorage.getItem(BRANCH_KEY) ?? "");
 
@@ -212,13 +226,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!loggedIn) return;
     setBranchesLoading(true);
     api.branches
-      // The panel manages every centre Zenoti has, pharmacies and the training
-      // centre included; only the app filters down to bookable clinics.
+      // Everything Zenoti has, so the stock pages can reach pharmacy shelves.
+      // `clinics` below is what the rest of the panel works from.
       .list({ activeOnly: "false" })
       .then((list) => {
         setBranches(list ?? []);
         setBranchId((current) => {
-          if (current && (list ?? []).some((b) => b._id === current)) return current;
+          // Never leave the panel pointed at a pharmacy or the training centre.
+          const clinicIds = new Set((list ?? []).filter((b) => (b.centreType ?? "clinic") === "clinic").map((b) => b._id));
+          if (current && clinicIds.has(current)) return current;
           const first = (list ?? []).find((b) => (b.centreType ?? "clinic") === "clinic")?._id ?? (list ?? [])[0]?._id ?? "";
           if (first) localStorage.setItem(BRANCH_KEY, first);
           return first;
@@ -286,6 +302,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     branch: branchName,
     branchId,
     branches,
+    clinics,
     branchesLoading,
     setBranchById,
     reloadBranches,

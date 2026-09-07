@@ -292,6 +292,9 @@ export const packageAssignments = {
     requestRaw<PackageAssignment>(`/package-assignments/${id}/transfer`, { method: "POST", body }),
   refundPreview: (id: Id) => request<{ paid: number; unitsTotal: number; unitsLeft: number; suggested: number; balances: AssignmentLedger["balances"] }>(`/package-assignments/${id}/refund-preview`),
   refund: (id: Id, body: { amount: number; method: string; reference?: string; reason: string }) => requestRaw<PackageAssignment>(`/package-assignments/${id}/refund`, { method: "POST", body }),
+  /** Push the expiry out for a guest who still has sessions owed; mirrored to Zenoti. */
+  extendExpiry: (id: Id, body: { validUntil?: string; days?: number; reason: string }) =>
+    requestRaw<PackageAssignment>(`/package-assignments/${id}/extend-expiry`, { method: "POST", body }),
   saveServiceCard: (body: Record<string, unknown>) =>
     requestRaw("/package-assignments/service-card", { method: "POST", body }),
   sendServiceOtp: (body: Record<string, unknown>) =>
@@ -455,11 +458,11 @@ export const coupons = {
 export const orders = {
   list: (q?: Query) => requestRaw<ProductOrder[]>("/admin/product-orders", { query: q }),
   get: (id: Id) => request<ProductOrder>(`/admin/product-orders/${id}`),
-  stats: () => request<{
+  stats: (q?: Query) => request<{
     totalOrders: number; newOrders: number; confirmedOrders: number; processingOrders: number;
     shippedOrders: number; deliveredOrders: number; cancelledOrders: number; failedDeliveryOrders: number;
-    returnRequestedOrders: number; totalRevenue: number;
-  }>("/admin/product-orders/stats"),
+    returnRequestedOrders: number; appOrders: number; clinicOrders: number; totalRevenue: number;
+  }>("/admin/product-orders/stats", { query: q }),
   setStatus: (id: Id, orderStatus: string, note?: string) =>
     request<ProductOrder>(`/admin/product-orders/${id}/status`, { method: "PUT", body: { status: orderStatus, note } }),
   approveReturn: (id: Id) => request<ProductOrder>(`/admin/product-orders/${id}/approve-return`, { method: "PUT" }),

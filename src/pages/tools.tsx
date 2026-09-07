@@ -104,7 +104,7 @@ function FormEditor({ open, template, onClose, onDone }: {
 
   const catList = useApi(() => (open ? api.categories.list().then((r) => r.data ?? []) : Promise.resolve([])), [open]);
   const svcList = useApi(() => (open ? api.services.list({ limit: 500 }).then((r) => r.data ?? []) : Promise.resolve([])), [open]);
-  const brList = useApi(() => (open ? api.branches.list() : Promise.resolve([])), [open]);
+  const brList = useApi(() => (open ? api.branches.list({ kind: "clinic" }) : Promise.resolve([])), [open]);
 
   // Prime the editor when a different form is opened.
   const key = template?._id ?? (open ? "new" : "");
