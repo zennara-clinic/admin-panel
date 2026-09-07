@@ -602,29 +602,96 @@ export function Invoices() {
 }
 
 /** A guest's bills, for the patient record. */
+/**
+ * Every bill on one guest, on the guest's own page.
+ *
+ * The register mirrors Zenoti bills as headers only and pulls a bill's items
+ * when someone opens it — sensible across hundreds of rows, useless here,
+ * where a guest has a handful and the whole point is seeing what they bought.
+ * So this expands the guest's un-expanded bills once, on open, then shows the
+ * money at the top and the bills beneath it.
+ */
 export function GuestInvoices({ userId, onOpen }: { userId: string; onOpen?: (id: string) => void }) {
   const q = useApi(() => api.invoices.list({ userId, limit: 100, from: undefined, to: undefined }), [userId]);
   const [sel, setSel] = useState<string | null>(null);
+  const [filling, setFilling] = useState(false);
+  const filled = useRef<string | null>(null);
   const rows = (q.data?.data ?? []) as Invoice[];
+
+  // One pass per guest: expand the Zenoti bills whose items we have never read.
+  useEffect(() => {
+    if (q.loading || filled.current === userId) return;
+    const unexpanded = rows.some((i) => i.source === "zenoti" && (i.lines?.length ?? 0) === 0);
+    if (!unexpanded) { filled.current = userId; return; }
+    filled.current = userId;
+    setFilling(true);
+    api.invoices.hydrateGuest(userId)
+      .then((r) => { if (r?.fetched) q.reload(); })
+      .catch(() => {})
+      .finally(() => setFilling(false));
+  }, [q.loading, rows, userId, q]);
+
+  const money = useMemo(() => {
+    const live = rows.filter((i) => i.status !== "void");
+    return {
+      billed: live.reduce((n, i) => n + (i.totals?.total ?? 0), 0),
+      due: live.reduce((n, i) => n + (i.totals?.due ?? 0), 0),
+      bills: rows.length,
+      open: live.filter((i) => i.status === "open").length,
+    };
+  }, [rows]);
+
   return (
     <Async q={q} label="Loading bills…" rows={3}>
-      {() => rows.length === 0 ? <div className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-[12px] text-ink3">No bills on this guest yet.</div> : (
-        <>
+      {() => rows.length === 0 ? (
+        <Empty title="No bills on this guest yet" hint="Anything billed at the desk, bought in the app, or rung up in Zenoti appears here." />
+      ) : (
+        <div className="grid gap-3">
+          {/* What this guest is worth, and what they still owe. */}
+          <div className="grid grid-cols-3 gap-2">
+            <Stat label="Billed" value={fmtINR(money.billed)} sub={`${money.bills} bill${money.bills === 1 ? "" : "s"}`} />
+            <Stat label="Collected" value={fmtINR(money.billed - money.due)} />
+            <Stat label="Outstanding" value={fmtINR(money.due)} tone={money.due > 0 ? "err" : undefined}
+              sub={money.open ? `${money.open} open` : "nothing owing"} />
+          </div>
+
+          {filling && <Note className="my-0">Reading the items on this guest's Zenoti bills…</Note>}
+
           <DataTable cols={["Invoice no", "Date", "Items", "Amount", "Due", "Status", "Raised in"]}
             onRow={(i) => (onOpen ? onOpen(rows[i]._id) : setSel(rows[i]._id))}
-            rows={rows.map((i) => [
-              <span key="n" className="font-mono text-[11.5px]">{i.invoiceNumber}</span>,
-              fmtWhen(i.closedAt || i.issuedAt),
-              <span key="i" className="text-[11.5px]">{i.lines.map((l) => `${l.name} (${l.qty})`).join(", ") || "—"}</span>,
-              <span key="a" className="tabular-nums">{fmtINR(i.totals.total)}</span>,
-              <span key="d" className={`tabular-nums ${i.totals.due > 0 ? "font-bold text-err" : ""}`}>{fmtINR(i.totals.due)}</span>,
-              i.status === "void" ? <Tag key="s" kind="mute">VOID</Tag> : i.status === "open" ? <Tag key="s" kind="gold">OPEN</Tag> : <Tag key="s" kind="ok">CLOSED</Tag>,
-              i.source === "zenoti" ? "Zenoti" : i.source === "app" ? "App" : "Desk",
-            ])} />
+            rows={rows.map((i) => {
+              const items = (i.lines ?? []);
+              const shown = items.slice(0, 3).map((l) => `${l.name}${l.qty > 1 ? ` ×${l.qty}` : ""}`).join(", ");
+              return [
+                <span key="n" className="font-mono text-[11.5px]">
+                  {i.invoiceNumber}
+                  {i.receiptNumber ? <span className="block text-[10.5px] text-ink3">{i.receiptNumber}</span> : null}
+                </span>,
+                fmtWhen(i.closedAt || i.issuedAt),
+                items.length
+                  ? <span key="i" className="text-[11.5px]">{shown}{items.length > 3 ? <span className="text-ink3"> +{items.length - 3} more</span> : null}</span>
+                  : <span key="i" className="text-[11.5px] text-ink3">{i.source === "zenoti" ? "Zenoti did not return any items for this bill" : "no items"}</span>,
+                <span key="a" className="tabular-nums font-bold">{fmtINR(i.totals?.total)}</span>,
+                <span key="d" className={`tabular-nums ${(i.totals?.due ?? 0) > 0 ? "font-bold text-err" : "text-ink3"}`}>{fmtINR(i.totals?.due)}</span>,
+                i.status === "void" ? <Tag key="s" kind="mute">VOID</Tag> : i.status === "open" ? <Tag key="s" kind="gold">OPEN</Tag> : <Tag key="s" kind="ok">CLOSED</Tag>,
+                i.source === "zenoti" ? <Tag key="r" kind="mute">Zenoti</Tag> : i.source === "app" ? <Tag key="r" kind="mute">App</Tag> : <Tag key="r" kind="mute">Desk</Tag>,
+              ];
+            })} />
           <InvoiceModal open={!!sel} invoiceId={sel} onClose={() => setSel(null)} onChanged={q.reload} />
-        </>
+        </div>
       )}
     </Async>
+  );
+}
+
+/** One headline number on the guest's bills. */
+function Stat({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: "err" }) {
+  return (
+    <div className="rounded-(--radius-card) border border-border bg-surface px-3 py-2.5">
+      <div className="text-[10.5px] font-extrabold uppercase tracking-wider text-ink3">{label}</div>
+      <div className={`mt-0.5 text-[17px] font-extrabold tabular-nums ${tone === "err" ? "text-err" : ""}`}>{value}</div>
+      {sub ? <div className="text-[11px] text-ink3">{sub}</div> : null}
+    </div>
   );
 }
 

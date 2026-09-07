@@ -890,6 +890,8 @@ export const invoices = {
   forBooking: (bookingId: Id) => request<Invoice>(`/invoices/for-booking/${bookingId}`),
   /** Re-read a mirrored bill's lines and payments from Zenoti. */
   zenotiRefresh: (id: Id) => request<Invoice>(`/invoices/${id}/zenoti-refresh`, { method: "POST" }),
+  /** Pull the line items for every un-expanded Zenoti bill on one guest. */
+  hydrateGuest: (userId: Id) => request<{ fetched: number; pending: number }>(`/invoices/guest/${userId}/hydrate`, { method: "POST" }),
   receipt: (id: Id, print = false) => request<{ html: string; text: string; invoiceNumber: string; receiptNumber: string | null }>(`/invoices/${id}/receipt`, { query: print ? { print: 1 } : undefined }),
   send: (id: Id, body: { channel: "email" | "whatsapp" | "both"; email?: string; phone?: string }) =>
     requestRaw<{ email?: { ok: boolean; to?: string; error?: string }; whatsapp?: { ok: boolean; to?: string; error?: string } }>(`/invoices/${id}/send`, { method: "POST", body }),
