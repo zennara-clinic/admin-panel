@@ -737,7 +737,7 @@ function BookingDrawer({ id, onClose, onChanged }: {
           <In label="New time" value={resTime} onChange={setResTime} placeholder="e.g. 15:30" />
         </div>
         <div className="mt-3">
-          <Area label="Reason (goes into the desk notes)" value={resReason} onChange={setResReason} rows={2} placeholder="e.g. dermatologist on leave / guest asked" />
+          <Area label="Reason — the guest sees this" value={resReason} onChange={setResReason} rows={2} placeholder="e.g. your dermatologist is on leave that day" />
         </div>
         <Note>Leaving the time blank moves the booking back to “Rescheduled” so the guest can pick a slot.</Note>
         {act.error && <Note kind="crit">{act.error}</Note>}

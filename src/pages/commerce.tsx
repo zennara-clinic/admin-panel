@@ -902,8 +902,17 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
                 )}
                 {/* Moving money is its own permission — a role can work the
                     order book without ever being able to refund. */}
-                {can("orders.refund") && ["Cancelled", "Returned"].includes(selOrder.orderStatus) && selOrder.paymentStatus === "Paid" && !["Processing", "Completed"].includes(selOrder.refundDetails?.status || "") && (
-                  <Btn kind="gold" disabled={busy} onClick={() => setRefundOpen(true)}>Refund {fmtINR(selOrder.pricing?.total)}…</Btn>
+                {can("orders.refund")
+                  && ["Cancelled", "Returned"].includes(selOrder.orderStatus)
+                  && ["Paid", "Partially Refunded"].includes(selOrder.paymentStatus ?? "")
+                  && selOrder.refundDetails?.status !== "Processing"
+                  && refundableOn(selOrder) > 0 && (
+                  <Btn kind="gold" disabled={busy} onClick={() => setRefundOpen(true)}>
+                    Refund {fmtINR(refundableOn(selOrder))}…
+                  </Btn>
+                )}
+                {Number(selOrder.refundDetails?.amountRefunded ?? 0) > 0 && refundableOn(selOrder) > 0 && (
+                  <Note className="my-0">{fmtINR(selOrder.refundDetails?.amountRefunded ?? 0)} of {fmtINR(selOrder.pricing?.total)} refunded so far · {fmtINR(refundableOn(selOrder))} still refundable.</Note>
                 )}
                 {can("orders.refund") && selOrder.refundDetails?.status === "Processing" && selOrder.refundDetails.method !== "Razorpay" && (
                   <CompleteRefund order={selOrder} busy={busy} act={act} audit={audit} />
@@ -1031,11 +1040,21 @@ function CompleteRefund({ order, busy, act, audit }: {
   );
 }
 
+/** What is still refundable: the total less everything already returned. */
+function refundableOn(order: ProductOrder) {
+  const total = Number(order.pricing?.total ?? 0);
+  const done = Number(order.refundDetails?.amountRefunded ?? 0);
+  return Math.max(0, Math.round((total - done) * 100) / 100);
+}
+
 function RefundModal({ open, order, onClose, onDone }: { open: boolean; order: ProductOrder; onClose: () => void; onDone: () => void }) {
   const { toast, audit } = useStore();
-  const online = order.paymentMethod !== "COD";
+  // Razorpay is the only method that can refund itself. Anything else — a sale
+  // rung up at the clinic counter — is money staff hand back and record here.
+  const online = order.paymentMethod === "Razorpay" || order.paymentMethod === "Online";
+  const refundable = refundableOn(order);
   const [method, setMethod] = useState("Bank Transfer");
-  const [amount, setAmount] = useState(String(order.pricing?.total ?? 0));
+  const [amount, setAmount] = useState(String(refundableOn(order)));
   const [notes, setNotes] = useState("");
   const [bank, setBank] = useState({ accountHolderName: "", accountNumber: "", ifscCode: "", bankName: "", upiId: "" });
   const [busy, setBusy] = useState(false);
@@ -1044,10 +1063,10 @@ function RefundModal({ open, order, onClose, onDone }: { open: boolean; order: P
 
   useEffect(() => {
     if (!open) return;
-    setAmount(String(order.pricing?.total ?? 0)); setNotes(""); setErr(null);
+    setAmount(String(refundableOn(order))); setNotes(""); setErr(null);
     const b = (saved.data as { bankDetails?: Record<string, string> } | null)?.bankDetails;
     if (b) setBank({ accountHolderName: b.accountHolderName ?? "", accountNumber: b.accountNumber ?? "", ifscCode: b.ifscCode ?? "", bankName: b.bankName ?? "", upiId: b.upiId ?? "" });
-  }, [open, saved.data, order._id, order.pricing?.total]);
+  }, [open, saved.data, order._id, refundable]);
 
   const submit = async () => {
     setBusy(true); setErr(null);
@@ -1070,10 +1089,14 @@ function RefundModal({ open, order, onClose, onDone }: { open: boolean; order: P
       {online ? (
         <Note>Paid online, so the refund goes back through <B>Razorpay</B> to the original payment method. Nothing else to collect.</Note>
       ) : (
-        <Note>Cash-on-delivery order: record how the money is going back. Bank and UPI refunds are marked <B>Processing</B> until you confirm the transfer.</Note>
+        <Note>This order was not paid through Razorpay, so nothing can be sent automatically. Return the money and record here how it went back — bank and UPI refunds stay <B>Processing</B> until you confirm the transfer.</Note>
+      )}
+      {Number(order.refundDetails?.amountRefunded ?? 0) > 0 && (
+        <Note kind="gold">{fmtINR(order.refundDetails?.amountRefunded ?? 0)} has already been refunded on this order. At most {fmtINR(refundable)} can still go back.</Note>
       )}
       <div className="grid gap-3">
-        <In label="Amount (₹)" type="number" value={amount} onChange={setAmount} hint={`Order total ${fmtINR(order.pricing?.total)}`} />
+        <In label="Amount (₹)" type="number" value={amount} onChange={setAmount}
+          hint={`Order total ${fmtINR(order.pricing?.total)} · refundable now ${fmtINR(refundable)}. Refunding part of it leaves the rest available.`} />
         {!online && (
           <>
             <Sel label="Refund method" value={method} onChange={setMethod} options={["Bank Transfer", "UPI", "Cash", "Store Credit"]} />

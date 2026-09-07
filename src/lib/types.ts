@@ -938,10 +938,12 @@ export type ProductOrder = {
     method?: string; amount?: number; status?: string; razorpayRefundId?: string; transactionProof?: string;
     refundInitiatedAt?: string; refundCompletedAt?: string; failureReason?: string; notes?: string;
     bankDetails?: { accountHolderName?: string; accountNumber?: string; ifscCode?: string; bankName?: string; upiId?: string };
+    /** Everything returned so far, across every part refund. */
+    amountRefunded?: number;
   };
   coupon?: { code?: string; discount?: number };
-  paymentMethod?: "COD" | "Razorpay" | "Online";
-  paymentStatus?: "Pending" | "Paid" | "Failed" | "Refunded";
+  paymentMethod?: "COD" | "Razorpay" | "Online" | "Clinic";
+  paymentStatus?: "Pending" | "Paid" | "Failed" | "Refunded" | "Partially Refunded";
   orderStatus: OrderStatus;
   statusHistory?: { status: string; timestamp: string; note?: string }[];
   deliveryDate?: string;

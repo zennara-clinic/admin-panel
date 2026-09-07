@@ -86,12 +86,19 @@ export function clinicMonthEnd(key: string = isoDay()): string {
 /** Weekday of a written clinic day (0 = Sunday), independent of the browser. */
 export const clinicWeekday = (key: string) => dayKeyDate(key).getUTCDay();
 
+/**
+ * Every browser's ICU spells September as "Sept" in en-IN/en-GB, which reads
+ * as a typo next to the other three-letter months. One pass keeps the panel's
+ * months uniform whatever the staff laptop's ICU build does.
+ */
+const shortenMonths = (s: string) => s.replace(/\bSept\b/g, "Sep");
+
 /** Format a date-only key without interpreting it as a UTC or local instant. */
 export function fmtDayKey(
   key: string,
   options: Intl.DateTimeFormatOptions = { day: "numeric", month: "short", year: "numeric" },
 ): string {
-  return new Intl.DateTimeFormat("en-IN", { ...options, timeZone: "UTC" }).format(dayKeyDate(key));
+  return shortenMonths(new Intl.DateTimeFormat("en-IN", { ...options, timeZone: "UTC" }).format(dayKeyDate(key)));
 }
 
 export const isSameDay = (a: Date | null, b: Date | null) => !!a && !!b && isoDay(a) === isoDay(b);
@@ -125,9 +132,9 @@ export function fmtDateCompact(v: string | Date | undefined | null): string {
 export function fmtDateLong(v: string | Date | undefined | null): string {
   const d = toDate(v);
   if (!d) return "—";
-  return new Intl.DateTimeFormat("en-IN", {
+  return shortenMonths(new Intl.DateTimeFormat("en-IN", {
     timeZone: CLINIC_TZ, weekday: "long", day: "numeric", month: "short", year: "numeric",
-  }).format(d);
+  }).format(d));
 }
 
 /** "3 Sep 2026 · 11:30" — an instant, stated in full. */
