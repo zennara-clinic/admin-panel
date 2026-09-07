@@ -270,7 +270,7 @@ export const categories = {
 /* ============================ packages ============================ */
 export const packages = {
   /** Envelope: `data` plus `buckets` (catalogue / sold / ours) for the tabs. */
-  list: (q?: Query) => requestRaw<Package[]>("/packages", { query: q }) as Promise<Envelope<Package[]> & { total?: number; buckets?: { catalogue: number; sold: number; ours: number } }>,
+  list: (q?: Query) => requestRaw<Package[]>("/packages", { query: q }) as Promise<Envelope<Package[]> & { total?: number; buckets?: { premade: number; custom: number } }>,
   stats: () => request<Record<string, number>>("/packages/stats"),
   get: (id: Id) => request<Package>(`/packages/${id}`),
   create: (body: Partial<Package>) => request<Package>("/packages", { method: "POST", body }),

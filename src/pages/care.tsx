@@ -927,7 +927,7 @@ export function Packages() {
   const [del, setDel] = useState<Package | null>(null);
   const [cloneSeed, setCloneSeed] = useState<Partial<Package> | null>(null);
 
-  const [tab, setTab] = useQueryNumber("tab", 0, { min: 0, max: 3 });
+  const [tab, setTab] = useQueryNumber("tab", 0, { min: 0, max: 1 });
   const [search, setSearch] = useState("");
   const dq = useDebounced(search, 300);
   const [pickOpen, setPickOpen] = useState(false);
@@ -935,23 +935,30 @@ export function Packages() {
   const [assignFor, setAssignFor] = useState<User | null>(null);
   const assignUi = (
     <>
-      <PatientPickerModal open={pickOpen} onClose={() => setPickOpen(false)} title="Assign a package — who is it for?" onPick={(u) => { setPickOpen(false); setAssignFor(u); }} />
-      {assignFor && <AssignPackageModal open={!!assignFor} onClose={() => setAssignFor(null)} user={assignFor} onAssigned={() => { setAssignFor(null); assignments.reload(); }} />}
+      {/* A custom package starts with the guest it is being built for. */}
+      <PatientPickerModal open={pickOpen} onClose={() => setPickOpen(false)} title="Custom package — who is it for?" onPick={(u) => { setPickOpen(false); setAssignFor(u); }} />
+      {assignFor && <AssignPackageModal open={!!assignFor} onClose={() => setAssignFor(null)} user={assignFor} onAssigned={() => { setAssignFor(null); q.reload(); }} />}
     </>
   );
 
   /*
-   * Zenoti keeps three different things in one list; we separate them:
-   *   0 Catalogue      — what Zenoti's centres sell today (its package master)
-   *   1 Custom & sold  — built for one guest at the desk, or retired, and kept
-   *                      because guests still hold sessions on them
-   *   2 Our packages   — created here, sold through the app
-   *   3 Assignments    — who holds what
+   * Two lists, because there are only two kinds of package.
+   *
+   *   0 Premade — the standing menu, assignable to any patient
+   *   1 Custom  — built for one named guest
+   *
+   * "Our packages" used to be a third tab because packages created here were
+   * sold through the app. That concept is gone: a package is never bought in
+   * the app, it is ASSIGNED to a guest by the clinic, so where a package was
+   * authored no longer tells anyone anything useful.
+   *
+   * Assignments are not a tab either. Who holds what belongs on the patient,
+   * and it is already there — a second list of the same thing only invites the
+   * desk to work on a package without seeing the person.
    */
   const PACKAGE_TABS = [
-    { label: "Catalogue", q: { origin: "zenoti", inCatalogue: "true" } },
-    { label: "Custom & sold", q: { origin: "zenoti", inCatalogue: "false" } },
-    { label: "Our packages", q: { origin: "panel" } },
+    { label: "Premade", q: { custom: "false" } },
+    { label: "Custom", q: { custom: "true" } },
   ];
   const q = useApi(() => api.packages.list({ includeInactive: "true", limit: 200, search: dq || undefined, ...(PACKAGE_TABS[tab]?.q ?? PACKAGE_TABS[0].q) }), [tab, dq]);
   const assignments = useApi(() => api.packageAssignments.stats().catch(() => undefined), []);
@@ -960,23 +967,11 @@ export function Packages() {
   const total = q.data?.total ?? list.length;
 
   const tabs: [string, number?][] = [
-    ["Catalogue", buckets?.catalogue],
-    ["Custom & sold", buckets?.sold],
-    ["Our packages", buckets?.ours],
-    ["Assignments"],
+    ["Premade", buckets?.premade],
+    ["Custom", buckets?.custom],
   ];
-  if (tab === 3) {
-    return (
-      <Page title="Packages" sub="Packages assigned to patients — sessions, payment and cancellation"
-        actions={<Btn kind="gold" onClick={() => setPickOpen(true)}>+ Assign package</Btn>}>
-        <Tabs active={tab} onChange={setTab} items={tabs} />
-        <AssignmentsConsole />
-        {assignUi}
-      </Page>
-    );
-  }
   return (
-    <Page title="Packages" sub="Bundles of services and consultations, assignable to any patient"
+    <Page title="Packages" sub="Premade packages the desk can assign to any patient, and custom ones built for one guest"
       actions={<>
         <Btn kind="ghost" disabled={!list.length} onClick={() => exportCsv("zennara-packages",
           ["Name", "Code", "Kind", "Price", "Services", "Validity (days)", "Grace", "Centres", "Bookings", "In app"],
@@ -990,8 +985,15 @@ export function Packages() {
             { label: "Download blank template", onClick: () => download(api.bulk.downloadUrl("packages", "template"), "zennara-packages-template.csv").catch((e) => toast((e as Error).message)) },
           ]} />
         )}
-        <Btn kind="gold" onClick={() => setPickOpen(true)}>+ Assign package</Btn>
-        {can("packages.manage") && <Btn onClick={() => { setCreating(true); setEdit(null); }}>+ New package</Btn>}
+        {/* A package is assigned FROM the patient's own record, where the desk
+            can see what they already hold. A custom package starts by choosing
+            the guest it is for, so that button carries its own picker. */}
+        {can("packages.manage") && tab === 1 && (
+          <Btn kind="gold" onClick={() => setPickOpen(true)}>+ Custom package for a patient</Btn>
+        )}
+        {can("packages.manage") && tab === 0 && (
+          <Btn onClick={() => { setCreating(true); setEdit(null); }}>+ New premade package</Btn>
+        )}
       </>}>
       <BulkImport
         open={pkgImportOpen}
