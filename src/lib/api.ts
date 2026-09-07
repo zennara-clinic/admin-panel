@@ -365,7 +365,7 @@ export const schedules = {
   dayShifts: (date: string, branchId?: string | null) =>
     request<DayBook>("/dermatologists/day-shifts", { query: { date, ...(branchId ? { branchId } : {}) } }),
   get: (doctorId: string) =>
-    request<{ dermatologist: Doctor; schedule: DermatologistSchedule; canEdit: boolean }>(
+    request<{ dermatologist: Doctor; schedule: DermatologistSchedule; canEdit: boolean; scheduleAuthority?: "zenoti" | "local"; authorityMessage?: string }>(
       `/dermatologists/${encodeURIComponent(doctorId)}/schedule`,
     ),
   save: (doctorId: string, body: Partial<DermatologistSchedule>) =>
@@ -843,13 +843,16 @@ export type DashboardDerm = {
   revenue: number; patients: number; avgRating: number | null; completionRate: number;
 };
 export type Dashboard = {
-  period: { startDate: string; endDate: string; days: number; branch: string };
+  period: { startDate: string; endDate: string; days: number; branch: string; isAllTime?: boolean };
   revenue: { total: number; previous: number; previousHasData?: boolean; growthPercent: number | null; streams: DashboardStream[] };
   counts: {
     bookings: number; completed: number; cancelled: number; noShow: number; consultations: number; treatments: number; upcoming: number;
     awaitingConfirmation: number; noShowRate: number; cancellationRate: number; orders: number; paidOrders: number; ordersByStatus: Record<string, number>;
     openOrders: number; packagesAssigned: number; packagesPaid: number; packagesUnpaid: number; membershipsSold: number; activeZen: number; zenExpiring: number;
     newPatients: number; totalPatients: number; bookingsBySource: Record<string, number>; outstanding: number; averageTicket: number; membershipsUnpriced?: number;
+    /** Fixed reference points, independent of the chosen window. */
+    existingPatients?: number; newThisMonth?: number; treatmentsThisWeek?: number;
+    upcomingAll?: number; appointmentsAllTime?: number; returningPatients?: number;
     completedConsultations?: number; completedTreatments?: number;
   };
   dermatologists: DashboardDerm[];

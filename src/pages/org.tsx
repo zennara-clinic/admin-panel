@@ -587,7 +587,15 @@ export function Reviews() {
 }
 
 /* ================= ANALYTICS ================= */
-const ANALYTICS_RANGES: Record<string, number> = { "7 days": 7, "30 days": 30, "90 days": 90, "6 months": 182, "This year": 365 };
+/*
+ * "All time" is the default, and it is not a number of days.
+ *
+ * The clinic reads this page to answer "how are we doing", and a 90-day window
+ * hid four years of history behind a picker nobody knew to move — the totals
+ * looked small and wrong. 0 means "send no start date", and the server falls
+ * back to the oldest record it holds.
+ */
+const ANALYTICS_RANGES: Record<string, number> = { "All time": 0, "7 days": 7, "30 days": 30, "90 days": 90, "6 months": 182, "This year": 365 };
 const ANALYTICS_TABS: [string, (number | string)?][] = [["Revenue"], ["Appointments"], ["Dermatologists"], ["Services"], ["Patients"], ["Products & orders"], ["Packages & memberships"], ["Stock"], ["Staff sales"]];
 
 /** Group a daily series into ≤ n buckets (sum) for bar charts. */
@@ -607,7 +615,7 @@ function bucketLabels(rows: { date: string }[], n: number): string[] {
 export function Analytics() {
   // Trade happens at the three clinics; a pharmacy filter would always be empty.
   const { clinics: branches } = useStore();
-  const [range, setRange] = useQueryString("range", "90 days");
+  const [range, setRange] = useQueryString("range", "All time");
   const [custom, setCustom] = useState<{ startDate: string; endDate: string } | null>(null);
   const [branchId, setBranchId] = useQueryString("branch", "");
   const [tab, setTab] = useQueryNumber("tab", 0, { min: 0, max: ANALYTICS_TABS.length - 1 });
@@ -615,10 +623,12 @@ export function Analytics() {
   const window = useMemo(() => {
     if (custom) return custom;
     const end = isoDay();
+    // All time: no startDate at all, so the server uses its own floor.
+    if (range === "All time") return { startDate: undefined as string | undefined, endDate: end };
     const start = range === "This year"
       ? `${end.slice(0, 4)}-01-01`
       : addClinicDays(end, -(ANALYTICS_RANGES[range] ?? 90) + 1);
-    return { startDate: start, endDate: end };
+    return { startDate: start as string | undefined, endDate: end };
   }, [range, custom]);
   const scope = { ...window, branchId: branchId || undefined };
 
@@ -628,7 +638,7 @@ export function Analytics() {
         api.analytics.dashboard(scope).catch((e) => { throw new Error(`Dashboard: ${(e as Error).message}`); }),
         api.analytics.financial(scope).catch(() => undefined),
         api.analytics.appointments(scope).catch((e) => { throw new Error(`Appointments: ${(e as Error).message}`); }),
-        api.analytics.patients({ ...scope, days: ANALYTICS_RANGES[range] ?? 90 }).catch(() => undefined),
+        api.analytics.patients({ ...scope, days: rangeDays }).catch(() => undefined),
         api.analytics.services(scope).catch(() => undefined),
         api.analytics.inventory(window).catch(() => undefined),
         api.analytics.monthlyRevenue({ branchId: branchId || undefined }).catch(() => []),
@@ -645,12 +655,14 @@ export function Analytics() {
 
   const branchName = branches.find((b) => b._id === branchId)?.name ?? "All centres";
   const label = custom ? `${custom.startDate} → ${custom.endDate}` : range;
+  // The patients endpoint wants a day count; all-time asks for the lot.
+  const rangeDays = range === "All time" ? 3650 : (ANALYTICS_RANGES[range] ?? 90);
 
   return (
     <Page title="Analytics" sub={`${branchName} · ${label}`}
       actions={<>
         <Menu button={<Btn kind="ghost">{custom ? "Custom" : range} ▾</Btn>}
-          items={[...Object.keys(ANALYTICS_RANGES).map((r) => ({ label: r, onClick: () => { setCustom(null); setRange(r); } })), { label: "Custom…", onClick: () => setCustom(window) }]} />
+          items={[...Object.keys(ANALYTICS_RANGES).map((r) => ({ label: r, onClick: () => { setCustom(null); setRange(r); } })), { label: "Custom…", onClick: () => setCustom({ startDate: window.startDate ?? isoDay().slice(0, 4) + "-01-01", endDate: window.endDate }) }]} />
         {custom && (
           <div className="flex items-center gap-1.5">
             <input type="date" value={custom.startDate} max={custom.endDate} onChange={(e) => setCustom({ ...custom, startDate: e.target.value })} className="rounded-lg border border-border bg-ivory px-2 py-1.5 text-[12px]" />
@@ -700,6 +712,28 @@ export function Analytics() {
                         : `${s.count} · app ${fmtCompactINR(s.app)}${s.clinic ? ` · clinic ${fmtCompactINR(s.clinic)}` : ""}`,
                     })),
                   ]} />
+
+                  {/*
+                    Fixed reference points, deliberately separate from the
+                    revenue row above. These do not move with the date picker —
+                    "how many patients do we have" is always all of them, and a
+                    window-relative answer to that is just wrong.
+                  */}
+                  <Stats items={[
+                    { k: "Patients on file", v: d.counts.totalPatients.toLocaleString("en-IN"), hot: true,
+                      d: `${d.counts.newThisMonth ?? 0} joined this month` },
+                    { k: "New in this period", v: (d.counts.newPatients ?? 0).toLocaleString("en-IN"),
+                      d: d.period.isAllTime ? "all time" : `${d.period.days} days` },
+                    { k: "Returning patients", v: (d.counts.returningPatients ?? 0).toLocaleString("en-IN"),
+                      d: "seen more than once", tone: "up" },
+                    { k: "Appointments to date", v: (d.counts.appointmentsAllTime ?? 0).toLocaleString("en-IN"),
+                      d: `${d.counts.completed.toLocaleString("en-IN")} completed in period` },
+                    { k: "Treatments this week", v: (d.counts.treatmentsThisWeek ?? 0).toLocaleString("en-IN"),
+                      d: "completed, last 7 days" },
+                    { k: "Still to come", v: (d.counts.upcomingAll ?? 0).toLocaleString("en-IN"),
+                      d: "confirmed and awaiting, from now", hot: (d.counts.upcomingAll ?? 0) > 0 },
+                  ]} />
+
                   <div className="grid gap-3 xl:grid-cols-2">
                     <ChartCard title="Revenue by day" sub="All streams, as paid" hero={fmtINR(d.revenue.total)}>
                       {d.daily.length > 1 ? <AreaChart pts={d.daily.map((x) => x.total)} labels={dailyLabels} label="Revenue" format={fmtCompactINR} /> : <Empty title="Pick a longer range" />}

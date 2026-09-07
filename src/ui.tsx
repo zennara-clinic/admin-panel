@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import { Check, ChevronDown, Loader2, RefreshCw, Search, X } from "lucide-react";
 import { addClinicDays, clinicMonthEnd, clinicMonthStart, isoDay } from "./lib/format";
@@ -447,23 +448,79 @@ export function Prog({ pct, w = "" }: { pct: number; w?: string }) {
 }
 
 /* ---------- modal + drawer ---------- */
+/**
+ * How deep this modal is nested. A modal opened from inside another (the
+ * invoice raised from Today's sales, the void dialog raised from that) reads
+ * its parent's depth and sits one layer above it.
+ *
+ * Before this, every Modal rendered at a flat z-[80] inside its parent's
+ * subtree, so a child could paint UNDER the parent's panel and be clipped by
+ * its scroll box — the invoice appearing behind the sales list. Depth plus a
+ * portal to <body> takes each dialog out of its parent's box entirely.
+ */
+const ModalDepth = createContext(0);
+
+/**
+ * Every open modal, innermost last. Escape closes only the top one, so a
+ * stack does not collapse in a single keypress.
+ */
+const modalStack: { close: () => void }[] = [];
+
 export function Modal({ open, onClose, title, children, wide, xl }: {
   open: boolean; onClose: () => void; title: string; children: ReactNode; wide?: boolean; xl?: boolean;
 }) {
+  const depth = useContext(ModalDepth);
+
+  // Register in the stack while open so Escape can find the topmost dialog.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    if (!open) return;
+    const entry = { close: () => closeRef.current() };
+    modalStack.push(entry);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (modalStack[modalStack.length - 1] !== entry) return; // an inner dialog owns this Escape
+      e.stopPropagation();
+      entry.close();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      const i = modalStack.indexOf(entry);
+      if (i > -1) modalStack.splice(i, 1);
+    };
+  }, [open]);
+
+  // Only the outermost dialog freezes the page behind it; an inner one
+  // unlocking on close would let the page scroll while its parent is still up.
+  useEffect(() => {
+    if (!open || depth > 0) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
+  }, [open, depth]);
+
   if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-[80] grid place-items-center p-4">
-      <div className="absolute inset-0 bg-primary/40 backdrop-blur-[2px]" onClick={onClose} />
-      {/* `xl` is for the editors that carry a side column plus dense rows —
-          at 720px those get squeezed into unreadable slivers. */}
-      <div className={`relative max-h-[88vh] w-full overflow-auto rounded-(--radius-lg2) bg-surface p-5 shadow-2xl ${xl ? "max-w-[1040px]" : wide ? "max-w-[720px]" : "max-w-[480px]"}`}>
-        <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-[16px] font-extrabold">{title}</h3>
-          <button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-full bg-sage text-ink2"><X className="h-4 w-4" /></button>
+
+  return createPortal(
+    <ModalDepth.Provider value={depth + 1}>
+      <div className="fixed inset-0 grid place-items-center p-4" style={{ zIndex: 80 + depth * 10 }} role="dialog" aria-modal="true" aria-label={title}>
+        {/* Only the first layer dims and blurs; stacking three translucent
+            sheets turned the page black and made the top dialog look broken. */}
+        <div className={`absolute inset-0 ${depth === 0 ? "bg-primary/40 backdrop-blur-[2px]" : "bg-primary/20"}`} onClick={onClose} />
+        {/* `xl` is for the editors that carry a side column plus dense rows —
+            at 720px those get squeezed into unreadable slivers. */}
+        <div className={`relative max-h-[88vh] w-full overflow-auto rounded-(--radius-lg2) bg-surface p-5 shadow-2xl ${xl ? "max-w-[1040px]" : wide ? "max-w-[720px]" : "max-w-[480px]"}`}>
+          <div className="sticky -top-5 z-[1] -mx-5 -mt-5 mb-4 flex items-center justify-between gap-3 border-b border-border bg-surface px-5 py-3">
+            <h3 className="min-w-0 truncate text-[16px] font-extrabold">{title}</h3>
+            <button onClick={onClose} aria-label="Close" className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-sage text-ink2 hover:bg-border"><X className="h-4 w-4" /></button>
+          </div>
+          {children}
         </div>
-        {children}
       </div>
-    </div>
+    </ModalDepth.Provider>,
+    document.body,
   );
 }
 

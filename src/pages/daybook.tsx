@@ -26,6 +26,7 @@ const LEFT_W = 172;
 
 const toMin = (t: string) => { const m = t.match(/(\d{1,2}):(\d{2})/); return m ? Number(m[1]) * 60 + Number(m[2]) : 0; };
 const toHHMM = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+const hourFloor = (m: number) => Math.floor(m / 60) * 60;
 const label12 = (m: number) => { const h = Math.floor(m / 60); const mm = m % 60; const ap = h >= 12 ? "PM" : "AM"; const h12 = h % 12 === 0 ? 12 : h % 12; return `${h12}${mm ? `:${String(mm).padStart(2, "0")}` : ""} ${ap}`; };
 
 /** Colour per booking state — Zenoti's legend, in the panel's tokens. */
@@ -206,6 +207,31 @@ function BlockModal({ open, onClose, onSaved, date, providers, initial }: {
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => { if (open) { setDoctorId(initial?.doctorId ?? providers[0]?.doctorId ?? ""); setStart(initial?.startTime ?? "13:00"); setEnd(initial?.startTime ? toHHMM(Math.min(23 * 60 + 45, toMin(initial.startTime) + 60)) : "14:00"); setTitle("Meeting"); setNotes(""); setErr(null); } }, [open, initial?.doctorId, initial?.startTime]);
   const name = (id: string) => providers.find((p) => p.doctorId === id)?.name ?? "";
+
+  const who = providers.find((p) => p.doctorId === doctorId);
+  const s0 = toMin(start); const e0 = toMin(end);
+  /** What stops this block being saved. */
+  const problem = !doctorId
+    ? "Choose whose time is being held."
+    : e0 <= s0
+      ? "The end time has to be after the start time."
+      : null;
+  /**
+   * What is odd but allowed. Holding time outside a shift is legitimate — a
+   * meeting before the clinic opens — so these read as warnings, not blocks.
+   */
+  const warnings = (() => {
+    if (problem || !who) return [] as string[];
+    const out: string[] = [];
+    const inShift = (who.ranges ?? []).some((r) => s0 >= toMin(r.start) && e0 <= toMin(r.end));
+    if (!(who.ranges ?? []).length) out.push(`${who.name} has no shift on this day.`);
+    else if (!inShift) out.push(`Outside ${who.name}'s shift (${who.ranges.map((r) => `${label12(toMin(r.start))}–${label12(toMin(r.end))}`).join(", ")}).`);
+    const clash = (who.blocks ?? []).find((b) => s0 < toMin(b.endTime) && e0 > toMin(b.startTime));
+    if (clash) out.push(`Overlaps "${clash.title}" (${label12(toMin(clash.startTime))}–${label12(toMin(clash.endTime))}).`);
+    if (e0 - s0 > 8 * 60) out.push("That holds more than eight hours.");
+    return out;
+  })();
+
   return (
     <Modal open={open} onClose={onClose} title="Block out time">
       <div className="grid gap-3">
@@ -217,10 +243,13 @@ function BlockModal({ open, onClose, onSaved, date, providers, initial }: {
         </div>
         <Sel label="Reason" value={title} options={["Meeting", "CRM Booking", "Vendor visit", "Training", "Lunch", "Reserved", "Other"]} onChange={setTitle} />
         <Area label="Note" value={notes} onChange={setNotes} rows={2} placeholder="Who, what, phone number…" />
+        {problem && <Note kind="crit" className="my-0">{problem}</Note>}
+        {!problem && warnings.length > 0 && <Note kind="gold" className="my-0">{warnings.join(" ")}</Note>}
         {err && <Note kind="crit">{err}</Note>}
-        <div className="flex justify-end gap-2">
+        <div className="flex items-center justify-end gap-2">
+          {!problem && <span className="mr-auto text-[11.5px] text-ink3">Holds {Math.round((e0 - s0) / 15) * 15} min · {label12(s0)}–{label12(e0)}</span>}
           <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
-          <Btn disabled={busy || !doctorId || toMin(end) <= toMin(start)} onClick={async () => {
+          <Btn disabled={busy || !!problem} onClick={async () => {
             setBusy(true); setErr(null);
             try {
               await api.providerBlocks.create({ date, startTime: start, endTime: end, doctorId, branchId: branchId || null, title, notes });
@@ -395,10 +424,23 @@ export function DayBookGrid({ date, bookings, onOpen, onChanged, onNewAt, onChec
           {/* header */}
           <div className="sticky top-0 z-[3] flex border-b border-border bg-ivory">
             <div className="shrink-0 border-r border-border px-3 py-2 text-[11px] font-bold" style={{ width: LEFT_W }}>{book?.branch?.name ?? "All centres"}</div>
-            <div className="relative" style={{ width: cols * COL_W, height: 30 }}>
+            {/* Two-line axis, the way Zenoti heads its book: the hour named in
+                full on top, each quarter marked underneath, so a card that
+                starts at 11:45 can be read off the ruler instead of counted. */}
+            <div className="relative" style={{ width: cols * COL_W, height: 34 }}>
+              {Array.from({ length: Math.ceil((axisEnd - hourFloor(axisStart)) / 60) }, (_, i) => hourFloor(axisStart) + i * 60)
+                .filter((h) => h + 60 > axisStart)
+                .map((h) => (
+                  <div key={h} className="absolute top-0 h-[19px] overflow-hidden border-l border-border"
+                    style={{ left: x(Math.max(h, axisStart)), width: (Math.min(h + 60, axisEnd) - Math.max(h, axisStart)) / COL_MIN * COL_W }}>
+                    <span className="block whitespace-nowrap px-1 pt-1 font-mono text-[10.5px] font-bold text-ink2">{label12(h)}</span>
+                  </div>
+                ))}
               {Array.from({ length: cols }, (_, i) => axisStart + i * COL_MIN).map((m) => (
-                <div key={m} className={`absolute top-0 h-full border-l ${m % 60 === 0 ? "border-border" : "border-border/40"}`} style={{ left: x(m), width: COL_W }}>
-                  {m % 60 === 0 && <span className="absolute left-1 top-1.5 font-mono text-[10px] text-ink3">{label12(m)}</span>}
+                <div key={m} className={`absolute bottom-0 h-[15px] border-l ${m % 60 === 0 ? "border-border" : "border-border/40"}`} style={{ left: x(m), width: COL_W }}>
+                  <span className={`block text-center font-mono text-[9px] leading-[15px] ${m % 60 === 0 ? "text-ink2" : "text-ink3"}`}>
+                    {String(m % 60).padStart(2, "0")}
+                  </span>
                 </div>
               ))}
             </div>

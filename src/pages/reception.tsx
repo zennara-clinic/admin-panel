@@ -723,6 +723,28 @@ function BookingDrawer({ id, onClose, onChanged }: {
 }
 
 /* ================= new booking / walk-in ================= */
+type SlotReason = null | "setup" | "closed" | "over" | "full" | "error";
+
+const WEEKDAY_KEYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"] as const;
+
+/**
+ * A centre's own open/close on a date, or null when it is shut that day.
+ *
+ * This is the centre's advertised window, not the app's guest booking window:
+ * the desk books walk-ins and phone calls across the whole working day, and
+ * clamping reception to what the app offers guests is what made real shift
+ * hours unbookable.
+ */
+function centreHours(b: Branch | undefined, date: string): { open: string; close: string } | null {
+  if (!b || !date) return null;
+  if ((b.closures ?? []).some((c) => date >= c.date && date <= (c.to || c.date))) return null;
+  const day = b.operatingHours?.[WEEKDAY_KEYS[clinicWeekday(date)]];
+  if (!day || day.isOpen === false) return null;
+  const open = day.openTime || day.open;
+  const close = day.closeTime || day.close;
+  return open && close ? { open, close } : null;
+}
+
 export function NewBookingModal({ open, onClose, onBooked, presetUser, preset }: {
   open: boolean; onClose: () => void; onBooked: () => void;
   presetUser?: Pick<User, "_id" | "fullName" | "phone" | "email"> | null;
@@ -797,15 +819,62 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser, preset }:
     setLookup("");
   };
 
+  /**
+   * Free times from Zenoti, and — when there are none — WHY there are none.
+   *
+   * The picker used to swallow the failure and fall back to a bare text box,
+   * so "the centre is shut today", "the day has already finished" and "Zenoti
+   * is unreachable" all looked identical: an empty field with a placeholder.
+   * The desk could not tell a closed clinic from a broken integration.
+   */
   const slots = useApi(async () => {
     const b = branches.find((x) => x.name === location);
-    if (!b || !date) return [] as string[];
-    const res = await api.branches.slots(b._id, date).catch(() => undefined);
-    const raw = (res as { slots?: string[]; availableSlots?: string[] } | undefined);
-    return raw?.slots ?? raw?.availableSlots ?? [];
+    if (!b || !date) return { list: [] as string[], reason: "setup" as SlotReason, message: "" };
+    const hours = centreHours(b, date);
+    if (!hours) return { list: [] as string[], reason: "closed" as SlotReason, message: "" };
+    try {
+      const res = await api.branches.slots(b._id, date);
+      const raw = res as { slots?: string[]; availableSlots?: string[] };
+      const list = raw?.slots ?? raw?.availableSlots ?? [];
+      if (list.length) return { list, reason: null as SlotReason, message: "" };
+      const today = isoDay();
+      const over = date < today || (date === today && clinicHM(new Date()) >= hours.close);
+      return { list, reason: (over ? "over" : "full") as SlotReason, message: "" };
+    } catch (e) {
+      return { list: [] as string[], reason: "error" as SlotReason, message: (e as Error).message };
+    }
   }, [location, date, branches.length]);
 
   const branchDoc = branches.find((x) => x.name === location);
+  const hours = centreHours(branchDoc, date);
+  const slotList = slots.data?.list ?? [];
+  /** Plain English for an empty slot list — the desk can act on each of these. */
+  const slotNote = ((): string => {
+    if (slotList.length || slots.loading) return "";
+    switch (slots.data?.reason) {
+      case "setup": return "Pick a centre and a date first.";
+      case "closed": return `${location || "This centre"} is closed on this date. Choose another day, or type a time to record it anyway.`;
+      case "over": return `The clinic day has finished${hours ? ` — ${location} closes at ${hours.close}` : ""}. Type a time to record an appointment that already happened.`;
+      case "full": return "Every time on this day is taken. Type a time to double-book deliberately.";
+      case "error": return `Zenoti did not answer, so free times could not be checked${slots.data?.message ? ` (${slots.data.message})` : ""}. Type a time to book without the check.`;
+      default: return "";
+    }
+  })();
+  /**
+   * What is wrong with a hand-typed time, if anything. The desk is allowed to
+   * book outside the app's guest window — but not outside the centre's own
+   * opening hours, which is a booking nobody can staff.
+   */
+  const timeProblem = (t: string): string | null => {
+    if (!t) return null;
+    if (!/^\d{1,2}:\d{2}$/.test(t)) return "Use a 24-hour time, like 15:30";
+    const [h, m] = t.split(":").map(Number);
+    if (h > 23 || m > 59) return "That is not a real time";
+    const hhmm = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+    if (!hours) return `${location || "This centre"} is closed on this date`;
+    if (hhmm < hours.open || hhmm >= hours.close) return `${location} is open ${hours.open}–${hours.close} on this day`;
+    return null;
+  };
   const services = refs.data?.services ?? [];
   const doctors = refs.data?.doctors ?? [];
   const eligibleDoctors = doctors.filter((d) => !location || !d.availableCentres?.length || d.availableCentres.includes(location));
@@ -831,6 +900,8 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser, preset }:
     if (!location) return setErr("Pick a centre");
     if (lines.some((l) => !l.serviceId)) return setErr("Pick a service on every line");
     if (lines.some((l) => !l.time)) return setErr("Pick a time on every line");
+    const badTime = lines.map((l) => timeProblem(l.time)).find(Boolean);
+    if (badTime) return setErr(badTime);
     if (!guest && !referral) return setErr("Ask the new guest how they heard about us (referral source)");
 
     setBusy(true);
@@ -967,16 +1038,23 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser, preset }:
                       </div>
                       <div className="flex flex-col gap-1">
                         <label className="text-[11px] font-bold text-ink2">Time {slots.loading && <Spinner className="ml-1 inline h-3 w-3" />}</label>
-                        {(slots.data ?? []).length > 0 ? (
+                        {slotList.length > 0 ? (
                           <select value={l.time} onChange={(e) => setLine(l.key, { time: e.target.value })}
                             className="rounded-lg border border-border bg-ivory px-2.5 py-2 text-[12.5px] outline-none focus:border-gold-dark">
                             <option value="">Slot…</option>
-                            {(slots.data ?? []).map((s) => <option key={s} value={s}>{s}</option>)}
-                            {l.time && !(slots.data ?? []).includes(l.time) && <option value={l.time}>{l.time}</option>}
+                            {slotList.map((s) => <option key={s} value={s}>{s}</option>)}
+                            {l.time && !slotList.includes(l.time) && <option value={l.time}>{l.time} (off the free list)</option>}
                           </select>
                         ) : (
-                          <input value={l.time} onChange={(e) => setLine(l.key, { time: e.target.value })} placeholder="15:30" className="rounded-lg border border-border bg-ivory px-2.5 py-2 text-[12.5px] outline-none focus:border-gold-dark" />
+                          <input value={l.time} onChange={(e) => setLine(l.key, { time: e.target.value })} placeholder="15:30"
+                            aria-invalid={!!timeProblem(l.time)}
+                            className={`rounded-lg border bg-ivory px-2.5 py-2 text-[12.5px] outline-none ${timeProblem(l.time) ? "border-err focus:border-err" : "border-border focus:border-gold-dark"}`} />
                         )}
+                        {timeProblem(l.time)
+                          ? <span className="text-[10.5px] font-semibold text-err">{timeProblem(l.time)}</span>
+                          : slotList.length === 0 && !slots.loading && slotNote
+                            ? <span className="text-[10.5px] leading-snug text-ink3">{slotNote}</span>
+                            : null}
                       </div>
                     </div>
                     <div className="flex flex-wrap items-center justify-between gap-2 text-[11.5px]">
