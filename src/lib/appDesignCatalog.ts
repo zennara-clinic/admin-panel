@@ -332,7 +332,6 @@ export const COPY_GROUPS: CopyGroup[] = [
   ]},
   { title: "Booking", entries: [
     { key: "booking.confirm.cta", label: "confirm \u2014 cta", default: "Confirm booking" },
-    { key: "booking.visitCode.hint", label: "visitCode \u2014 hint", default: "Show this code at reception to check in." },
   ]},
   { title: "Guest prompt", entries: [
     { key: "guest.title", label: "title", default: "Sign In Required" },

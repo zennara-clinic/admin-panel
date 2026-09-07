@@ -159,8 +159,9 @@ function QuickCard({ b, anchor, onClose, onOpen, onChanged, onCheckIn, onCheckOu
           )}
           {act.error && <Note kind="crit" className="my-0">{act.error}</Note>}
           <div className="grid grid-cols-2 gap-2 pt-1">
-            {canManage && (b.status === "Confirmed" || b.status === "No Show") && <Btn onClick={() => { onClose(); onCheckIn(); }}>Check in</Btn>}
-            {canManage && b.status === "In Progress" && <Btn kind="gold" onClick={() => { onClose(); onCheckOut(); }}>Check out</Btn>}
+            {canManage && (b.status === "Confirmed" || b.status === "Rescheduled" || b.status === "No Show") && <Btn onClick={() => { onClose(); onCheckIn(); }}>Check in</Btn>}
+            {canManage && b.status === "Checked In" && <Btn onClick={() => { onClose(); onCheckIn(); }}>Start session</Btn>}
+            {canManage && b.status === "In Progress" && <Btn kind="gold" onClick={() => { onClose(); onCheckOut(); }}>Complete session</Btn>}
             {b.invoiceId
               ? <Btn kind="ghost" onClick={() => { onClose(); onInvoice(); }}>Show invoice</Btn>
               : b.paymentStatus === "paid"

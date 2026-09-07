@@ -5,6 +5,7 @@ import {
   AreaChart, GBars, HBars, ChartCard, SecH, Prog, Modal, Drawer, Menu, In, Sel, Area, Otp,
   exportCsv, StaleBanner, Spinner, Loading, FilterDrawer, FSection, Chips, MultiSelect, DateRange, NumRange, ActiveFilters, ExportModal,
 } from "../ui";
+import { LifecycleActions, LIFECYCLE_TOAST, StatusHistory, useLifecycle } from "../lifecycle";
 import { useStore } from "../store";
 import api from "../lib/api";
 import { DayBookGrid, TodaysSalesModal } from "./daybook";
@@ -12,7 +13,7 @@ import { InvoiceModal, useOpenInvoice, GuestInvoices } from "./billing";
 import { TemplatePicker } from "./templates";
 import { ZenotiMembershipCard, ZenotiPackageCard, appointmentState, fmtZDate, fmtZWhen, membershipActive, money, pkgActive } from "./zenoti";
 import { getSocket, type ChatUpdate, type DeletedEvent, type PresenceEvent, type TypingEvent } from "../lib/socket";
-import { useApi, useDebounced, useMutation, usePoll } from "../lib/useApi";
+import { useApi, useBookingUpdates, useDebounced, useMutation, usePoll } from "../lib/useApi";
 import { useQueryNumber, useQueryPage, useQueryString } from "../lib/useListState";
 import { CLINIC_TZ,
   ageFrom, bookingProvider, bookingServiceName, bookingSlotDate, bookingSlotLabel, bookingSource, fmtAgo, fmtCompactINR,
@@ -317,13 +318,8 @@ function BookingDrawer({ id, onClose, onChanged }: {
   const [resOpen, setResOpen] = useState(false);
   const [resDate, setResDate] = useState(isoDay());
   const [resTime, setResTime] = useState("");
-  const [checkInOpen, setCheckInOpen] = useState(false);
-  const [checkOutOpen, setCheckOutOpen] = useState(false);
-  const [code, setCode] = useState("");
-  const [manualOpen, setManualOpen] = useState<"checkin" | "checkout" | null>(null);
   const [derm, setDerm] = useState<DermChoice>({ mode: "keep", id: "", name: "" });
-  const [revealed, setRevealed] = useState<{ kind: "checkin" | "checkout"; code: string; sentAt?: string | null } | null>(null);
-  useEffect(() => { setDerm({ mode: "keep", id: "", name: "" }); setRevealed(null); setDermOpen(false); }, [id]);
+  useEffect(() => { setDerm({ mode: "keep", id: "", name: "" }); setDermOpen(false); }, [id]);
   const [dermOpen, setDermOpen] = useState(false);
   const [therOpen, setTherOpen] = useState(false);
   // Floor staff at this centre — loaded when the assign modal opens.
@@ -331,8 +327,6 @@ function BookingDrawer({ id, onClose, onChanged }: {
     () => (therOpen ? api.staff.list({ role: "therapist", isActive: "true" }) : Promise.resolve(null)),
     [therOpen],
   );
-  const [manualReason, setManualReason] = useState("");
-  const [sending, setSending] = useState<string | null>(null);
   const [resReason, setResReason] = useState("");
   const [payOpen, setPayOpen] = useState(false);
   const [payMethod, setPayMethod] = useState("Cash");
@@ -343,11 +337,15 @@ function BookingDrawer({ id, onClose, onChanged }: {
 
   const q = useApi(() => (id ? api.bookings.get(id) : Promise.resolve(undefined as unknown as Booking)), [id]);
   const bk = q.data;
+  // What the desk may do to this appointment right now — the server decides,
+  // including whether check-in is inside its time window.
+  const life = useLifecycle(id);
 
   const act = useMutation(async (fn: () => Promise<unknown>, message: string) => {
     await fn();
     toast(message);
     q.reload();
+    void life.reload();
     onChanged();
   });
 
@@ -446,15 +444,7 @@ function BookingDrawer({ id, onClose, onChanged }: {
                   )}>Create in Zenoti now</button>
                 </div>
               )}
-              {(bk.manualCheckIn?.at || bk.manualCheckOut?.at || (bk.visitCodeLog?.length ?? 0) > 0) && (
-                <div className="mt-2 rounded-lg bg-ivory px-2.5 py-2 text-[11.5px] text-ink2">
-                  {bk.manualCheckIn?.at && <div>Checked in <B>without a code</B> by {bk.manualCheckIn.byName ?? "staff"} {fmtAgo(bk.manualCheckIn.at)} — “{bk.manualCheckIn.reason}”</div>}
-                  {bk.manualCheckOut?.at && <div>Checked out <B>without a code</B> by {bk.manualCheckOut.byName ?? "staff"} {fmtAgo(bk.manualCheckOut.at)} — “{bk.manualCheckOut.reason}”</div>}
-                  {(bk.visitCodeLog ?? []).slice(-3).reverse().map((l, i) => (
-                    <div key={i}>{l.kind === "checkin" ? "Check-in" : "Check-out"} code sent by {l.channels.join(" + ") || "—"}{l.failed?.length ? ` (failed: ${l.failed.join(", ")})` : ""} · {l.byName ?? "staff"} · {fmtAgo(l.at)}</div>
-                  ))}
-                </div>
-              )}
+              <StatusHistory log={life.state?.statusLog ?? bk.statusLog} />
               {bk.notes && <Note className="mb-0">{bk.notes}</Note>}
             </Card>
 
@@ -479,51 +469,35 @@ function BookingDrawer({ id, onClose, onChanged }: {
                   "Reschedule declined — original time kept",
                 )}>Decline reschedule</Btn>
               )}
-              {(bk.status === "Confirmed" || bk.status === "No Show") && (
-                <Btn disabled={act.busy} onClick={() => { setCode(""); act.clearError?.(); setCheckInOpen(true); }}>
-                  Check in — enter guest code
-                </Btn>
-              )}
-              {bk.status === "In Progress" && (
-                <Btn kind="gold" disabled={act.busy} onClick={() => { setCode(""); act.clearError?.(); setCheckOutOpen(true); }}>
-                  Check out — enter guest code
-                </Btn>
-              )}
-              {(bk.status === "Confirmed" || bk.status === "No Show" || bk.status === "Rescheduled" || bk.status === "In Progress") && (() => {
-                const kind: "checkin" | "checkout" = bk.status === "In Progress" ? "checkout" : "checkin";
-                const label = kind === "checkin" ? "check-in" : "check-out";
-                const hasEmail = !!bk.email && !/@guest\.zennara\.in$/i.test(bk.email);
-                const sentAt = kind === "checkin" ? bk.checkInCodeSentAt : bk.checkOutCodeSentAt;
-                const send = async (channel: "email" | "whatsapp" | "both") => {
-                  setSending(channel);
-                  try {
-                    const r = await api.bookings.sendVisitCode(bk._id, { kind, channel });
-                    toast(`${kind === "checkin" ? "Check-in" : "Check-out"} code sent by ${r.delivered.join(" and ")}`);
-                    audit("BOOKING_UPDATED", `${bk.fullName} · ${label} code sent by ${r.delivered.join("+")}`, { bookingId: bk._id });
-                    q.reload();
-                  } catch (e) { toast((e as Error).message); } finally { setSending(null); }
-                };
-                return (
-                  <>
-                    <Menu button={<Btn kind="ghost" disabled={!!sending}>{sending ? "Sending…" : `Send ${label} code ▾`}</Btn>}
-                      items={[
-                        { label: hasEmail ? `Email (${bk.email})` : "Email — no address on file", onClick: hasEmail ? () => send("email") : undefined },
-                        { label: `WhatsApp (${bk.mobileNumber})`, onClick: () => send("whatsapp") },
-                        { label: "Both", onClick: () => send("both") },
-                      ]} />
-                    <Btn kind="ghost" disabled={act.busy} onClick={() => { setManualReason(""); act.clearError?.(); setManualOpen(kind); }}>
-                      {kind === "checkin" ? "Check in without code" : "Check out without code"}
-                    </Btn>
-                    {sentAt && <span className="self-center text-[11px] text-ink3">Code last sent {fmtAgo(sentAt)}</span>}
-                  </>
-                );
-              })()}
-              {bk.source !== "zenoti" && (bk.status === "Confirmed" || bk.status === "Awaiting Confirmation" || bk.status === "Rescheduled") && (
-                <Btn kind="ghost" disabled={act.busy} onClick={() => act.mutate(
-                  () => api.bookings.noShow(bk._id).then(() => audit("BOOKING_NO_SHOW", bk.fullName, { bookingId: bk._id })),
-                  "Marked as no-show",
-                )}>Mark no-show</Btn>
-              )}
+              {/*
+                * Attendance, in Zenoti's own steps: check in → start session →
+                * complete, each with an undo. The list of buttons, whether
+                * check-in is inside its window and what each one does in the
+                * CRM all come from the server.
+                */}
+              <LifecycleActions
+                state={life.state}
+                busy={act.busy}
+                canOverride={can("bookings.manage")}
+                extraFor={(action) => (action === "check_in"
+                  ? {
+                      node: <DermPicker booking={bk} value={derm} onChange={setDerm} />,
+                      blocked: dermReady(bk, derm) ? null : "Assign a dermatologist before checking the guest in.",
+                    }
+                  : undefined)}
+                onRun={(action, over) => act.run(
+                  () => api.bookings.lifecycle(bk._id, {
+                    action,
+                    ...over,
+                    ...(action === "check_in" ? dermBody(derm) ?? {} : {}),
+                  }).then(() => audit(
+                    action === "check_in" ? "BOOKING_CHECKED_IN" : action === "complete" ? "BOOKING_CHECKED_OUT" : "BOOKING_UPDATED",
+                    `${bk.fullName} · ${action}${over.reason ? ` — ${over.reason}` : ""}`,
+                    { bookingId: bk._id },
+                  )),
+                  LIFECYCLE_TOAST[action],
+                )}
+              />
               {bk.invoiceId ? (
                 <Btn kind="ghost" disabled={bill.busy} onClick={() => bill.setInvoiceId(String(bk.invoiceId))}>Show invoice</Btn>
               ) : bk.paymentStatus !== "paid" && !["Cancelled", "No Show"].includes(bk.status) && (
@@ -582,53 +556,6 @@ function BookingDrawer({ id, onClose, onChanged }: {
         </div>
       </Modal>
 
-      <Modal open={checkInOpen} onClose={() => setCheckInOpen(false)} title="Check in — enter the guest's code">
-        <Note>Ask the guest for the 6-digit check-in code on their Zennara appointment screen (it's also on their email / WhatsApp).</Note>
-        {bk && <DermPicker booking={bk} value={derm} onChange={setDerm} />}
-        <div className="mt-3"><Otp value={code} onChange={setCode} length={6} /></div>
-        {revealed && <div className="mt-2 text-[12px] text-ink3">Current {revealed.kind === "checkout" ? "check-out" : "check-in"} code: <B>{revealed.code}</B>{revealed.sentAt ? ` · sent ${fmtAgo(revealed.sentAt)}` : " · not sent yet"}</div>}
-        {act.error && <Note kind="crit" className="mt-3">{act.error}</Note>}
-        <div className="mt-4 flex items-center justify-between gap-2">
-          {can("bookings.manage") ? (
-            <button className="text-[11.5px] text-ink3 underline-offset-2 hover:underline" onClick={async () => {
-              if (!bk) return;
-              try { setRevealed(await api.bookings.revealVisitCode(bk._id)); audit("BOOKING_UPDATED", `${bk.fullName} · code revealed`, { bookingId: bk._id }); }
-              catch (e) { toast((e as Error).message); }
-            }}>Guest can't find the code? Reveal it (logged)</button>
-          ) : <span />}
-          <div className="flex gap-2">
-            <Btn kind="ghost" onClick={() => setCheckInOpen(false)}>Back</Btn>
-            <Btn disabled={code.length < 6 || act.busy || !dermReady(bk, derm)} onClick={async () => {
-              if (!bk) return;
-              const ok = await act.run(
-                () => api.bookings.verifyCheckIn(bk._id, code, dermBody(derm))
-                  .then(() => audit("BOOKING_CHECKED_IN", `${bk.fullName}${derm.name ? ` · with ${derm.name}` : ""}`, { bookingId: bk._id })),
-                `${bk.fullName} checked in — check-out code sent to the guest`,
-              );
-              if (ok) { setCheckInOpen(false); setCode(""); setRevealed(null); }
-            }}>Check in</Btn>
-          </div>
-        </div>
-      </Modal>
-
-      <Modal open={checkOutOpen} onClose={() => setCheckOutOpen(false)} title="Check out — enter the guest's code">
-        <Note>Ask the guest for the 6-digit check-out code shown on their appointment screen once the session is done.</Note>
-        <div className="mt-3"><Otp value={code} onChange={setCode} length={6} /></div>
-        {act.error && <Note kind="crit" className="mt-3">{act.error}</Note>}
-        <div className="mt-4 flex justify-end gap-2">
-          <Btn kind="ghost" onClick={() => setCheckOutOpen(false)}>Back</Btn>
-          <Btn kind="gold" disabled={code.length < 6 || act.busy} onClick={async () => {
-            if (!bk) return;
-            const ok = await act.run(
-              () => api.bookings.verifyCheckOut(bk._id, code)
-                .then(() => audit("BOOKING_CHECKED_OUT", bk.fullName, { bookingId: bk._id })),
-              "Session completed — guest checked out",
-            );
-            if (ok) { setCheckOutOpen(false); setCode(""); }
-          }}>Check out</Btn>
-        </div>
-      </Modal>
-
       <Modal open={therOpen} onClose={() => setTherOpen(false)} title="Therapist for this session">
         <Note>The assigned therapist sees this guest under “Assigned to you” on their floor tablet. Any therapist at the centre can still pick the session up if plans change.</Note>
         <Async q={therapists} label="Loading therapists…" rows={3}>
@@ -683,28 +610,6 @@ function BookingDrawer({ id, onClose, onChanged }: {
             const ok = await act.run(() => api.bookings.setDermatologist(bk._id, body).then(() => audit("BOOKING_UPDATED", `${bk.fullName} · dermatologist set`, { bookingId: bk._id })), "Dermatologist updated");
             if (ok) setDermOpen(false);
           }}>Save</Btn>
-        </div>
-      </Modal>
-
-      <Modal open={manualOpen !== null} onClose={() => setManualOpen(null)} title={manualOpen === "checkout" ? "Check out without a code" : "Check in without a code"}>
-        <Note kind="crit">Use this only when the guest cannot receive a code (no app, no email, no WhatsApp). It is recorded against your name on the booking and in the audit log.</Note>
-        {bk && manualOpen === "checkin" && <DermPicker booking={bk} value={derm} onChange={setDerm} />}
-        <div className="mt-3">
-          <Area label="Reason" value={manualReason} onChange={setManualReason} placeholder="e.g. Walk-in guest, no phone with them" rows={2} />
-        </div>
-        {act.error && <Note kind="crit" className="mt-3">{act.error}</Note>}
-        <div className="mt-4 flex justify-end gap-2">
-          <Btn kind="ghost" onClick={() => setManualOpen(null)}>Back</Btn>
-          <Btn kind={manualOpen === "checkout" ? "gold" : "primary"} disabled={manualReason.trim().length < 3 || act.busy || (manualOpen === "checkin" && !dermReady(bk, derm))} onClick={async () => {
-            if (!bk || !manualOpen) return;
-            const isOut = manualOpen === "checkout";
-            const ok = await act.run(
-              () => (isOut ? api.bookings.manualCheckOut(bk._id, manualReason.trim()) : api.bookings.manualCheckIn(bk._id, manualReason.trim(), dermBody(derm)))
-                .then(() => audit(isOut ? "BOOKING_CHECKED_OUT" : "BOOKING_CHECKED_IN", `${bk.fullName} · manual (${manualReason.trim()})`, { bookingId: bk._id })),
-              isOut ? "Session completed — guest checked out (manual)" : `${bk.fullName} checked in (manual)`,
-            );
-            if (ok) setManualOpen(null);
-          }}>{manualOpen === "checkout" ? "Check out" : "Check in"}</Btn>
         </div>
       </Modal>
 
@@ -1346,6 +1251,9 @@ export function Bookings() {
   }, [tab, location, debounced, applied, page, calRange]);
 
   const q = useApi(() => api.bookings.list(query), [JSON.stringify(query)]);
+  // A check-in at the desk, a session started on the floor, or a change that
+  // came back from Zenoti — the list redraws without waiting for a poll.
+  useBookingUpdates(q.reload);
 
   const rows = q.data?.data ?? [];
   const counts = q.data?.statusCounts ?? {};

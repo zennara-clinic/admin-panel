@@ -193,12 +193,15 @@ export function ageFrom(dob: string | Date | undefined | null): number | null {
 
 /* ---------------- booking status ---------------- */
 /** UI keys used by the STATUS tag map in ui.tsx. */
-export type StatusKey = "pending" | "confirmed" | "rescheduled" | "inprogress" | "completed" | "cancelled" | "noshow" | "late";
+export type StatusKey = "pending" | "confirmed" | "rescheduled" | "checkedin" | "inprogress" | "completed" | "cancelled" | "noshow" | "late";
 
 const STATUS_TO_KEY: Record<BookingStatus, StatusKey> = {
   "Awaiting Confirmation": "pending",
   Confirmed: "confirmed",
   Rescheduled: "rescheduled",
+  // Zenoti keeps "checked in" (the guest is here) apart from "in service"
+  // (they're in a room) — the floor needs to see the difference too.
+  "Checked In": "checkedin",
   "In Progress": "inprogress",
   Cancelled: "cancelled",
   "No Show": "noshow",
