@@ -9,6 +9,7 @@ import api from "../lib/api";
 import { openHtmlExport, download } from "../lib/http";
 import { AssignPackageModal, PatientPickerModal } from "./reception";
 import { SignInControls } from "./access";
+import { BulkImport } from "../bulkImport";
 import { useApi, useDebounced } from "../lib/useApi";
 import { useQueryNumber, useQueryPage, useQueryString } from "../lib/useListState";
 import { fmtAgo, fmtCompactINR, fmtDate, fmtINR, fmtWhen, imageUrl, initials, isoDay, nameOf } from "../lib/format";
@@ -51,6 +52,17 @@ export function Services() {
   const [search, setSearch] = useQueryString("q");
   const [type, setType] = useQueryString("type", "");
   const [category, setCategory] = useQueryString("category", "");
+  const [sub, setSub] = useQueryString("sub", "");
+  /**
+   * Two lists, one page. "catalog" is what a customer sees; "master" is
+   * everything the clinic bills for, imported from Zenoti. They are different
+   * jobs — publishing vs maintaining — so they are different tabs rather than
+   * a filter someone has to remember to set.
+   */
+  const [view, setView] = useQueryString("view", "catalog");
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [importOpen, setImportOpen] = useState(false);
+  const [pubBusy, setPubBusy] = useState(false);
   const [grid, setGrid] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [applied, setApplied] = useState<ServiceFilters>(EMPTY_SF);
@@ -84,8 +96,10 @@ export function Services() {
   const list = useMemo(() => {
     const term = debounced.toLowerCase();
     let out = services.filter((s) =>
+      (view === "master" ? true : !!s.inCatalog) &&
       (!type || (s.type || "Unfiled") === type) &&
       (!category || s.category === category) &&
+      (!sub || (s.subCategory || "") === sub) &&
       (!term || s.name.toLowerCase().includes(term) || (s.summary ?? "").toLowerCase().includes(term) || (s.tags ?? []).some((t) => t.toLowerCase().includes(term)) || (s.category ?? "").toLowerCase().includes(term)) &&
       (!applied.status || (applied.status === "active" ? s.isActive : !s.isActive)) &&
       (!applied.popular || !!s.isPopular) &&
@@ -99,7 +113,7 @@ export function Services() {
     };
     if (applied.sort !== "order") out = [...out].sort(sorters[applied.sort] ?? sorters.order);
     return out;
-  }, [services, type, category, debounced, applied]);
+  }, [services, type, category, sub, view, debounced, applied]);
 
   const chips: { key: string; label: string; onRemove: () => void }[] = [];
   const clear = (patch: Partial<ServiceFilters>) => { const next = { ...applied, ...patch }; setApplied(next); setDraft(next); };
@@ -108,6 +122,38 @@ export function Services() {
   if (applied.content) chips.push({ key: "c", label: applied.content === "needs" ? "Needs photo/price" : "Complete", onRemove: () => clear({ content: "" }) });
   if (applied.pricing) chips.push({ key: "p", label: { shown: "Price shown", hidden: "Price on consultation", online: "Paid in app", clinic: "Pay at clinic" }[applied.pricing] ?? applied.pricing, onRemove: () => clear({ pricing: "" }) });
   if (applied.priceMin || applied.priceMax) chips.push({ key: "pr", label: `₹${applied.priceMin || 0}–${applied.priceMax || "∞"}`, onRemove: () => clear({ priceMin: "", priceMax: "" }) });
+
+  const inCatalogCount = services.filter((x) => x.inCatalog).length;
+  const subCategories = useMemo(() => {
+    const set = new Set<string>();
+    services.forEach((x) => {
+      if (view === "catalog" && !x.inCatalog) return;
+      if (type && (x.type || "Unfiled") !== type) return;
+      if (category && x.category !== category) return;
+      if (x.subCategory) set.add(x.subCategory);
+    });
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [services, view, type, category]);
+
+  const togglePick = (id: string) => setPicked((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  /** Publish (or unpublish) the ticked rows. This is a storefront change. */
+  const publish = async (inCatalog: boolean) => {
+    if (!picked.size) return;
+    setPubBusy(true);
+    try {
+      const r = await api.services.setCatalog([...picked], inCatalog);
+      toast((r as { message?: string })?.message || (inCatalog ? "Published" : "Removed from the app"));
+      audit("CATALOGUE_UPDATED", `${inCatalog ? "Published" : "Unpublished"} ${picked.size} service(s)`, {});
+      setPicked(new Set());
+      q.reload();
+    } catch (e) { toast((e as Error).message); }
+    finally { setPubBusy(false); }
+  };
 
   // Manual ordering inside one category — the app lists in this order.
   const canReorder = can("services.manage") && !!category && !debounced && !grid && applied.sort === "order";
@@ -133,6 +179,10 @@ export function Services() {
 
   const open = (s: Consultation) => nav("/service-editor", { state: { id: s._id } });
   const row = (s: Consultation, i: number, withOrder: boolean) => [
+    <span key={`${s._id}sel`} onClick={(e) => e.stopPropagation()}>
+      <input type="checkbox" checked={picked.has(String(s._id))} onChange={() => togglePick(String(s._id))}
+        aria-label={`Select ${s.name}`} className="h-3.5 w-3.5 accent-[var(--color-primary)]" />
+    </span>,
     ...(withOrder ? [
       <span key={`${s._id}o`} className="flex gap-1" onClick={(e) => e.stopPropagation()}>
         <button onClick={() => move(i, -1)} disabled={i === 0} className="rounded border border-border px-1.5 text-[11px] disabled:opacity-30">↑</button>
@@ -143,8 +193,11 @@ export function Services() {
       {s.image ? <img src={s.image} alt="" className="h-9 w-12 shrink-0 rounded-md object-cover" /> : <span className="h-9 w-12 shrink-0 rounded-md bg-gradient-to-br from-sage to-cream" />}
       <span>
         <B>{s.name}</B>
-        {needsContent(s) && <span className="ml-1.5 rounded-full bg-warn-bg px-1.5 py-0.5 text-[9px] font-bold text-warn">needs {!s.image?.trim() ? "photo" : "price"}</span>}
-        <span className="block text-[11px] text-ink3 line-clamp-1">{s.summary}</span>
+        {s.inCatalog && needsContent(s) && <span className="ml-1.5 rounded-full bg-warn-bg px-1.5 py-0.5 text-[9px] font-bold text-warn">needs {!s.image?.trim() ? "photo" : "price"}</span>}
+        <span className="block text-[11px] text-ink3 line-clamp-1">
+          {s.summary}
+          {s.subCategory ? <span className="text-ink3"> · {s.subCategory}</span> : ""}
+        </span>
       </span>
     </span>,
     <span key={`${s._id}p`}>{s.showPriceInApp ? <B>{fmtINR(s.price)}</B> : <span className="text-ink3">On consultation <span className="text-[10.5px]">({fmtINR(s.price)})</span></span>}<span className="block text-[10.5px] text-ink3">{s.chargeOnlineBooking === false ? "pay at clinic" : "paid in app"}</span></span>,
@@ -154,12 +207,14 @@ export function Services() {
       {(s.media?.length ?? 0) > 0 && <Tag kind="info">{s.media!.length} media</Tag>}
       {(s.faqs?.length ?? 0) > 0 && <Tag kind="mute">{s.faqs!.length} FAQ</Tag>}
     </span>,
-    s.isActive ? <Tag key={`${s._id}s`} kind="ok">Live in app</Tag> : <Tag key={`${s._id}s`} kind="mute">Hidden</Tag>,
+    s.inCatalog
+      ? <Tag key={`${s._id}s`} kind="ok">In the app</Tag>
+      : <Tag key={`${s._id}s`} kind="mute">Master only</Tag>,
   ];
 
   return (
     <Page title="Services"
-      sub={`${typeRows.length} types · ${allCategories.length} categories · ${services.length} services — exactly what the app sells`}
+      sub={`${inCatalogCount} in the app catalogue · ${services.length} in the service master — the master is everything the clinic bills for, the catalogue is what a customer can buy`}
       actions={<>
         <div className="flex overflow-hidden rounded-(--radius-btn) border border-border">
           <button onClick={() => setGrid(false)} className={`px-3 py-2 text-[12.5px] font-bold ${!grid ? "bg-primary text-white" : "bg-surface text-ink2"}`}>☰ List</button>
@@ -170,9 +225,24 @@ export function Services() {
         <Btn kind="ghost" disabled={!list.length} onClick={() => exportCsv("zennara-services",
           ["Name", "Type", "Category", "Price", "Price shown", "Paid in app", "Popular", "Active", "Rating", "Reviews"],
           list.map((s) => [s.name, s.type ?? "", s.category, s.price, s.showPriceInApp ? "yes" : "no", s.chargeOnlineBooking === false ? "no" : "yes", s.isPopular ? "yes" : "no", s.isActive ? "yes" : "no", s.rating ?? "", s.reviews ?? 0]))}>Export CSV</Btn>
+        {can("services.manage") && (
+          <Menu align="right" button={<Btn kind="ghost">Import / Export ▾</Btn>} items={[
+            { label: "Import services…", onClick: () => setImportOpen(true) },
+            { label: "Export all services (Zenoti format)", onClick: () => download(api.bulk.downloadUrl("services", "export"), "zennara-services.csv").catch((e) => toast((e as Error).message)) },
+            { label: "Download blank template", onClick: () => download(api.bulk.downloadUrl("services", "template"), "zennara-services-template.csv").catch((e) => toast((e as Error).message)) },
+          ]} />
+        )}
         <Menu button={<Btn kind="ghost">Price list ▾</Btn>} items={[{ label: "Open printable price list", onClick: () => { openHtmlExport("/bulk/price-list", { format: "html", branchId: branchId || undefined }, "Zennara price list").catch((e) => toast((e as Error).message)); } }, { label: "Download CSV", onClick: () => { download(`/bulk/price-list?format=csv${branchId ? `&branchId=${branchId}` : ""}`, "zennara-price-list.csv").catch((e) => toast((e as Error).message)); } }]} />
         {can("services.manage") && <Btn onClick={() => nav("/service-editor", { state: { blank: true, type: type || undefined, category: category || undefined } })}>+ New service</Btn>}
       </>}>
+      <BulkImport
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        entity="services"
+        title="Import services"
+        onDone={() => { q.reload(); cats.reload(); }}
+        formatHint="Zenoti's own service-master export imports as-is — ServiceCode, ServiceName, Category, Sub Category, BusinessUnitName, ServiceType, ServiceLength. Its title rows are skipped automatically. Imported services are master data; publish the ones a customer should see."
+      />
       <Hint id="services-live">Pick a type or category on the left; everything on the right is exactly what the app shows. Click a service to edit its photo, gallery, price, copy, pre/post care and FAQs.</Hint>
       <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
 
@@ -202,10 +272,38 @@ export function Services() {
 
         {/* ---- results ---- */}
         <div className="min-w-0">
+          {/* Catalogue vs master — the two jobs this page does. */}
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <div className="flex overflow-hidden rounded-(--radius-btn) border border-border">
+              <button onClick={() => { setView("catalog"); setPicked(new Set()); }}
+                className={`px-3.5 py-2 text-[12.5px] font-bold ${view === "catalog" ? "bg-primary text-white" : "bg-surface text-ink2"}`}>
+                In the app ({inCatalogCount})
+              </button>
+              <button onClick={() => { setView("master"); setPicked(new Set()); }}
+                className={`px-3.5 py-2 text-[12.5px] font-bold ${view === "master" ? "bg-primary text-white" : "bg-surface text-ink2"}`}>
+                All services ({services.length})
+              </button>
+            </div>
+            {subCategories.length > 0 && (
+              <Menu button={<Btn kind={sub ? "gold" : "ghost"}>{sub || "Any sub-category"} ▾</Btn>}
+                items={[{ label: "Any sub-category", onClick: () => setSub("") },
+                  ...subCategories.map((c) => ({ label: c, onClick: () => setSub(c) }))]} />
+            )}
+          </div>
+
+          {picked.size > 0 && can("services.manage") && (
+            <div className="mb-3 flex flex-wrap items-center gap-2 rounded-(--radius-card) border border-gold-dark bg-cream px-3.5 py-2.5 text-[12.5px]">
+              <B>{picked.size} selected</B>
+              <Btn kind="gold" disabled={pubBusy} onClick={() => publish(true)}>Add to app catalogue</Btn>
+              <Btn kind="ghost" disabled={pubBusy} onClick={() => publish(false)}>Remove from app</Btn>
+              <button className="ml-auto text-[11.5px] font-bold text-ink3" onClick={() => setPicked(new Set())}>Clear</button>
+            </div>
+          )}
+
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search services, categories, tags…"
               className="w-full max-w-[380px] rounded-(--radius-btn) border border-border bg-surface px-3.5 py-2 text-[13px] outline-none focus:border-gold-dark" />
-            <span className="text-[12px] text-ink3">{list.length} of {services.length}{category ? ` in ${category}` : type ? ` in ${type}` : ""}</span>
+            <span className="text-[12px] text-ink3">{list.length} of {view === "master" ? services.length : inCatalogCount}{category ? ` in ${category}` : type ? ` in ${type}` : ""}</span>
             {incomplete > 0 && !applied.content && (
               <button onClick={() => clear({ content: "needs" })} className="ml-auto rounded-full bg-warn-bg px-2.5 py-1 text-[11px] font-bold text-warn">{incomplete} need a photo or price →</button>
             )}
@@ -250,7 +348,7 @@ export function Services() {
                 <div key={title} className="mb-5">
                   {!category && <div className="mb-2 flex items-baseline gap-2"><span className="text-[13px] font-extrabold">{title}</span><span className="text-[11.5px] text-ink3">{items.length}</span></div>}
                   <DataTable
-                    cols={[...(canReorder ? ["Order"] : []), "Service", "Price", "Rating", "Content", "Status"]}
+                    cols={["", ...(canReorder ? ["Order"] : []), "Service", "Price", "Rating", "Content", "Status"]}
                     onRow={(i) => open(items[i])}
                     rows={items.map((s, i) => row(s, i, canReorder))} />
                 </div>

@@ -429,6 +429,21 @@ export type Consultation = {
   type?: string | null;
   /** Level 2 — the treatment category. */
   category: string;
+  /** Level 3 of Zenoti's own taxonomy, from its service-master export. */
+  subCategory?: string | null;
+  businessUnit?: string | null;
+  serviceType?: string | null;
+  /**
+   * Published to the app. The master list is everything the clinic bills for;
+   * only what is in the catalogue reaches a customer's phone.
+   */
+  inCatalog?: boolean;
+  catalogAddedAt?: string | null;
+  catalogAddedBy?: string | null;
+  /** Superseded by a later import; kept so historical bookings still resolve. */
+  isArchived?: boolean;
+  archivedAt?: string | null;
+  archivedReason?: string | null;
   summary: string;
   about: string;
   key_benefits?: string[];
@@ -861,11 +876,20 @@ export type BulkPreviewRow = {
   errors: string[];
 };
 
+/** What a file does to the category / sub-category lists, before it is committed. */
+export type BulkTaxonomyLevel = {
+  new: { value: string; rows: number }[];
+  existing: number;
+  /** Spelling variants of a category we already hold — "Medical Treatment(s)". */
+  nearDuplicates: { value: string; rows: number; existing: string }[];
+};
+
 export type BulkPreview = {
   total: number;
   creates: number;
   updates: number;
   errors: number;
+  taxonomy?: { categories: BulkTaxonomyLevel; subCategories: BulkTaxonomyLevel | null } | null;
   rows: BulkPreviewRow[];
 };
 

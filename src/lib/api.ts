@@ -225,6 +225,9 @@ export const services = {
   search: (query: string, limit = 20) =>
     request<Consultation[]>(`/consultations/search/${encodeURIComponent(query)}`, { query: { limit } }),
   stats: () => request<Record<string, unknown>>("/consultations/stats/overview"),
+  /** Publish services to the app catalogue, or take them back off. */
+  setCatalog: (ids: Id[], inCatalog: boolean) =>
+    requestRaw<{ count: number }>("/consultations/catalog", { method: "PATCH", body: { ids, inCatalog } }),
   create: (body: Partial<Consultation>) => request<Consultation>("/consultations", { method: "POST", body }),
   update: (id: Id, body: Partial<Consultation>) =>
     request<Consultation>(`/consultations/${id}`, { method: "PUT", body }),
