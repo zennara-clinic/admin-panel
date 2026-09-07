@@ -137,6 +137,18 @@ export function Services() {
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [services, view, type, category]);
 
+  /*
+   * The taxonomy cascades. A sub-category left over from a different category
+   * filters the list down to nothing and looks like a bug, so it is cleared
+   * whenever the level above it changes — and also when the narrowed list no
+   * longer contains it (switching between the catalogue and the master).
+   */
+  useEffect(() => { setSub(""); }, [type, category]);
+  useEffect(() => {
+    if (sub && subCategories.length && !subCategories.includes(sub)) setSub("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subCategories, sub]);
+
   const togglePick = (id: string) => setPicked((prev) => {
     const next = new Set(prev);
     if (next.has(id)) next.delete(id); else next.add(id);
