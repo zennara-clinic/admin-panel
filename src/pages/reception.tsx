@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Page, Btn, Tag, STATUS, Stats, Card, DataTable, B, Tabs, Note, Hint, Async, Empty,
-  AreaChart, GBars, HBars, ChartCard, SecH, Prog, Modal, Drawer, Menu, In, Sel, Area, Otp,
+  AreaChart, GBars, HBars, ChartCard, SecH, Prog, Modal, Drawer, Menu, In, Sel, Area, Otp, CalendarSkeleton,
   exportCsv, StaleBanner, Spinner, Loading, FilterDrawer, FSection, Chips, MultiSelect, DateRange, NumRange, ActiveFilters, ExportModal,
 } from "../ui";
 import { LifecycleActions, LIFECYCLE_TOAST, StatusHistory, useLifecycle } from "../lifecycle";
@@ -1062,6 +1062,13 @@ export function Today() {
   const [q, setQ] = useState("");
   const [provF, setProvF] = useState("All dermatologists");
   const [stF, setStF] = useState("All statuses");
+  // The rest of the floor's questions: who is running it, where it came from,
+  // what is still owed, and which room — each one a filter the desk asked for.
+  const [therF, setTherF] = useState("All therapists");
+  const [srcF, setSrcF] = useState("All sources");
+  const [payF, setPayF] = useState("Any payment");
+  const [roomF, setRoomF] = useState("All rooms");
+  const [sortF, setSortF] = useState("Time");
   const [kind, setKind] = useQueryString("kind", "");
 
   // Follow the clinic calendar across midnight unless staff deliberately
@@ -1091,10 +1098,42 @@ export function Today() {
     return [...new Set([...fromDoctors, ...fromBookings])];
   }, [doctorsQ.data, rows]);
 
-  const list = rows.filter((b) =>
-    (!q || b.fullName.toLowerCase().includes(q.toLowerCase()) || bookingServiceName(b, "").toLowerCase().includes(q.toLowerCase())) &&
-    (provF === "All dermatologists" || bookingProvider(b) === provF) &&
-    (stF === "All statuses" || statusKey(b) === stF.toLowerCase().replace(/[\s-]/g, "")));
+  const therapists = useMemo(
+    () => [...new Set(rows.map((b) => b.assignedTherapistName || b.therapistName).filter(Boolean) as string[])].sort(),
+    [rows],
+  );
+  const roomsToday = useMemo(() => [...new Set(rows.map((b) => b.room).filter(Boolean) as string[])].sort(), [rows]);
+
+  const list = useMemo(() => {
+    const out = rows.filter((b) =>
+      (!q || b.fullName.toLowerCase().includes(q.toLowerCase()) || bookingServiceName(b, "").toLowerCase().includes(q.toLowerCase())) &&
+      (provF === "All dermatologists" || bookingProvider(b) === provF) &&
+      (stF === "All statuses" || statusKey(b) === stF.toLowerCase().replace(/[\s-]/g, "")) &&
+      (therF === "All therapists" || (b.assignedTherapistName || b.therapistName) === therF) &&
+      (srcF === "All sources" || (srcF === "Clinic (Zenoti)" ? b.source === "zenoti" : srcF === "App" ? b.source === "app" : b.source === "reception")) &&
+      (roomF === "All rooms" || b.room === roomF) &&
+      // "Owes" is the desk's collection list for the day.
+      (payF === "Any payment" || (payF === "Owes money" ? b.paymentStatus !== "paid" && (b.amount ?? 0) > 0 : b.paymentStatus === "paid")));
+
+    const byTime = (b: Booking) => bookingSlotDate(b)?.getTime() ?? 0;
+    if (sortF === "Amount") return [...out].sort((a, b) => (b.amount ?? 0) - (a.amount ?? 0));
+    if (sortF === "Guest name") return [...out].sort((a, b) => a.fullName.localeCompare(b.fullName));
+    if (sortF === "Status") return [...out].sort((a, b) => statusKey(a).localeCompare(statusKey(b)));
+    return [...out].sort((a, b) => byTime(a) - byTime(b));
+  }, [rows, q, provF, stF, therF, srcF, roomF, payF, sortF]);
+
+  const todayFilters: [string, string, (v: string) => void, string[]][] = [
+    ["prov", provF, setProvF, ["All dermatologists", ...providers]],
+    ["st", stF, setStF, ["All statuses", "Pending", "Confirmed", "Checked in", "In progress", "Late", "Completed", "Cancelled", "No show"]],
+    ...(therapists.length ? [["ther", therF, setTherF, ["All therapists", ...therapists]] as [string, string, (v: string) => void, string[]]] : []),
+    ["src", srcF, setSrcF, ["All sources", "App", "Reception", "Clinic (Zenoti)"]],
+    ["pay", payF, setPayF, ["Any payment", "Owes money", "Paid"]],
+    ...(roomsToday.length ? [["room", roomF, setRoomF, ["All rooms", ...roomsToday]] as [string, string, (v: string) => void, string[]]] : []),
+    ["sort", sortF, setSortF, ["Time", "Amount", "Guest name", "Status"]],
+  ];
+  const todayFiltersOn = provF !== "All dermatologists" || stF !== "All statuses" || therF !== "All therapists"
+    || srcF !== "All sources" || payF !== "Any payment" || roomF !== "All rooms" || sortF !== "Time";
+  const resetToday = () => { setProvF("All dermatologists"); setStF("All statuses"); setTherF("All therapists"); setSrcF("All sources"); setPayF("Any payment"); setRoomF("All rooms"); setSortF("Time"); };
 
   const count = (k: string) => rows.filter((b) => statusKey(b) === k).length;
 
@@ -1150,13 +1189,15 @@ export function Today() {
             <div className={`mt-4 flex flex-wrap items-center justify-between gap-3 ${view === "list" ? "print-only-list" : ""}`}>
               <SecH t="Appointments" em={`· ${list.length} on ${fmtDate(day)}`} />
               <div className="flex flex-wrap items-center gap-2">
-                <Menu button={<Btn kind="ghost" className="!py-1.5 !text-[12px]">{provF} ▾</Btn>}
-                  items={["All dermatologists", ...providers].map((p) => ({ label: p, onClick: () => setProvF(p) }))} />
-                <Menu button={<Btn kind="ghost" className="!py-1.5 !text-[12px]">{stF} ▾</Btn>}
-                  items={["All statuses", "Pending", "Confirmed", "In progress", "Late", "Completed", "Cancelled", "No show"]
-                    .map((p) => ({ label: p, onClick: () => setStF(p) }))} />
+                {todayFilters.map(([key, value, setter, options]) => (
+                  <Menu key={key} button={<Btn kind="ghost" className="!py-1.5 !text-[12px]">{key === "sort" ? `Sort: ${value}` : value} ▾</Btn>}
+                    items={options.map((p) => ({ label: p, onClick: () => setter(p) }))} />
+                ))}
                 <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by name or service…"
                   className="w-56 rounded-lg border border-border bg-surface px-3 py-1.5 text-[12.5px] outline-none focus:border-gold-dark" />
+                {(todayFiltersOn || q) && (
+                  <button onClick={() => { resetToday(); setQ(""); }} className="text-[12px] font-semibold text-ink3 underline-offset-2 hover:underline">Clear</button>
+                )}
               </div>
             </div>
             {(kind
@@ -1214,14 +1255,14 @@ type BookingFilters = {
   kind: string; startDate: string; endDate: string; createdFrom: string; createdTo: string;
   specialistId: string[]; therapistId: string[]; location: string[]; source: string[]; paymentStatus: string[]; paymentMethod: string[];
   category: string[]; type: string[]; consultationId: string[]; memberType: string; packageIncluded: string; hasRating: string;
-  amountMin: string; amountMax: string; sortBy: string; sortOrder: string;
+  amountMin: string; amountMax: string; dueOnly: string; sortBy: string; sortOrder: string;
 };
 const EMPTY_BF: BookingFilters = {
   kind: "", startDate: "", endDate: "", createdFrom: "", createdTo: "", specialistId: [], therapistId: [], location: [], source: [],
   paymentStatus: [], paymentMethod: [], category: [], type: [], consultationId: [], memberType: "", packageIncluded: "", hasRating: "",
-  amountMin: "", amountMax: "", sortBy: "date", sortOrder: "desc",
+  amountMin: "", amountMax: "", dueOnly: "", sortBy: "date", sortOrder: "desc",
 };
-const BOOKING_SORTS: [string, string][] = [["date", "Appointment date"], ["createdAt", "Booked on"], ["amount", "Amount"], ["name", "Guest name"], ["status", "Status"], ["checkIn", "Check-in time"]];
+const BOOKING_SORTS: [string, string][] = [["date", "Appointment date"], ["createdAt", "Booked on"], ["amount", "Amount"], ["due", "Amount due"], ["name", "Guest name"], ["status", "Status"], ["checkIn", "Check-in time"]];
 const BOOKING_EXPORT_COLS = ["Reference", "Guest", "Patient ID", "Phone", "Email", "Membership", "Service", "Category", "Kind", "Centre", "Date", "Time", "Status", "Dermatologist", "Therapist", "Room",
   "Source", "Package", "Amount", "Payment Status", "Payment Method", "Paid At", "Checked In", "Checked Out", "Session Minutes", "Rating", "Cancellation Reason", "Booked On", "Notes"];
 
@@ -1311,6 +1352,7 @@ export function Bookings() {
   useBookingUpdates(q.reload);
 
   const rows = q.data?.data ?? [];
+  const dueTotals = q.data?.totals;
   const counts = q.data?.statusCounts ?? {};
   const total = q.data?.total ?? rows.length;
   const totalAll = Object.values(counts).reduce((a, b) => a + b, 0);
@@ -1337,6 +1379,7 @@ export function Bookings() {
   if (applied.packageIncluded) chips.push({ key: "pkg", label: applied.packageIncluded === "true" ? "Package sessions" : "Not from a package", onRemove: () => clear({ packageIncluded: "" }) });
   if (applied.hasRating) chips.push({ key: "rate", label: "Rated", onRemove: () => clear({ hasRating: "" }) });
   if (applied.amountMin || applied.amountMax) chips.push({ key: "amt", label: `₹${applied.amountMin || "0"}–${applied.amountMax || "∞"}`, onRemove: () => clear({ amountMin: "", amountMax: "" }) });
+  if (applied.dueOnly === "true") chips.push({ key: "due", label: "Payment outstanding", onRemove: () => clear({ dueOnly: "" }) });
 
   const kindLabel = applied.kind === "consultation" ? "Dermatologist consultations" : applied.kind === "treatment" ? "Treatments" : "All services";
   const sortLabel = BOOKING_SORTS.find(([v]) => v === applied.sortBy)?.[1] ?? "Appointment date";
@@ -1401,6 +1444,17 @@ export function Bookings() {
               className={`rounded-[calc(var(--radius-btn)-2px)] px-3 py-1.5 text-[12px] font-semibold ${applied.kind === v ? "bg-primary text-white" : "text-ink2 hover:bg-ivory"}`}>{l}</button>
           ))}
         </div>
+        {/*
+          * "Who owes us money." Resolved against the invoice, not the booking's
+          * paymentStatus — that field goes stale once a bill is raised, and
+          * filtering on it alone would put already-paid guests on the chase list.
+          */}
+        <button
+          onClick={() => clear({ dueOnly: applied.dueOnly === "true" ? "" : "true", sortBy: applied.dueOnly === "true" ? "date" : "due", sortOrder: "desc" })}
+          className={`rounded-(--radius-btn) border px-3 py-1.5 text-[12px] font-semibold ${applied.dueOnly === "true" ? "border-err bg-err-bg text-err" : "border-border bg-surface text-ink2 hover:bg-ivory"}`}>
+          Payment due
+          {dueTotals ? <span className="ml-1.5 tabular-nums">{fmtINR(dueTotals.due)}</span> : null}
+        </button>
         <div className="ml-auto flex items-center gap-1.5">
           <div className="flex rounded-(--radius-btn) border border-border bg-surface p-0.5">
             {([["list", "List"], ["week", "Week"], ["month", "Month"]] as [string, string][]).map(([v, l]) => (
@@ -1420,6 +1474,9 @@ export function Bookings() {
       <Tabs active={tab} onChange={setTab} items={TABS.map((t) => [t.label, countFor(t.status)])} />
       <ActiveFilters items={chips} onClear={() => clear({ ...EMPTY_BF, kind: applied.kind, sortBy: applied.sortBy, sortOrder: applied.sortOrder })} />
       <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
+      {q.loading && q.data !== undefined && (
+        <div className="mb-2 flex items-center gap-2 text-[12px] text-ink3"><Spinner /> Updating…</div>
+      )}
 
       <Async q={q} label="Loading bookings…" rows={8}>
         {() => view === "list" ? (rows.length === 0 ? (
@@ -1428,7 +1485,9 @@ export function Bookings() {
             action={<Btn onClick={() => setNewOpen(true)}>+ New booking</Btn>} />
         ) : (
           <DataTable
-            cols={["Reference", "Guest", "Service", "Kind", "Dermatologist", "Centre", "When", "Payment", "Status", "Source"]}
+            cols={applied.dueOnly === "true"
+              ? ["Reference", "Guest", "Service", "Kind", "Dermatologist", "Centre", "When", "Owes", "Status", "Source"]
+              : ["Reference", "Guest", "Service", "Kind", "Dermatologist", "Centre", "When", "Payment", "Status", "Source"]}
             onRow={(i) => setSel(rows[i]._id)}
             rows={rows.map((b) => [
               <span key={b._id} className="font-mono text-[11px] text-ink3">{b.referenceNumber ?? "—"}</span>,
@@ -1438,7 +1497,9 @@ export function Bookings() {
               b.specialistName || b.therapistName ? bookingProvider(b) : <span key={`${b._id}d`} className="text-err">Not assigned</span>,
               b.preferredLocation,
               bookingSlotLabel(b),
-              b.paymentStatus === "paid" ? <Tag kind="ok">Paid</Tag> : <Tag kind="warn">{fmtINR(b.amount)}</Tag>,
+              applied.dueOnly === "true"
+                ? <span key={`${b._id}p`} className="tabular-nums font-bold text-err">{fmtINR(b.amountDue ?? b.amount)}</span>
+                : b.paymentStatus === "paid" ? <Tag kind="ok">Paid</Tag> : <Tag kind="warn">{fmtINR(b.amount)}</Tag>,
               <span key={`${b._id}s`}>
                 {STATUS[statusKey(b)]}
                 {b.source === "zenoti" && <div className="mt-0.5 text-[10.5px] text-ink3">Zenoti: {zenotiDiaryLabel(b.zenotiSource)}</div>}
@@ -1448,6 +1509,7 @@ export function Bookings() {
             ])}
           />
         )) : view === "week" ? (
+          q.loading ? <CalendarSkeleton cells={7} minHeight={320} /> : (
           <div className="grid grid-cols-7 gap-1.5">
             {Array.from({ length: 7 }, (_, i) => addDays(startOfWeek(anchor), i)).map((d) => {
               const k = isoOf(d); const list = byDay.get(k) ?? [];
@@ -1463,6 +1525,7 @@ export function Bookings() {
               );
             })}
           </div>
+          )
         ) : (
           (() => {
             const first = dayKeyDate(clinicMonthStart(isoOf(anchor)));
@@ -1473,6 +1536,7 @@ export function Bookings() {
                 <div className="grid grid-cols-7 gap-1 px-0.5 text-[10.5px] font-bold uppercase tracking-wider text-ink3">
                   {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => <div key={d} className="px-1 py-1">{d}</div>)}
                 </div>
+                {q.loading ? <CalendarSkeleton cells={42} minHeight={96} /> : (
                 <div className="grid grid-cols-7 gap-1">
                   {cells.map((d) => {
                     const k = isoOf(d); const list = byDay.get(k) ?? []; const inMonth = d.getUTCMonth() === anchor.getUTCMonth();
@@ -1496,6 +1560,7 @@ export function Bookings() {
                     );
                   })}
                 </div>
+                )}
               </div>
             );
           })()
@@ -1552,6 +1617,13 @@ export function Bookings() {
         </FSection>
         <FSection title="Sort">
           <Chips options={BOOKING_SORTS} value={draft.sortBy} onChange={(v) => set("sortBy", (v as string) || "date")} />
+        </FSection>
+        <FSection title="Money" hint="Outstanding is read from the guest's invoice, not the booking's payment flag — a billed visit stays 'pending' on the booking for ever.">
+          <Chips
+            options={[["", "Any"], ["true", "Still owes money"]] as [string, string][]}
+            value={draft.dueOnly}
+            onChange={(v) => set("dueOnly", (v as string) || "")}
+          />
           <div className="mt-2"><Chips options={[["desc", "Latest first"], ["asc", "Earliest first"]]} value={draft.sortOrder} onChange={(v) => set("sortOrder", (v as string) || "desc")} /></div>
         </FSection>
       </FilterDrawer>

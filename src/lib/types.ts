@@ -336,6 +336,12 @@ export type Booking = {
   isPackageIncluded?: boolean;
   /** Every desk decision that moved this appointment, oldest first. */
   statusLog?: StatusLogEntry[];
+  /**
+   * What this visit still owes, resolved against its invoice rather than the
+   * booking's own paymentStatus (which goes stale the moment a bill is raised).
+   * Only present when the list was asked for outstanding bookings.
+   */
+  amountDue?: number;
   referenceNumber?: string;
   userId: Id | User;
   consultationId?: Id | Consultation | null;

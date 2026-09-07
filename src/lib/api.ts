@@ -177,7 +177,12 @@ export const bookings = {
    */
   list: (q?: Query) =>
     requestRaw<Booking[]>("/bookings/admin/all", { query: q }) as Promise<
-      Envelope<Booking[]> & { total?: number; statusCounts?: Record<string, number> }
+      Envelope<Booking[]> & {
+        total?: number;
+        statusCounts?: Record<string, number>;
+        /** Sent only when `dueOnly` was asked for: the money behind this filter. */
+        totals?: { dueCount: number; due: number };
+      }
     >,
   get: (id: Id) => request<Booking>(`/bookings/admin/${id}`),
   /** Re-read this booking's appointment from Zenoti now (read-only towards Zenoti). */

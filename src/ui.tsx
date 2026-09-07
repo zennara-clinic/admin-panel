@@ -63,6 +63,38 @@ export function Async<T>({ q, children, label, rows, empty }: {
   return <>{children(q.data)}</>;
 }
 
+/**
+ * Skeleton cards for a calendar grid while its range is being fetched.
+ *
+ * `Async` only shows a loader on the FIRST load, so paging from one week or
+ * month to the next left the previous range's cards on screen with nothing to
+ * say the view was busy — the grid looked wrong rather than loading. These
+ * stand in for the day cells until the new range arrives.
+ */
+export function CalendarSkeleton({ cells, minHeight = 96, columns = 7 }: {
+  cells: number;
+  minHeight?: number;
+  columns?: number;
+}) {
+  return (
+    <div className={`grid gap-1.5 ${columns === 7 ? "grid-cols-7" : ""}`} aria-busy="true" aria-label="Loading appointments">
+      {Array.from({ length: cells }, (_, i) => (
+        <div key={i} className="rounded-lg border border-border bg-surface p-1.5" style={{ minHeight }}>
+          <div className="mb-1.5 flex items-baseline justify-between px-0.5">
+            <span className="h-2.5 w-8 animate-pulse rounded bg-dis-bg" />
+            <span className="h-3 w-4 animate-pulse rounded bg-dis-bg" />
+          </div>
+          <div className="grid gap-1">
+            {Array.from({ length: 1 + (i % 3) }, (_, j) => (
+              <div key={j} className="h-6 animate-pulse rounded bg-ivory" style={{ animationDelay: `${(i * 40 + j * 90) % 600}ms` }} />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** Non-blocking banner for a failed refresh when stale data is still on screen. */
 export function StaleBanner({ error, onRetry }: { error: string | null; onRetry: () => void }) {
   if (!error) return null;
