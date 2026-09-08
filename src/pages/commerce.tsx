@@ -1,8 +1,7 @@
+import { Check, List, Star } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
-import {
-  Page, Btn, Tag, Stats, Card, DataTable, B, Tabs, Note, Hint, In, Sel, Toggle, Area, Switch, SecH, Modal, Drawer, Menu, DeleteModal, Async, Empty, Loading, StaleBanner, exportCsv, UploadField, MultiSelect,
-} from "../ui";
+import { Area, Async, B, Btn, Card, DataTable, DeleteModal, Drawer, Empty, Hint, In, Loading, Menu, MenuButton, Modal, MultiSelect, Note, Page, SecH, Sel, StaleBanner, Stats, Switch, Tabs, Tag, Toggle, UploadField, exportCsv } from "../ui";
 import { useStore } from "../store";
 import api from "../lib/api";
 import { useApi, useDebounced } from "../lib/useApi";
@@ -98,7 +97,7 @@ export function Products() {
     <Page title="Products" sub={`${rows.length} in the catalogue · ${list.length} shown`}
       actions={<>
         <div className="flex overflow-hidden rounded-(--radius-btn) border border-border">
-          <button onClick={() => setGrid(false)} className={`px-3 py-2 text-[12.5px] font-bold ${!grid ? "bg-primary text-white" : "bg-surface text-ink2"}`}>☰ List</button>
+          <button onClick={() => setGrid(false)} className={`px-3 py-2 text-[12.5px] font-bold ${!grid ? "bg-primary text-white" : "bg-surface text-ink2"}`}><span className="inline-flex items-center gap-1.5"><List size={13} /> List</span></button>
           <button onClick={() => setGrid(true)} className={`px-3 py-2 text-[12.5px] font-bold ${grid ? "bg-primary text-white" : "bg-surface text-ink2"}`}>▦ Grid</button>
         </div>
         {can("products.manage") && <Btn kind="ghost" onClick={() => setImportOpen(true)}>Import template</Btn>}
@@ -128,7 +127,7 @@ export function Products() {
           className="w-64 rounded-(--radius-btn) border border-border bg-surface px-3.5 py-2 text-[13px] outline-none focus:border-gold-dark" />
         <button onClick={() => setLowOnly(!lowOnly)}
           className={`rounded-(--radius-btn) px-3.5 py-2 text-[12.5px] font-bold ${lowOnly ? "bg-warn-bg text-warn" : "border border-border bg-surface text-ink2"}`}>
-          Low stock (under 10) {lowOnly ? "✓" : ""}
+          Low stock (under 10) {lowOnly && <Check size={13} className="inline" />}
         </button>
       </div>
 
@@ -187,7 +186,7 @@ export function Products() {
                   : ["Product", "Code", "Category", "Type", "Price", "MRP", "GST", "Centres", "In app"]}
                 onRow={(i) => setSel(list[i])}
                 rows={list.map((p) => scope === "app" ? [
-                  <span key={p._id}><B>{p.name}{p.isPopular ? " ★" : ""}</B>{p.packName || p.packSize ? <span className="ml-1 text-[10.5px] text-ink3">{[p.packSize, p.packName].filter(Boolean).join(" ")}</span> : null}{!p.image ? <span className="ml-1 text-[10px] text-warn">no photo</span> : null}</span>,
+                  <span key={p._id}><B>{p.name}{p.isPopular ? <Star size={11} className="ml-1 inline fill-current text-gold-dark" /> : null}</B>{p.packName || p.packSize ? <span className="ml-1 text-[10.5px] text-ink3">{[p.packSize, p.packName].filter(Boolean).join(" ")}</span> : null}{!p.image ? <span className="ml-1 text-[10px] text-warn">no photo</span> : null}</span>,
                   <span key={`${p._id}c`} className="font-mono text-[11px]">{p.code ?? p.sku ?? "—"}</span>,
                   <span key={`${p._id}cat`} className="text-[11.5px]">{p.productCategory ?? "—"}{p.productSubCategory ? <div className="text-[10.5px] text-ink3">{p.productSubCategory}</div> : null}</span>,
                   <span key={`${p._id}h`} className="font-mono text-[11px]">{p.hsn ?? "—"}</span>,
@@ -201,7 +200,7 @@ export function Products() {
                   `${p.gstPercentage ?? 0}%`,
                   <span key={`${p._id}st`} className="text-[11px]">{p.templateStatus ? <Tag kind={/confirmed/i.test(p.templateStatus) ? "ok" : /estimat/i.test(p.templateStatus) ? "warn" : "err"}>{p.templateStatus}</Tag> : <span className="text-ink3">—</span>}</span>,
                 ] : [
-                  <span key={p._id}><B>{p.name}{p.isPopular ? " ★" : ""}</B>{p.packSize ? <span className="ml-1 text-[10.5px] text-ink3">{p.packSize}</span> : null}</span>,
+                  <span key={p._id}><B>{p.name}{p.isPopular ? <Star size={11} className="ml-1 inline fill-current text-gold-dark" /> : null}</B>{p.packSize ? <span className="ml-1 text-[10.5px] text-ink3">{p.packSize}</span> : null}</span>,
                   <span key={`${p._id}c`} className="font-mono text-[11px]">{p.code ?? p.sku ?? "—"}</span>,
                   <span key={`${p._id}cat`} className="text-[11.5px]">{p.productCategory ?? "—"}{p.productSubCategory ? <div className="text-[10.5px] text-ink3">{p.productSubCategory}</div> : null}</span>,
                   <span key={`${p._id}t`} className="text-[11.5px]">{p.isRetail === false ? "Consumable" : "Retail"}{p.isRx ? <Tag kind="warn">Rx</Tag> : null}</span>,
@@ -766,13 +765,13 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search order no., guest name or phone…"
           className="w-72 rounded-(--radius-btn) border border-border bg-surface px-3.5 py-2 text-[13px] outline-none focus:border-gold-dark" />
-        <Menu button={<Btn kind="ghost">{SOURCE_LABEL[srcFilter] ?? SOURCE_LABEL.app} ▾</Btn>}
+        <Menu button={<MenuButton kind="ghost">{SOURCE_LABEL[srcFilter] ?? SOURCE_LABEL.app}</MenuButton>}
           items={[
             { label: `App orders${s?.appOrders !== undefined ? ` (${s.appOrders})` : ""}`, onClick: () => setSrcFilter("app") },
             { label: `Clinic counter${s?.clinicOrders !== undefined ? ` (${s.clinicOrders})` : ""}`, onClick: () => setSrcFilter("zenoti") },
             { label: "Both", onClick: () => setSrcFilter("") },
           ]} />
-        <Menu button={<Btn kind="ghost">{payFilter || "Any payment"} ▾</Btn>}
+        <Menu button={<MenuButton kind="ghost">{payFilter || "Any payment"}</MenuButton>}
           items={[{ label: "Any payment", onClick: () => setPayFilter("") },
             ...["Pending", "Paid", "Failed", "Refunded"].map((p) => ({ label: p, onClick: () => setPayFilter(p) }))]} />
       </div>

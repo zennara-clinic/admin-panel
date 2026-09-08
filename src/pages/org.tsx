@@ -1,10 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import {
-  Page, Btn, Tag, Stats, Card, DataTable, B, Note, Hint, In, Sel, Menu, Modal, SecH, Tabs,
-  AreaChart, HBars, GBars, ChartCard, Stars, Drawer, Area, Switch, DeleteModal,
-  Async, Empty, StaleBanner, exportCsv, DateRange,
-} from "../ui";
+import { Area, AreaChart, Async, B, Btn, Card, ChartCard, DataTable, DateRange, DeleteModal, Drawer, Empty, GBars, HBars, Hint, In, Menu, MenuButton, Modal, Note, Page, RatingValue, SecH, Sel, StaleBanner, Stars, Stats, Switch, Tabs, Tag, exportCsv } from "../ui";
 import { useStore, ROLE_LABEL } from "../store";
 import api from "../lib/api";
 import { useApi, useDebounced } from "../lib/useApi";
@@ -501,7 +497,7 @@ export function Reviews() {
   return (
     <Page title="Reviews" sub="Guest reviews from the app — moderate what shows publicly"
       actions={<>
-        <Menu button={<Btn kind="ghost">{pending ? "Awaiting approval" : "All reviews"} ▾</Btn>}
+        <Menu button={<MenuButton kind="ghost">{pending ? "Awaiting approval" : "All reviews"}</MenuButton>}
           items={[
             { label: "All reviews", onClick: () => setPending(false) },
             { label: "Awaiting approval", onClick: () => setPending(true) },
@@ -519,8 +515,8 @@ export function Reviews() {
       <Stats items={[
         { k: "Reviews", v: rows.length },
         { k: "Average rating", v: avg ? avg.toFixed(1) : "—", hot: avg >= 4.5 },
-        { k: "5★", v: rows.filter((r) => r.rating === 5).length, tone: "up" },
-        { k: "≤2★", v: lowScores.length, tone: lowScores.length ? "dn" : undefined },
+        { k: "5 star", v: rows.filter((r) => r.rating === 5).length, tone: "up" },
+        { k: "2 star or less", v: lowScores.length, tone: lowScores.length ? "dn" : undefined },
         { k: "Awaiting approval", v: rows.filter((r) => !r.isApproved).length },
       ]} />
 
@@ -661,7 +657,7 @@ export function Analytics() {
   return (
     <Page title="Analytics" sub={`${branchName} · ${label}`}
       actions={<>
-        <Menu button={<Btn kind="ghost">{custom ? "Custom" : range} ▾</Btn>}
+        <Menu button={<MenuButton kind="ghost">{custom ? "Custom" : range}</MenuButton>}
           items={[...Object.keys(ANALYTICS_RANGES).map((r) => ({ label: r, onClick: () => { setCustom(null); setRange(r); } })), { label: "Custom…", onClick: () => setCustom({ startDate: window.startDate ?? isoDay().slice(0, 4) + "-01-01", endDate: window.endDate }) }]} />
         {custom && (
           <div className="flex items-center gap-1.5">
@@ -670,7 +666,7 @@ export function Analytics() {
             <input type="date" value={custom.endDate} min={custom.startDate} onChange={(e) => setCustom({ ...custom, endDate: e.target.value })} className="rounded-lg border border-border bg-ivory px-2 py-1.5 text-[12px]" />
           </div>
         )}
-        <Menu button={<Btn kind="ghost">{branchName} ▾</Btn>}
+        <Menu button={<MenuButton kind="ghost">{branchName}</MenuButton>}
           items={[{ label: "All centres", onClick: () => setBranchId("") }, ...branches.map((b) => ({ label: b.name, onClick: () => setBranchId(b._id) }))]} />
         <Btn kind="ghost" disabled={!q.data} onClick={() => {
           if (!q.data) return;
@@ -821,7 +817,7 @@ export function Analytics() {
                     { k: "Top earner", v: d.dermatologists[0]?.revenue ? d.dermatologists[0].name.split(" ")[0] : "—", d: d.dermatologists[0] ? fmtCompactINR(d.dermatologists[0].revenue) : "" },
                     { k: "Busiest", v: [...d.dermatologists].sort((x, y) => y.bookings - x.bookings)[0]?.name.split(" ")[0] ?? "—", d: `${[...d.dermatologists].sort((x, y) => y.bookings - x.bookings)[0]?.bookings ?? 0} bookings` },
                     { k: "Best completion", v: `${Math.max(0, ...d.dermatologists.filter((x) => x.bookings >= 3).map((x) => x.completionRate))}%`, d: "min 3 bookings" },
-                    { k: "Avg rating", v: (() => { const r = d.dermatologists.filter((x) => x.avgRating); return r.length ? `★ ${(r.reduce((n, x) => n + (x.avgRating ?? 0), 0) / r.length).toFixed(1)}` : "—"; })(), d: "across rated visits" },
+                    { k: "Avg rating", v: (() => { const r = d.dermatologists.filter((x) => x.avgRating); return r.length ? <RatingValue value={Number((r.reduce((n, x) => n + (x.avgRating ?? 0), 0) / r.length).toFixed(1))} /> : "—"; })(), d: "across rated visits" },
                   ]} />
                   <div className="grid gap-3 xl:grid-cols-2">
                     <ChartCard title="Revenue by dermatologist" sub={label}>
@@ -836,7 +832,7 @@ export function Analytics() {
                       rows={d.dermatologists.map((x, i) => [
                         <span key={x.doctorId} className="flex items-center gap-2"><span className={`grid h-6 w-6 place-items-center rounded-full text-[10px] font-bold ${i === 0 && x.revenue > 0 ? "bg-gold text-primary" : "bg-sage text-ink2"}`}>{i + 1}</span><B>{x.name}</B>{!x.onboarded && <Tag kind="info">Zenoti</Tag>}</span>,
                         <Tag key={`${x.doctorId}l`} kind={!x.onboarded ? "info" : x.level === "Senior Dermatologist" ? "gold" : "mute"}>{x.level}</Tag>,
-                        x.bookings, x.consultations, x.treatments, `${x.completed} (${x.completionRate}%)`, x.noShow, x.patients, x.avgRating ? `★ ${x.avgRating}` : "—", <B key={`${x.doctorId}r`}>{fmtINR(x.revenue)}</B>, fmtINR(x.bookings ? Math.round(x.revenue / x.bookings) : 0),
+                        x.bookings, x.consultations, x.treatments, `${x.completed} (${x.completionRate}%)`, x.noShow, x.patients, x.avgRating ? <RatingValue value={x.avgRating} /> : "—", <B key={`${x.doctorId}r`}>{fmtINR(x.revenue)}</B>, fmtINR(x.bookings ? Math.round(x.revenue / x.bookings) : 0),
                       ])} />
                   </div>
                 </>
@@ -1535,16 +1531,16 @@ export function AuditLog() {
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by email, action or record id…"
             className="w-64 rounded-(--radius-btn) border border-border bg-surface px-3.5 py-2 text-[13px] outline-none focus:border-gold-dark" />
-          <Menu button={<Btn kind="ghost">{action || "All actions"} ▾</Btn>}
+          <Menu button={<MenuButton kind="ghost">{action || "All actions"}</MenuButton>}
             items={[{ label: "All actions", onClick: () => setAction("") },
               ...(f?.actions ?? []).map((a) => ({ label: a, onClick: () => setAction(a) }))]} />
-          <Menu button={<Btn kind="ghost">{resource || "All resources"} ▾</Btn>}
+          <Menu button={<MenuButton kind="ghost">{resource || "All resources"}</MenuButton>}
             items={[{ label: "All resources", onClick: () => setResource("") },
               ...(f?.resources ?? []).map((r) => ({ label: r, onClick: () => setResource(r) }))]} />
-          <Menu button={<Btn kind="ghost">{who || "Everyone"} ▾</Btn>}
+          <Menu button={<MenuButton kind="ghost">{who || "Everyone"}</MenuButton>}
             items={[{ label: "Everyone", onClick: () => setWho("") },
               ...(f?.admins ?? []).map((a) => ({ label: a, onClick: () => setWho(a) }))]} />
-          <Menu button={<Btn kind="ghost">{status || "Any outcome"} ▾</Btn>}
+          <Menu button={<MenuButton kind="ghost">{status || "Any outcome"}</MenuButton>}
             items={[{ label: "Any outcome", onClick: () => setStatus("") },
               { label: "SUCCESS", onClick: () => setStatus("SUCCESS") },
               { label: "FAILED", onClick: () => setStatus("FAILED") },

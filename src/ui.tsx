@@ -1,7 +1,7 @@
-import { createContext, useContext, useEffect, useId, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useId, useRef, useState , type ComponentProps } from "react";
 import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
-import { Check, ChevronDown, Loader2, RefreshCw, Search, X } from "lucide-react";
+import { Check, ChevronDown, Loader2, RefreshCw, Search, Star, X } from "lucide-react";
 import { addClinicDays, clinicMonthEnd, clinicMonthStart, isoDay } from "./lib/format";
 
 /* ---------- async states ---------- */
@@ -817,9 +817,46 @@ export function ChartCard({ title, sub, hero, heroTone, children }: {
 
 export function Stars({ n }: { n: number }) {
   return (
-    <span className="tracking-wider text-gold-dark">
-      {"★".repeat(n)}<span className="text-border">{"★".repeat(5 - n)}</span>
+    <span className="inline-flex items-center gap-0.5 text-gold-dark" aria-label={`${n} out of 5`}>
+      {[1, 2, 3, 4, 5].map((i) => (
+        <Star key={i} size={12} strokeWidth={2}
+          className={i <= n ? "fill-current" : "text-border"} />
+      ))}
     </span>
+  );
+}
+
+/**
+ * A rating shown inline as "4.6", with one filled star as the unit marker.
+ * Use this instead of writing a ★ into a string — the glyph renders at a
+ * different weight on every platform and screen readers announce it as
+ * "black star".
+ */
+export function RatingValue({ value, className = "" }: { value?: number | null; className?: string }) {
+  if (value === null || value === undefined) return <span className={className}>—</span>;
+  return (
+    <span className={`inline-flex items-center gap-1 ${className}`} aria-label={`Rated ${value}`}>
+      <Star size={12} strokeWidth={2} className="fill-current text-gold-dark" />
+      {typeof value === "number" ? value.toFixed(1) : value}
+    </span>
+  );
+}
+
+/**
+ * The trigger for a <Menu>. Owns the disclosure chevron so no call site has to
+ * write a "▾" — twenty of them did, and the glyph sat at a different baseline
+ * in every browser.
+ */
+export function MenuButton({ children, kind = "ghost", className }: {
+  children: ReactNode; kind?: ComponentProps<typeof Btn>["kind"]; className?: string;
+}) {
+  return (
+    <Btn kind={kind} className={className}>
+      <span className="inline-flex items-center gap-1">
+        {children}
+        <ChevronDown size={13} className="opacity-70" />
+      </span>
+    </Btn>
   );
 }
 

@@ -1,3 +1,4 @@
+import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Btn, Tag, Modal, Note, In, Sel, Area, B, Page, DataTable, Async, Tabs, Switch, Empty, SecH } from "../ui";
 import { useStore } from "../store";
@@ -144,7 +145,7 @@ function PlanEditor({ open, plan, onClose, onSaved }: { open: boolean; plan: Mem
               <div key={`${c.serviceId}-${i}`} className="mt-1.5 flex items-center gap-2 rounded-lg bg-ivory px-2.5 py-1.5 text-[12.5px]">
                 <span className="flex-1"><B>{c.serviceName || c.serviceId}</B></span>
                 <input type="number" min={1} value={c.qty} onChange={(e) => set("credits")((f.credits ?? []).map((x, j) => (j === i ? { ...x, qty: Math.max(1, Number(e.target.value) || 1) } : x)))} className="w-16 rounded-md border border-border bg-surface px-1.5 py-1 text-right text-[12px]" />
-                <button className="text-ink3 hover:text-err" onClick={() => set("credits")((f.credits ?? []).filter((_, j) => j !== i))}>✕</button>
+                <button className="text-ink3 hover:text-err" onClick={() => set("credits")((f.credits ?? []).filter((_, j) => j !== i))}><X size={13} /></button>
               </div>
             ))}
           </div>

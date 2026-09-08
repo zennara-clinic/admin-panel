@@ -1,3 +1,4 @@
+import { X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Btn, Tag, Modal, Note, In, Sel, Area, B, Page, DataTable, Async, Tabs, Empty, SecH, exportCsv, HBars, Card } from "../ui";
 import { useStore } from "../store";
@@ -337,7 +338,7 @@ function NewTransferModal({ open, onClose, onDone }: { open: boolean; onClose: (
             <div key={p.row._id} className="flex items-center gap-2 rounded-lg bg-ivory px-3 py-1.5 text-[12.5px]">
               <span className="min-w-0 flex-1 truncate"><B>{p.row.name}</B> <span className="text-ink3">{p.row.onHand} on hand · {fmtINR(p.row.avg.unit)}/unit</span></span>
               <input type="number" min={1} max={p.row.onHand} value={p.qty} onChange={(e) => setPicked(picked.map((x, j) => (j === i ? { ...x, qty: Math.max(1, Math.min(p.row.onHand, Number(e.target.value) || 1)) } : x)))} className="w-20 rounded-md border border-border bg-surface px-2 py-1 text-right text-[12px]" />
-              <button className="text-ink3 hover:text-err" onClick={() => setPicked(picked.filter((_, j) => j !== i))}>✕</button>
+              <button className="text-ink3 hover:text-err" onClick={() => setPicked(picked.filter((_, j) => j !== i))}><X size={13} /></button>
             </div>
           ))}
           <div className="text-right text-[12px]">Value <B>{fmtINR(total)}</B></div>

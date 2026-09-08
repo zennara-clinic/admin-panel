@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { IndianRupee, Package, RotateCw, Star, StickyNote, UserCheck, X, type LucideIcon } from "lucide-react";
 import { LifecycleActions, LIFECYCLE_TOAST, useLifecycle } from "../lifecycle";
 import { Btn, Tag, Modal, Note, In, Sel, Area, B, SecH, DataTable, Async } from "../ui";
 import { useStore } from "../store";
@@ -75,17 +76,27 @@ function layout(rows: Booking[]): { placed: Placed[]; lanes: number } {
   return { placed: items, lanes: Math.max(1, laneEnds.length) };
 }
 
+/** Card badges. Real icons, never emoji — those render differently on every
+ *  machine and carry no accessible name. */
 function CardIcons({ b }: { b: Booking }) {
-  const icons: { t: string; title: string }[] = [];
-  if (b.checkInTime) icons.push({ t: "🛏", title: `Checked in ${fmtAgo(b.checkInTime)}` });
-  if (b.paymentStatus === "paid" || b.zenotiInvoiceId) icons.push({ t: "₹", title: b.paymentStatus === "paid" ? `Paid ${fmtINR(b.amount)}` : "Invoice open" });
-  if (b.notes || b.adminNotes) icons.push({ t: "📋", title: "Has a note" });
-  if (b.isPackageIncluded) icons.push({ t: "📦", title: "Package session" });
-  if (b.rescheduledAt || b.status === "Rescheduled") icons.push({ t: "↻", title: "Rescheduled" });
+  const icons: { Icon: LucideIcon; title: string }[] = [];
+  if (b.checkInTime) icons.push({ Icon: UserCheck, title: `Checked in ${fmtAgo(b.checkInTime)}` });
+  if (b.paymentStatus === "paid" || b.zenotiInvoiceId) icons.push({ Icon: IndianRupee, title: b.paymentStatus === "paid" ? `Paid ${fmtINR(b.amount)}` : "Invoice open" });
+  if (b.notes || b.adminNotes) icons.push({ Icon: StickyNote, title: "Has a note" });
+  if (b.isPackageIncluded) icons.push({ Icon: Package, title: "Package session" });
+  if (b.rescheduledAt || b.status === "Rescheduled") icons.push({ Icon: RotateCw, title: "Rescheduled" });
   const u = b.userId && typeof b.userId === "object" ? (b.userId as { memberType?: string }) : null;
-  if (u?.memberType === "Zen Member") icons.push({ t: "★", title: "Zen member" });
+  if (u?.memberType === "Zen Member") icons.push({ Icon: Star, title: "Zen member" });
   if (!icons.length) return null;
-  return <span className="ml-1 inline-flex gap-0.5 text-[9px] opacity-80">{icons.map((i, k) => <span key={k} title={i.title}>{i.t}</span>)}</span>;
+  return (
+    <span className="ml-1 inline-flex items-center gap-0.5 opacity-80">
+      {icons.map(({ Icon, title }, k) => (
+        <Icon key={k} size={11} strokeWidth={2.2} aria-label={title}>
+          <title>{title}</title>
+        </Icon>
+      ))}
+    </span>
+  );
 }
 
 function tooltipText(b: Booking) {
@@ -558,7 +569,7 @@ export function DayBookGrid({ date, bookings, onOpen, onChanged, onNewAt, onChec
                       onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); if (bl.source === "panel" && can("bookings.manage")) setMenu({ x: e.clientX, y: e.clientY, doctorId: p.row?.doctorId, doctorName: p.name, time: bl.startTime }); }}>
                       <span className="truncate">{bl.title}{bl.notes ? ` · ${bl.notes}` : ""}</span>
                       {bl.source === "panel" && can("bookings.manage") && (
-                        <button className="ml-auto pl-2 text-[10px] opacity-70 hover:opacity-100" title="Release this block" onClick={async (e) => { e.stopPropagation(); try { await api.providerBlocks.remove(bl._id); toast("Block released"); shifts.reload(); } catch (err) { toast((err as Error).message); } }}>✕</button>
+                        <button className="ml-auto pl-2 text-[10px] opacity-70 hover:opacity-100" title="Release this block" onClick={async (e) => { e.stopPropagation(); try { await api.providerBlocks.remove(bl._id); toast("Block released"); shifts.reload(); } catch (err) { toast((err as Error).message); } }}><X size={11} /></button>
                       )}
                     </div>
                   ))}

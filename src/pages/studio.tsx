@@ -1263,7 +1263,7 @@ export function AppControl() {
                     <Btn kind="ghost" className="!px-2 !py-1 !text-[11px]" onClick={() => { setFontScale(1); setDirty(true); }}>1×</Btn>
                   </div>
                   <div className="mt-4 rounded-xl border border-border bg-ivory p-4">
-                    <div style={{ fontSize: previewFont(22), fontWeight: 800, color: P.textPrimary }}>Good morning, Sana 👋</div>
+                    <div style={{ fontSize: previewFont(22), fontWeight: 800, color: P.textPrimary }}>Good morning, Sana</div>
                     <div style={{ fontSize: previewFont(17), fontWeight: 700, color: P.textPrimary, marginTop: 8 }}>Popular treatments</div>
                     <div style={{ fontSize: previewFont(13), color: P.textSecondary, marginTop: 4 }}>Body copy — descriptions and supporting text scale together, so nothing falls out of step.</div>
                     <div style={{ fontSize: previewFont(11), color: P.textSecondary, marginTop: 4, opacity: 0.7 }}>Captions and metadata</div>
@@ -1341,7 +1341,7 @@ export function AppControl() {
               <Card className="overflow-hidden">
                 <div className="border-b border-border bg-ivory px-3 py-2 font-mono text-[9.5px] font-bold uppercase tracking-[0.12em] text-ink3">Live preview</div>
                 <div style={{ background: P.background }} className="p-3">
-                  <div style={{ color: P.textPrimary, fontSize: previewFont(17), fontWeight: 800 }}>{copyVal("home.greeting.morning", "Good morning")}, Sana 👋</div>
+                  <div style={{ color: P.textPrimary, fontSize: previewFont(17), fontWeight: 800 }}>{copyVal("home.greeting.morning", "Good morning")}, Sana</div>
                   <div style={{ color: P.textSecondary, fontSize: previewFont(11.5), marginTop: 2 }}>{copyVal("brand.tagline.1", "Skin.")} {copyVal("brand.tagline.2", "Aesthetics.")} {copyVal("brand.tagline.3", "Wellness.")}</div>
                   <div style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 14, padding: 12, marginTop: 12 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

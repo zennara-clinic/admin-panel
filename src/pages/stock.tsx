@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import {
-  Page, Btn, Tag, Card, DataTable, B, Tabs, Note, Hint, In, Sel, Area, SecH, Stats, Stars,
-  Drawer, Modal, DeleteModal, Async, Empty, StaleBanner, exportCsv, Menu,
-} from "../ui";
+import { Area, Async, B, Btn, Card, DataTable, DeleteModal, Drawer, Empty, Hint, In, Menu, MenuButton, Modal, Note, Page, SecH, Sel, StaleBanner, Stars, Stats, Tabs, Tag, exportCsv } from "../ui";
 import { useStore } from "../store";
 import api from "../lib/api";
 import { useApi, useDebounced } from "../lib/useApi";
@@ -166,9 +163,9 @@ export function Inventory() {
   return (
     <Page title="Inventory" sub={`Live stock, batches and expiry at ${branches.find((b) => b._id === centre)?.name ?? "every centre"}`}
       actions={<>
-        <Menu button={<Btn kind="ghost">{branches.find((b) => b._id === centre)?.name ?? "All centres"} ▾</Btn>}
+        <Menu button={<MenuButton kind="ghost">{branches.find((b) => b._id === centre)?.name ?? "All centres"}</MenuButton>}
           items={[{ label: "All centres", onClick: () => setCentre("") }, ...branches.map((b) => ({ label: b.name, onClick: () => setCentre(b._id) }))]} />
-        <Menu button={<Btn kind="ghost">{category} ▾</Btn>}
+        <Menu button={<MenuButton kind="ghost">{category}</MenuButton>}
           items={["All", "Retail products", "Consumables"].map((c) => ({ label: c, onClick: () => setCategory(c) }))} />
         <Btn kind="ghost" disabled={!list.length} onClick={() => exportCsv("zennara-inventory",
           ["Item", "Code", "Category", "Formulation", "Brand", "Batch", "Expiry", "On hand", "Re-order", "Target", "Buying", "Selling", "Vendor"],
@@ -475,7 +472,7 @@ export function Vendors() {
   return (
     <Page title="Vendors" sub={`${rows.length} supplier${rows.length === 1 ? "" : "s"} · ratings and procurement contacts`}
       actions={<>
-        <Menu button={<Btn kind="ghost">{status} ▾</Btn>}
+        <Menu button={<MenuButton kind="ghost">{status}</MenuButton>}
           items={["All", "Active", "Inactive"].map((x) => ({ label: x, onClick: () => setStatus(x) }))} />
         <Btn kind="ghost" disabled={!rows.length} onClick={() => exportCsv("zennara-vendors",
           ["Vendor", "Contact", "Email", "Phone", "GSTIN", "PAN", "City", "Rating", "Products", "Status"],

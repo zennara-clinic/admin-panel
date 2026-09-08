@@ -1,9 +1,7 @@
+import { Check, ChevronDown, ChevronRight, List, Star } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import {
-  Page, Btn, Tag, Card, DataTable, B, Tabs, Note, Hint, In, Sel, Area, Toggle, Switch, Stats,
-  SecH, Modal, Drawer, DeleteModal, Async, Empty, Loading, StaleBanner, exportCsv, UploadField, Menu, FilterDrawer, FSection, Chips, MultiSelect, NumRange, ActiveFilters, ChartCard, GBars, HBars, AreaChart,
-} from "../ui";
+import { ActiveFilters, Area, AreaChart, Async, B, Btn, Card, ChartCard, Chips, DataTable, DeleteModal, Drawer, Empty, FSection, FilterDrawer, GBars, HBars, Hint, In, Loading, Menu, MenuButton, Modal, MultiSelect, Note, NumRange, Page, RatingValue, SecH, Sel, StaleBanner, Stats, Switch, Tabs, Tag, Toggle, UploadField, exportCsv } from "../ui";
 import { useStore } from "../store";
 import api from "../lib/api";
 import { openHtmlExport, download } from "../lib/http";
@@ -215,9 +213,9 @@ export function Services() {
       </span>
     </span>,
     <span key={`${s._id}p`}>{s.showPriceInApp ? <B>{fmtINR(s.price)}</B> : <span className="text-ink3">On consultation <span className="text-[10.5px]">({fmtINR(s.price)})</span></span>}<span className="block text-[10.5px] text-ink3">{s.chargeOnlineBooking === false ? "pay at clinic" : "paid in app"}</span></span>,
-    s.rating ? <span key={`${s._id}r`}>★ {s.rating.toFixed(1)} <span className="text-[10.5px] text-ink3">({s.reviews ?? 0})</span></span> : <span key={`${s._id}r`} className="text-ink3">—</span>,
+    s.rating ? <span key={`${s._id}r`}><RatingValue value={s.rating} /> <span className="text-[10.5px] text-ink3">({s.reviews ?? 0})</span></span> : <span key={`${s._id}r`} className="text-ink3">—</span>,
     <span key={`${s._id}f`} className="flex flex-wrap gap-1">
-      {s.isPopular && <Tag kind="gold">★ popular</Tag>}
+      {s.isPopular && <Tag kind="gold"><Star size={11} className="fill-current" /> popular</Tag>}
       {(s.media?.length ?? 0) > 0 && <Tag kind="info">{s.media!.length} media</Tag>}
       {(s.faqs?.length ?? 0) > 0 && <Tag kind="mute">{s.faqs!.length} FAQ</Tag>}
     </span>,
@@ -231,22 +229,22 @@ export function Services() {
       sub={`${inCatalogCount} in the app catalogue · ${services.length} in the service master — the master is everything the clinic bills for, the catalogue is what a customer can buy`}
       actions={<>
         <div className="flex overflow-hidden rounded-(--radius-btn) border border-border">
-          <button onClick={() => setGrid(false)} className={`px-3 py-2 text-[12.5px] font-bold ${!grid ? "bg-primary text-white" : "bg-surface text-ink2"}`}>☰ List</button>
+          <button onClick={() => setGrid(false)} className={`px-3 py-2 text-[12.5px] font-bold ${!grid ? "bg-primary text-white" : "bg-surface text-ink2"}`}><span className="inline-flex items-center gap-1.5"><List size={13} /> List</span></button>
           <button onClick={() => setGrid(true)} className={`px-3 py-2 text-[12.5px] font-bold ${grid ? "bg-primary text-white" : "bg-surface text-ink2"}`}>▦ Grid</button>
         </div>
-        <Menu align="right" button={<Btn kind="ghost">Sort ▾</Btn>} items={[["order", "App order"], ["name", "Name"], ["priceAsc", "Price ↑"], ["priceDesc", "Price ↓"], ["rating", "Rating"], ["newest", "Newest"]].map(([v, l]) => ({ label: `${l}${applied.sort === v ? " ✓" : ""}`, onClick: () => clear({ sort: v }) }))} />
+        <Menu align="right" button={<MenuButton kind="ghost">Sort</MenuButton>} items={[["order", "App order"], ["name", "Name"], ["priceAsc", "Price ↑"], ["priceDesc", "Price ↓"], ["rating", "Rating"], ["newest", "Newest"]].map(([v, l]) => ({ label: <span className="inline-flex items-center gap-1.5">{l}{applied.sort === v && <Check size={13} />}</span>, onClick: () => clear({ sort: v }) }))} />
         <Btn kind={chips.length ? "gold" : "ghost"} onClick={() => { setDraft(applied); setDrawer(true); }}>Filters{chips.length ? ` (${chips.length})` : ""}</Btn>
         <Btn kind="ghost" disabled={!list.length} onClick={() => exportCsv("zennara-services",
           ["Name", "Type", "Category", "Price", "Price shown", "Paid in app", "Popular", "Active", "Rating", "Reviews"],
           list.map((s) => [s.name, s.type ?? "", s.category, s.price, s.showPriceInApp ? "yes" : "no", s.chargeOnlineBooking === false ? "no" : "yes", s.isPopular ? "yes" : "no", s.isActive ? "yes" : "no", s.rating ?? "", s.reviews ?? 0]))}>Export CSV</Btn>
         {can("services.manage") && (
-          <Menu align="right" button={<Btn kind="ghost">Import / Export ▾</Btn>} items={[
+          <Menu align="right" button={<MenuButton kind="ghost">Import / Export</MenuButton>} items={[
             { label: "Import services…", onClick: () => setImportOpen(true) },
             { label: "Export all services (Zenoti format)", onClick: () => download(api.bulk.downloadUrl("services", "export"), "zennara-services.csv").catch((e) => toast((e as Error).message)) },
             { label: "Download blank template", onClick: () => download(api.bulk.downloadUrl("services", "template"), "zennara-services-template.csv").catch((e) => toast((e as Error).message)) },
           ]} />
         )}
-        <Menu button={<Btn kind="ghost">Price list ▾</Btn>} items={[{ label: "Open printable price list", onClick: () => { openHtmlExport("/bulk/price-list", { format: "html", branchId: branchId || undefined }, "Zennara price list").catch((e) => toast((e as Error).message)); } }, { label: "Download CSV", onClick: () => { download(`/bulk/price-list?format=csv${branchId ? `&branchId=${branchId}` : ""}`, "zennara-price-list.csv").catch((e) => toast((e as Error).message)); } }]} />
+        <Menu button={<MenuButton kind="ghost">Price list</MenuButton>} items={[{ label: "Open printable price list", onClick: () => { openHtmlExport("/bulk/price-list", { format: "html", branchId: branchId || undefined }, "Zennara price list").catch((e) => toast((e as Error).message)); } }, { label: "Download CSV", onClick: () => { download(`/bulk/price-list?format=csv${branchId ? `&branchId=${branchId}` : ""}`, "zennara-price-list.csv").catch((e) => toast((e as Error).message)); } }]} />
         {can("services.manage") && <Btn onClick={() => nav("/service-editor", { state: { blank: true, type: type || undefined, category: category || undefined } })}>+ New service</Btn>}
       </>}>
       <BulkImport
@@ -299,7 +297,7 @@ export function Services() {
               </button>
             </div>
             {subCategories.length > 0 && (
-              <Menu button={<Btn kind={sub ? "gold" : "ghost"}>{sub || "Any sub-category"} ▾</Btn>}
+              <Menu button={<MenuButton kind={sub ? "gold" : "ghost"}>{sub || "Any sub-category"}</MenuButton>}
                 items={[{ label: "Any sub-category", onClick: () => setSub("") },
                   ...subCategories.map((c) => ({ label: c, onClick: () => setSub(c) }))]} />
             )}
@@ -338,7 +336,7 @@ export function Services() {
                         <div className="relative">
                           {s.image ? <img src={s.image} alt="" className="h-36 w-full object-cover" /> : <div className="h-36 bg-gradient-to-br from-sage to-cream" />}
                           <div className="absolute left-2 top-2 flex gap-1">
-                            {s.isPopular && <Tag kind="gold">★</Tag>}
+                            {s.isPopular && <Tag kind="gold"><Star size={11} className="fill-current" /></Tag>}
                             {!s.isActive && <Tag kind="mute">Hidden</Tag>}
                           </div>
                           {needsContent(s) && <span className="absolute bottom-2 left-2 rounded-full bg-warn-bg px-1.5 py-0.5 text-[9px] font-bold text-warn">needs {!s.image?.trim() ? "photo" : "price"}</span>}
@@ -349,7 +347,7 @@ export function Services() {
                           <div className="mt-1 line-clamp-2 text-[11.5px] text-ink3">{s.summary}</div>
                           <div className="mt-2.5 flex items-center justify-between">
                             <b className="text-[13.5px]">{s.showPriceInApp ? fmtINR(s.price) : "On consultation"}</b>
-                            <span className="text-[11px] text-ink3">{s.rating ? `★ ${s.rating.toFixed(1)}` : ""}{(s.media?.length ?? 0) > 0 ? ` · ${s.media!.length} media` : ""}</span>
+                            <span className="text-[11px] text-ink3">{s.rating ? s.rating.toFixed(1) : ""}{(s.media?.length ?? 0) > 0 ? ` · ${s.media!.length} media` : ""}</span>
                           </div>
                         </div>
                       </Card>
@@ -628,7 +626,7 @@ export function ServiceEditor() {
               <div className="mt-1 text-[12px] text-ink2">{f.summary || "Short summary appears here."}</div>
               <div className="mt-2 text-[15px] font-bold">{f.showPriceInApp ? fmtINR(Number(f.price) || 0) : "Price on consultation"}</div>
               {(f.key_benefits?.length ?? 0) > 0 && (
-                <ul className="mt-2 grid gap-1 text-[11.5px] text-ink2">{(f.key_benefits ?? []).slice(0, 3).map((b, i) => <li key={i}>✓ {b}</li>)}</ul>
+                <ul className="mt-2 grid gap-1 text-[11.5px] text-ink2">{(f.key_benefits ?? []).slice(0, 3).map((b, i) => <li key={i} className="flex items-start gap-1.5"><Check size={12} className="mt-0.5 shrink-0 text-ok" />{b}</li>)}</ul>
               )}
               {(f.ideal_for?.length ?? 0) > 0 && <div className="mt-2 flex flex-wrap gap-1">{(f.ideal_for ?? []).slice(0, 4).map((t, i) => <span key={i} className="rounded-full bg-sage px-2 py-0.5 text-[10.5px]">{t}</span>)}</div>}
               <div className="mt-3 rounded-(--radius-btn) bg-primary py-2 text-center text-[12px] font-bold text-white">{f.cta_label || "Book your appointment"}</div>
@@ -979,7 +977,7 @@ export function Packages() {
             (p.services?.length ?? 0) + (p.consultationServices?.length ?? 0), p.validityDays ?? (p.neverExpires ? "never" : ""), p.graceDays ?? 0,
             (p.centres ?? []).map((c) => c.branchName).join("; "), p.bookingsCount ?? 0, p.isActive ? "yes" : "no"]))}>Export CSV</Btn>
         {can("packages.manage") && (
-          <Menu align="right" button={<Btn kind="ghost">Import / Export ▾</Btn>} items={[
+          <Menu align="right" button={<MenuButton kind="ghost">Import / Export</MenuButton>} items={[
             { label: "Import prices & contents…", onClick: () => setPkgImportOpen(true) },
             { label: "Export all packages", onClick: () => download(api.bulk.downloadUrl("packages", "export"), "zennara-packages.csv").catch((e) => toast((e as Error).message)) },
             { label: "Download blank template", onClick: () => download(api.bulk.downloadUrl("packages", "template"), "zennara-packages-template.csv").catch((e) => toast((e as Error).message)) },
@@ -1038,7 +1036,7 @@ export function Packages() {
                   const lines = (p.services?.length ?? 0) + (p.consultationServices?.length ?? 0);
                   const sessions = (p.services ?? []).reduce((n, s) => n + (s.sessions ?? 1), 0);
                   return [
-                    <span key={p._id}><B>{p.name}{p.isPopular ? " ★" : ""}</B>{p.origin === "zenoti" ? <Tag kind="info">Zenoti</Tag> : null}</span>,
+                    <span key={p._id}><B>{p.name}{p.isPopular ? <Star size={11} className="ml-1 inline fill-current text-gold-dark" /> : null}</B>{p.origin === "zenoti" ? <Tag kind="info">Zenoti</Tag> : null}</span>,
                     <span key={`${p._id}c`} className="font-mono text-[11px] text-ink3">{p.code ?? "—"}</span>,
                     <span key={`${p._id}t`} className="text-[11.5px]">{p.packageType === "custom" ? "Custom" : p.packageType === "day" ? "Day package" : p.packageType === "offer" ? "Offer" : "Series"}</span>,
                     lines
@@ -1947,7 +1945,7 @@ function FeeRequestQueue({ requests, canDecide, tiers, onDecided }: {
         <div className="mb-4">
           <button onClick={() => setShowHistory((v) => !v)}
             className="text-[12px] font-semibold text-ink3 hover:text-ink2">
-            {showHistory ? "▾" : "▸"} Decided requests ({decided.length})
+            {showHistory ? <ChevronDown size={13} /> : <ChevronRight size={13} />} Decided requests ({decided.length})
           </button>
           {showHistory && (
             <div className="mt-2">
@@ -2125,7 +2123,7 @@ export function DermatologistDetail() {
         <Page title={doc.name}
           sub={`${tierTitle} · ${fmtINR(fee)} per consultation · ${(doc.availableCentres ?? []).join(", ") || "no centre yet"}${doc.experienceYears ? ` · ${doc.experienceYears} yrs` : ""}`}
           actions={<>
-            <Menu button={<Btn kind="ghost">{range} ▾</Btn>} items={["Last 30 days", "Last 90 days", "This year", "All time"].map((l) => ({ label: l, onClick: () => setRange(l) }))} />
+            <Menu button={<MenuButton kind="ghost">{range}</MenuButton>} items={["Last 30 days", "Last 90 days", "This year", "All time"].map((l) => ({ label: l, onClick: () => setRange(l) }))} />
             <Btn kind="ghost" onClick={() => nav("/doctors")}>← All dermatologists</Btn>
             <Btn kind="ghost" onClick={() => nav(`/doctors/schedule?doctorId=${encodeURIComponent(doc.doctorId)}`)}>Working hours</Btn>
             <Btn kind="ghost" onClick={() => nav(`/bookings?scope=all`, { state: { specialistId: doc.doctorId } })}>Bookings</Btn>
@@ -2141,7 +2139,7 @@ export function DermatologistDetail() {
                     { k: "Completed", v: st.summary.completed, d: `${st.summary.bookings} booked · ${st.summary.upcoming} upcoming` },
                     { k: "No-shows", v: st.summary.noShow, d: `${st.summary.cancelled} cancelled`, tone: st.summary.noShow ? "dn" : undefined },
                     { k: "Patients", v: st.summary.patients, d: `${st.allTime.patients} all time` },
-                    { k: "Rating", v: st.summary.avgRating ? `★ ${st.summary.avgRating}` : "—", d: `${st.summary.ratings} rating${st.summary.ratings === 1 ? "" : "s"}${st.summary.avgSessionMinutes ? ` · ${st.summary.avgSessionMinutes} min avg` : ""}` },
+                    { k: "Rating", v: st.summary.avgRating ? <RatingValue value={st.summary.avgRating} /> : "—", d: `${st.summary.ratings} rating${st.summary.ratings === 1 ? "" : "s"}${st.summary.avgSessionMinutes ? ` · ${st.summary.avgSessionMinutes} min avg` : ""}` },
                   ]} />
                   <div className="grid gap-3 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
                     <ChartCard title="Month by month" sub="Consultations vs treatments">
@@ -2163,13 +2161,13 @@ export function DermatologistDetail() {
                         rows={st.recent.map((r) => [
                           fmtWhen(r.date, r.time), <B key={r._id}>{r.guest}</B>, r.service ?? "—",
                           r.kind === "consultation" ? <Tag key={`${r._id}k`} kind="gold">Consultation</Tag> : <Tag key={`${r._id}k`} kind="mute">Treatment</Tag>,
-                          r.status, r.paymentStatus === "paid" ? fmtINR(r.amount) : <span className="text-ink3">{fmtINR(r.amount)} due</span>, r.rating ? `★ ${r.rating}` : "—",
+                          r.status, r.paymentStatus === "paid" ? fmtINR(r.amount) : <span className="text-ink3">{fmtINR(r.amount)} due</span>, r.rating ? <RatingValue value={r.rating} /> : "—",
                         ])} />
                     )}
                   </div>
                   {st.feedback.length > 0 && (
                     <div className="mt-3"><SecH t="Guest feedback" />
-                      {st.feedback.map((f, i) => <Card key={i} className="mb-2 p-3 text-[12.5px]"><B>★ {f.rating}</B> · {f.guest} · <span className="text-ink3">{fmtDate(f.date)}</span><div className="mt-1 text-ink2">{f.feedback}</div></Card>)}
+                      {st.feedback.map((f, i) => <Card key={i} className="mb-2 p-3 text-[12.5px]"><B><RatingValue value={f.rating} /></B> · {f.guest} · <span className="text-ink3">{fmtDate(f.date)}</span><div className="mt-1 text-ink2">{f.feedback}</div></Card>)}
                     </div>
                   )}
                 </>

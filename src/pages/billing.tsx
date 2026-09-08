@@ -1,3 +1,4 @@
+import { X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Btn, Tag, Modal, Note, In, Sel, Area, B, Page, DataTable, Async, DateRange, Empty, Tabs, exportCsv } from "../ui";
@@ -86,7 +87,7 @@ function LineRow({ inv, l, editable, onChanged, onBusy }: { inv: Invoice; l: Inv
         <div className={redeemed ? "text-ink3 line-through" : "font-semibold"}>{money(redeemed ? l.base : l.net)}</div>
         {redeemed ? <div className="font-semibold">0.00</div> : (l.invoiceDiscountShare > 0 && <div className="text-[10.5px] text-ink3">−{money(l.invoiceDiscountShare)} bill disc.</div>)}
       </td>
-      <td className="w-6 py-2 text-right">{editable && <button className="text-ink3 hover:text-err" title="Remove line" onClick={async () => { onBusy(true); try { onChanged(await api.invoices.removeLine(inv._id, l._id)); } catch (e) { setErr(errMsg(e)); } finally { onBusy(false); } }}>✕</button>}</td>
+      <td className="w-6 py-2 text-right">{editable && <button className="text-ink3 hover:text-err" title="Remove line" onClick={async () => { onBusy(true); try { onChanged(await api.invoices.removeLine(inv._id, l._id)); } catch (e) { setErr(errMsg(e)); } finally { onBusy(false); } }}><X size={13} /></button>}</td>
     </tr>
   );
 }

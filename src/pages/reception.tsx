@@ -1,10 +1,7 @@
+import { ArrowDown, ArrowUp, Check, CheckCircle2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import {
-  Page, Btn, Tag, STATUS, Stats, Card, DataTable, B, Tabs, Note, Hint, Async, Empty,
-  AreaChart, GBars, HBars, ChartCard, SecH, Prog, Modal, Drawer, Menu, In, Sel, Area, Otp, CalendarSkeleton,
-  exportCsv, StaleBanner, Spinner, Loading, FilterDrawer, FSection, Chips, MultiSelect, DateRange, NumRange, ActiveFilters, ExportModal,
-} from "../ui";
+import { ActiveFilters, Area, AreaChart, Async, B, Btn, CalendarSkeleton, Card, ChartCard, Chips, DataTable, DateRange, Drawer, Empty, ExportModal, FSection, FilterDrawer, GBars, HBars, Hint, In, Loading, Menu, MenuButton, Modal, MultiSelect, Note, NumRange, Otp, Page, Prog, RatingValue, STATUS, SecH, Sel, Spinner, StaleBanner, Stats, Tabs, Tag, exportCsv } from "../ui";
 import { LifecycleActions, LIFECYCLE_TOAST, StatusHistory, useLifecycle } from "../lifecycle";
 import { useStore } from "../store";
 import api from "../lib/api";
@@ -71,7 +68,7 @@ export function Overview() {
   return (
     <Page title="Overview" sub={`${branch && branch !== "All branches" ? branch : "All centres"} · ${custom ? `${custom.startDate} → ${custom.endDate}` : range}`}
       actions={<>
-        <Menu button={<Btn kind="ghost">{custom ? "Custom range" : range} ▾</Btn>}
+        <Menu button={<MenuButton kind="ghost">{custom ? "Custom range" : range}</MenuButton>}
           items={[...RANGE_PRESETS.map(([l]) => ({ label: l, onClick: () => { setCustom(null); setRange(l); } })), { label: "Custom…", onClick: () => setCustom(window) }]} />
         {custom && (
           <div className="flex items-center gap-1.5">
@@ -154,7 +151,7 @@ export function Overview() {
                         x.bookings, x.consultations, x.treatments,
                         <span key={`${x.doctorId}c`}>{x.completed} <span className="text-[10.5px] text-ink3">({x.completionRate}%)</span></span>,
                         x.noShow, x.patients,
-                        x.avgRating ? `★ ${x.avgRating}` : "—",
+                        x.avgRating ? <RatingValue value={x.avgRating} /> : "—",
                         <B key={`${x.doctorId}r`}>{fmtINR(x.revenue)}</B>,
                       ])} />
                   </>
@@ -165,7 +162,7 @@ export function Overview() {
                   {d.topServices.length ? <HBars rows={d.topServices.slice(0, 8).map((s) => [s.name, s.revenue, `${s.bookings} · ${s.kind}`] as [string, number, string])} color="var(--color-c2)" /> : <Empty title="No services booked" />}
                 </ChartCard>
                 <ChartCard title="Needs attention">
-                  {attention.length === 0 ? <div className="text-[12.5px] text-ink3">Nothing outstanding. 🎉</div> : attention.map(([label, to]) => (
+                  {attention.length === 0 ? <div className="flex items-center gap-1.5 text-[12.5px] text-ink3"><CheckCircle2 size={14} className="text-ok" />Nothing outstanding.</div> : attention.map(([label, to]) => (
                     <button key={label} onClick={() => nav(to)} className="flex w-full items-center justify-between border-b border-border py-2 text-left text-[12.5px] last:border-0 hover:text-gold-dark">
                       <span>{label}</span><span className="text-ink3">→</span>
                     </button>
@@ -1268,7 +1265,7 @@ export function Today() {
               <SecH t="Appointments" em={`· ${list.length} on ${fmtDate(day)}`} />
               <div className="flex flex-wrap items-center gap-2">
                 {todayFilters.map(([key, value, setter, options]) => (
-                  <Menu key={key} button={<Btn kind="ghost" className="!py-1.5 !text-[12px]">{key === "sort" ? `Sort: ${value}` : value} ▾</Btn>}
+                  <Menu key={key} button={<MenuButton kind="ghost" className="!py-1.5 !text-[12px]">{key === "sort" ? `Sort: ${value}` : value}</MenuButton>}
                     items={options.map((p) => ({ label: p, onClick: () => setter(p) }))} />
                 ))}
                 <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter by name or service…"
@@ -1497,14 +1494,14 @@ export function Bookings() {
   return (
     <Page title="Bookings" sub={`${location ?? "All centres"} · ${kindLabel}${calRange ? ` · ${fmtAnchor}` : ""}`}
       actions={<>
-        <Menu button={<Btn kind="ghost">{scope === "branch" ? "This centre" : "All centres"} ▾</Btn>}
+        <Menu button={<MenuButton kind="ghost">{scope === "branch" ? "This centre" : "All centres"}</MenuButton>}
           items={[
             { label: "This centre", onClick: () => setScope("branch") },
             { label: "All centres", onClick: () => setScope("all") },
           ]} />
-        <Menu align="right" button={<Btn kind="ghost">Sort: {sortLabel} {applied.sortOrder === "asc" ? "↑" : "↓"}</Btn>}
+        <Menu align="right" button={<MenuButton kind="ghost">Sort: {sortLabel}{applied.sortOrder === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} />}</MenuButton>}
           items={[
-            ...BOOKING_SORTS.map(([v, l]) => ({ label: `${l}${applied.sortBy === v ? " ✓" : ""}`, onClick: () => clear({ sortBy: v }) })),
+            ...BOOKING_SORTS.map(([v, l]) => ({ label: <span className="inline-flex items-center gap-1.5">{l}{applied.sortBy === v && <Check size={13} />}</span>, onClick: () => clear({ sortBy: v }) })),
             { label: applied.sortOrder === "asc" ? "Descending ↓" : "Ascending ↑", onClick: () => clear({ sortOrder: applied.sortOrder === "asc" ? "desc" : "asc" }) },
           ]} />
         <Btn kind={chips.length ? "gold" : "ghost"} onClick={() => { setDraft(applied); setDrawer(true); }}>Filters{chips.length ? ` (${chips.length})` : ""}</Btn>
@@ -1822,7 +1819,7 @@ export function Patients() {
       actions={<>
         <Menu align="right" button={<Btn kind="ghost">Sort: {sortLabel} {applied.sortOrder === "asc" ? "↑" : "↓"}</Btn>}
           items={[
-            ...PATIENT_SORTS.map(([v, l]) => ({ label: `${l}${applied.sortBy === v ? " ✓" : ""}`, onClick: () => clear({ sortBy: v }) })),
+            ...PATIENT_SORTS.map(([v, l]) => ({ label: <span className="inline-flex items-center gap-1.5">{l}{applied.sortBy === v && <Check size={13} />}</span>, onClick: () => clear({ sortBy: v }) })),
             { label: applied.sortOrder === "asc" ? "Descending ↓" : "Ascending ↑", onClick: () => clear({ sortOrder: applied.sortOrder === "asc" ? "desc" : "asc" }) },
           ]} />
         <Btn kind={chips.length ? "gold" : "ghost"} onClick={() => { setDraft(applied); setDrawer(true); }}>
@@ -2939,7 +2936,7 @@ export function Consultations() {
   return (
     <Page title="Consultations" sub={`Dermatologist sessions · last ${days} days · ${branch || "all centres"}`}
       actions={
-        <Menu button={<Btn kind="ghost">Last {days} days ▾</Btn>}
+        <Menu button={<MenuButton kind="ghost">Last {days} days</MenuButton>}
           items={[7, 30, 90].map((d) => ({ label: `Last ${d} days`, onClick: () => setDays(d) }))} />
       }>
       <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
@@ -3222,7 +3219,7 @@ export function Chat() {
     <Page title="Chat"
       sub={`${branchId ? branch : "All centres"} · ${list.length} conversation${list.length === 1 ? "" : "s"} · ${live ? "live" : "polling"}`}
       actions={
-        <Menu button={<Btn kind="ghost">{status === "active" ? "Open" : "Closed"} ▾</Btn>}
+        <Menu button={<MenuButton kind="ghost">{status === "active" ? "Open" : "Closed"}</MenuButton>}
           items={[
             { label: "Open", onClick: () => setStatus("active") },
             { label: "Closed", onClick: () => setStatus("closed") },
@@ -3334,7 +3331,7 @@ export function Chat() {
                       </span>
                       {m.senderModel === "Admin" && String(m.senderId) === myId && (
                         <button onClick={() => remove(m)} title="Delete message"
-                          className="absolute -left-6 top-1.5 hidden text-[11px] text-ink3 hover:text-err group-hover:block">✕</button>
+                          className="absolute -left-6 top-1.5 hidden text-ink3 hover:text-err group-hover:block"><X size={12} /></button>
                       )}
                     </div>
                   ))}
@@ -3352,7 +3349,7 @@ export function Chat() {
                         <span className="ml-1.5 text-ink3">{chatFileSize(selectedFile.size)} · ready to send</span>
                       </span>
                       <button type="button" onClick={() => { setSelectedFile(null); if (fileRef.current) fileRef.current.value = ""; }}
-                        className="grid h-8 w-8 place-items-center rounded-full text-ink3 hover:bg-surface hover:text-err" aria-label="Remove attachment">✕</button>
+                        className="grid h-8 w-8 place-items-center rounded-full text-ink3 hover:bg-surface hover:text-err" aria-label="Remove attachment"><X size={15} /></button>
                     </div>
                   )}
                   <div className="mb-1.5 flex flex-wrap items-center gap-1.5 text-[11px]">

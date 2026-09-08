@@ -1,3 +1,4 @@
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Btn, Tag, Card, B, Note, In, Sel, Area, Modal, Empty, Async, SecH, DeleteModal } from "../ui";
 import { useStore } from "../store";
@@ -134,7 +135,7 @@ export function StaffAccessFields({
       </div>
 
       <button onClick={() => setShowExtra((v) => !v)} className="text-left text-[11.5px] font-bold text-gold-dark hover:underline">
-        {showExtra ? "▾ Hide extra permissions" : "▸ Add extra permissions on top of the role"}
+        {showExtra ? <><ChevronDown size={13} /> Hide extra permissions</> : <><ChevronRight size={13} /> Add extra permissions on top of the role</>}
         {permissions.size > 0 ? ` (${permissions.size})` : ""}
       </button>
       {showExtra && (
