@@ -1821,7 +1821,7 @@ export function Doctors() {
                   </span>
                   <Tag kind={doc.isActive ? "ok" : "mute"}>{doc.isActive ? "Live" : "Hidden"}</Tag>
                 </div>
-                {(() => { const z = zenotiCentresFor(doc); if (!z) return <div className="mt-1.5 text-[10.5px] text-warn">Not linked to a Zenoti doctor — clinic visits cannot be attributed and app bookings cannot name them in Zenoti.</div>; const extra = z.filter((c) => !(doc.availableCentres ?? []).includes(c)); return extra.length ? <div className="mt-1.5 text-[10.5px] text-ink3">Zenoti also rosters them at {extra.join(", ")} — add the centre here if they take app bookings there.</div> : null; })()}
+                {(() => { const z = zenotiCentresFor(doc); if (!z) return <div className="mt-1.5 text-[10.5px] text-warn">Not linked to a Zenoti doctor — clinic visits cannot be attributed and app bookings cannot name them in Zenoti.</div>; const extra = z.filter((c) => !(doc.availableCentres ?? []).includes(c)); return extra.length ? <div className="mt-1.5 text-[10.5px] text-ink3">Zenoti also rosters them at {extra.join(", ")} — the next sync will add it here.</div> : null; })()}
               </Card>
             ))}
           </div>
@@ -2374,9 +2374,25 @@ function DoctorEditor({ open, doctor, tiers, branchNames, onClose, onSaved, onDe
         <Area label="About them — shown on the app card" value={f.experienceNote ?? ""} onChange={set("experienceNote")} rows={2} />
 
         <div>
-          <div className="mb-1.5 text-[11px] font-bold text-ink2">Centres — a dermatologist only appears where they practise</div>
+          <div className="mb-1.5 flex items-center gap-2 text-[11px] font-bold text-ink2">
+            Centres — a dermatologist only appears where they practise
+            {!!f.zenotiEmployeeId && <Tag kind="info">Managed in Zenoti</Tag>}
+          </div>
+          {/*
+           * Zenoti decides where a linked practitioner works, and the sync
+           * writes it back every five minutes — so editing it here would be
+           * undone. It was editable, and had drifted for seven of nine active
+           * dermatologists: Janaki was offered at two centres Zenoti has never
+           * had her at, and six others at fewer centres than Zenoti rosters
+           * them at, hiding real bookable time.
+           */}
           {branchNames.length === 0 ? (
             <div className="text-[12px] text-ink3">No branches configured yet.</div>
+          ) : f.zenotiEmployeeId ? (
+            <div className="rounded-lg border border-border bg-ivory px-2.5 py-2 text-[12.5px]">
+              {(f.availableCentres ?? []).join(", ") || "Zenoti has no centre for them yet"}
+              <div className="mt-0.5 text-[11px] text-ink3">Add or remove centres in Zenoti — this follows within five minutes.</div>
+            </div>
           ) : (
             <MultiSelect options={branchNames.map((b) => [b, b])} value={f.availableCentres ?? []}
               onChange={set("availableCentres")} placeholder="Select centres…" searchPlaceholder="Search centres…" />

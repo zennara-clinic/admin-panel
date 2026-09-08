@@ -661,6 +661,13 @@ export type Doctor = {
   /** Home branch name; `availableCentres` drives where they can be booked. */
   branch?: string | null;
   availableCentres?: string[];
+  /**
+   * Set by the Zenoti practitioner sync. Its presence means Zenoti owns this
+   * dermatologist's centres — the panel shows them read-only, because the sync
+   * rewrites `availableCentres` from Zenoti every five minutes.
+   */
+  zenotiEmployeeId?: string | null;
+  zenotiCenterNames?: string[];
   qualifications?: string[];
   experienceYears?: number;
   experienceNote?: string | null;
