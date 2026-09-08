@@ -562,7 +562,7 @@ function BookingDrawer({ id, onClose, onChanged }: {
                 state: { id: idOf(bk.userId), returnTo: `${route.pathname}${route.search}` },
               })}>Open patient record</Btn>
               {bk.source === "zenoti" && !["Cancelled", "Completed", "No Show"].includes(bk.status) && (
-                <Note>Booked in Zenoti. Reschedule, cancel or no-show it in Zenoti — the change shows here within 2 minutes. Check-in, check-out and completion are recorded here and written to Zenoti.</Note>
+                <Note><B>Reschedule, cancel &amp; no-show: managed in Zenoti.</B> The change shows here within seconds. Check-in, check-out and completion are recorded here and written back to Zenoti.</Note>
               )}
               {bk.source !== "zenoti" && !["Cancelled", "Completed", "No Show"].includes(bk.status) && (
                 <Btn kind="ghost" onClick={() => setResOpen(true)}>Reschedule</Btn>

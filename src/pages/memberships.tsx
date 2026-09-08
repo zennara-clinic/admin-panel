@@ -164,7 +164,7 @@ function PlanEditor({ open, plan, onClose, onSaved }: { open: boolean; plan: Mem
               <div className="text-[10.5px] text-ink3">None ticked = every centre.</div>
             </div>
           </div>
-          {plan?.source === "zenoti" && <Note className="my-0">Mirrored from Zenoti (price and name follow Zenoti hourly). Discounts and credits live here — Zenoti's API does not expose them.</Note>}
+          {plan?.source === "zenoti" && <Note className="my-0">Linked to Zenoti, but <B>name, price, discounts and credits are set here</B> — Zenoti&rsquo;s rows disagree with each other on price and its API never exposes discounts or credits. Only the link to Zenoti follows the sync.</Note>}
           {err && <Note kind="crit">{err}</Note>}
           <div className="flex justify-end gap-2"><Btn kind="ghost" onClick={onClose}>Cancel</Btn><Btn disabled={busy} onClick={save}>{busy ? "Saving…" : plan ? "Save plan" : "Create plan"}</Btn></div>
         </div>
