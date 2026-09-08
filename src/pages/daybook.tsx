@@ -127,8 +127,12 @@ function QuickCard({ b, anchor, onClose, onOpen, onChanged, onCheckIn, onCheckOu
   return (
     <>
       <div className="fixed inset-0 z-[80]" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
-      <div className="fixed z-[81] w-[320px] overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl"
-        style={{ left: Math.min(anchor.x, window.innerWidth - 340), top: Math.min(anchor.y, window.innerHeight - 360) }}>
+      <div role="dialog" aria-label={`Appointment for ${b.fullName}`}
+        className="fixed z-[81] w-[320px] overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl"
+        style={{
+          left: Math.max(8, Math.min(anchor.x, window.innerWidth - 340)),
+          top: Math.max(8, Math.min(anchor.y, window.innerHeight - 360)),
+        }}>
         <div className="flex items-start gap-3 bg-side px-4 py-3 text-white">
           <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white/15 text-[12px] font-bold">{b.fullName.split(" ").map((p) => p[0]).slice(0, 2).join("")}</div>
           <div className="min-w-0 flex-1">
@@ -182,7 +186,11 @@ function ContextMenu({ at, items, onClose }: { at: { x: number; y: number }; ite
   return (
     <>
       <div className="fixed inset-0 z-[80]" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
-      <div className="fixed z-[81] min-w-[210px] overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl" style={{ left: Math.min(at.x, window.innerWidth - 230), top: Math.min(at.y, window.innerHeight - 140) }}>
+      <div role="menu" className="fixed z-[81] min-w-[210px] overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
+        style={{
+          left: Math.max(8, Math.min(at.x, window.innerWidth - 230)),
+          top: Math.max(8, Math.min(at.y, window.innerHeight - 140)),
+        }}>
         {items.map((it) => (
           <button key={it.label} className="block w-full px-3.5 py-2 text-left text-[12.5px] font-medium text-ink2 hover:bg-ivory" onClick={() => { onClose(); it.onClick(); }}>{it.label}</button>
         ))}
@@ -361,9 +369,33 @@ export function DayBookGrid({ date, bookings, onOpen, onChanged, onNewAt, onChec
 }) {
   const { branchId, can, toast } = useStore();
   const shifts = useApi(() => api.schedules.dayShifts(date, branchId || null), [date, branchId]);
-  const [quick, setQuick] = useState<{ b: Booking; x: number; y: number } | null>(null);
-  const [menu, setMenu] = useState<{ x: number; y: number; doctorId?: string; doctorName?: string; time: string } | null>(null);
+  /*
+   * ONE overlay at a time.
+   *
+   * The card popover and the right-click menu were separate state at the same
+   * z-index, so opening one never closed the other and they rendered stacked —
+   * the menu landing on top of a booking's details, both half-readable. A
+   * single slot makes that impossible to express.
+   */
+  type Overlay =
+    | { kind: "card"; b: Booking; x: number; y: number }
+    | { kind: "menu"; x: number; y: number; doctorId?: string; doctorName?: string; time: string };
+  const [overlay, setOverlay] = useState<Overlay | null>(null);
+  const quick = overlay?.kind === "card" ? overlay : null;
+  const menu = overlay?.kind === "menu" ? overlay : null;
+  const setQuick = (v: { b: Booking; x: number; y: number } | null) =>
+    setOverlay(v ? { kind: "card", ...v } : null);
+  const setMenu = (v: { x: number; y: number; doctorId?: string; doctorName?: string; time: string } | null) =>
+    setOverlay(v ? { kind: "menu", ...v } : null);
   const [blockOpen, setBlockOpen] = useState<null | { doctorId?: string; startTime?: string }>(null);
+
+  // Escape closes whichever popover is open — neither had a keyboard way out.
+  useEffect(() => {
+    if (!overlay) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOverlay(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [overlay]);
   const [now, setNow] = useState(() => new Date());
   const scroller = useRef<HTMLDivElement>(null);
   useEffect(() => { const t = window.setInterval(() => setNow(new Date()), 60000); return () => window.clearInterval(t); }, []);
@@ -447,7 +479,31 @@ export function DayBookGrid({ date, bookings, onOpen, onChanged, onNewAt, onChec
           </div>
 
           {/* rows */}
-          {providers.length === 0 && <div className="px-4 py-8 text-center text-[12.5px] text-ink3">No dermatologists rostered here today. Add shifts under Care → Dermatologists → Schedule.</div>}
+          {/*
+           * While the shifts load, the board used to render with NO provider
+           * rows at all — a bare ruler for the five to ten seconds the Zenoti
+           * read takes, with the roster and its "not working" bands popping in
+           * afterwards. Placeholder rows keep the grid's shape so the desk can
+           * see it is filling in rather than empty, and the layout does not
+           * jump when it lands.
+           */}
+          {shifts.loading && !book && Array.from({ length: 5 }, (_, i) => (
+            <div key={`sk${i}`} className="flex animate-pulse border-b border-border last:border-0">
+              <div className="shrink-0 border-r border-border px-3 py-3" style={{ width: LEFT_W }}>
+                <div className="flex items-center gap-2">
+                  <span className="inline-block h-6 w-1 rounded-full bg-border" />
+                  <div className="min-w-0 flex-1">
+                    <div className="h-3 w-28 rounded bg-border" />
+                    <div className="mt-1.5 h-2.5 w-20 rounded bg-border/60" />
+                  </div>
+                </div>
+              </div>
+              <div className="relative" style={{ width: cols * COL_W, height: ROW_H + 6 }}>
+                <div className="absolute inset-y-2 rounded bg-border/40" style={{ left: 8, width: Math.max(80, cols * COL_W * 0.45) }} />
+              </div>
+            </div>
+          ))}
+          {!shifts.loading && providers.length === 0 && <div className="px-4 py-8 text-center text-[12.5px] text-ink3">No dermatologists rostered here today. Add shifts under Care → Dermatologists → Schedule.</div>}
           {providers.map((p) => {
             const lay = byProvider.get(p.key)!;
             const h = Math.max(1, lay.lanes) * ROW_H + 6;
