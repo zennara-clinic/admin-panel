@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { LifecycleActions, LIFECYCLE_TOAST, useLifecycle } from "../lifecycle";
 import { Btn, Tag, Modal, Note, In, Sel, Area, B, SecH, DataTable, Async } from "../ui";
 import { useStore } from "../store";
 import api, { type TodaysSales } from "../lib/api";
@@ -111,18 +112,28 @@ function QuickCard({ b, anchor, onClose, onOpen, onChanged, onCheckIn, onCheckOu
 }) {
   const { toast, audit, can } = useStore();
   const nav = useNavigate();
-  const act = useMutation(async (fn: () => Promise<unknown>, msg: string) => { await fn(); toast(msg); onChanged(); });
+  // Returns true so callers can tell success from failure — useMutation gives
+  // back `undefined` on error, and LifecycleActions needs that distinction to
+  // know whether to close its "why?" prompt.
+  const act = useMutation(async (fn: () => Promise<unknown>, msg: string) => { await fn(); toast(msg); onChanged(); return true; });
   const state = cardState(b);
   const st = STATE_STYLE[state] ?? STATE_STYLE.pending;
   const canManage = can("bookings.manage");
   const d = bookingSlotDate(b);
   const idOf = (v: unknown) => (typeof v === "string" ? v : (v as { _id?: string })?._id ?? "");
 
-  const options: { label: string; run: () => Promise<unknown>; done: string; danger?: boolean }[] = [];
-  if (b.status === "Awaiting Confirmation" || b.status === "Rescheduled") options.push({ label: "Confirm", run: () => api.bookings.confirm(b._id, { confirmedDate: b.confirmedDate || b.preferredDate, confirmedTime: b.confirmedTime || b.preferredTimeSlots?.[0] || "" }), done: "Confirmed" });
-  if (b.status === "In Progress" && (!b.consultationStage || ["checked_in", "waiting", "confirmed", "booked"].includes(b.consultationStage))) options.push({ label: "Start (with dermatologist)", run: () => api.bookings.setStage(b._id, { stage: "consultation_started" }), done: "Started" });
-  if (["Confirmed", "Awaiting Confirmation", "Rescheduled"].includes(b.status) && b.source !== "zenoti") options.push({ label: "Mark no-show", run: () => api.bookings.noShow(b._id), done: "Marked as no-show", danger: true });
-  if (["In Progress", "Completed", "No Show", "Cancelled"].includes(b.status)) options.push({ label: `Undo ${b.status === "In Progress" ? "check-in" : b.status === "Completed" ? "check-out" : b.status === "No Show" ? "no-show" : "cancellation"}`, run: () => api.bookings.undo(b._id), done: "Reverted" });
+  /*
+   * The desk's actions come from the SERVER, not a list kept here.
+   *
+   * This card hand-rolled its own, and it had already drifted: no entry at all
+   * for "Checked In", "Undo check-in" shown for a booking that was actually
+   * In Progress (that undo is undo-start), and — since Zenoti's AA102 refusal
+   * was honoured on 2026-09-08 — an "Undo check-out" that the backend no
+   * longer accepts, so pressing it only produced an error. lifecycleState()
+   * already answers exactly this question, honours the Zenoti-owned rules, and
+   * is what the reception drawer uses.
+   */
+  const { state: lifecycleState, reload: reloadLifecycle } = useLifecycle(b._id);
 
   return (
     <>
@@ -149,17 +160,22 @@ function QuickCard({ b, anchor, onClose, onOpen, onChanged, onCheckIn, onCheckOu
           <div><B>{bookingServiceName(b, "Service")}</B></div>
           <div className="text-ink2">{d ? `${label12(toMin(clinicHM(d)))} – ${label12(toMin(clinicHM(d)) + durationOf(b))}` : "time TBC"} <span className="text-ink3">|</span> {bookingProvider(b)}</div>
           {(b.notes || b.adminNotes) && <div className="rounded-lg bg-ivory px-2.5 py-1.5 text-[11.5px] text-ink2"><span className="text-[10px] font-bold uppercase tracking-wider text-ink3">Notes</span><br />{b.notes || b.adminNotes}</div>}
-          {canManage && options.length > 0 && (
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[10.5px] font-bold uppercase tracking-wider text-ink3">Change status</label>
-              <select defaultValue="" disabled={act.busy} onChange={async (e) => {
-                const o = options[Number(e.target.value)]; if (!o) return;
-                await act.mutate(() => o.run().then(() => audit("BOOKING_UPDATED", `${b.fullName} · ${o.label}`, { bookingId: b._id })), o.done);
-                onClose();
-              }} className="rounded-lg border border-border bg-ivory px-2.5 py-2 text-[12.5px] outline-none focus:border-gold-dark">
-                <option value="" disabled>Choose…</option>
-                {options.map((o, i) => <option key={o.label} value={i}>{o.label}</option>)}
-              </select>
+          {canManage && (
+            <div className="grid gap-1.5">
+              <LifecycleActions
+                state={lifecycleState}
+                busy={act.busy}
+                canOverride={canManage}
+                onRun={async (action, over) => {
+                  const ok = await act.mutate(
+                    () => api.bookings.lifecycle(b._id, { action, ...over })
+                      .then(() => audit("BOOKING_UPDATED", `${b.fullName} · ${action}`, { bookingId: b._id })),
+                    LIFECYCLE_TOAST[action],
+                  );
+                  await reloadLifecycle();
+                  return Boolean(ok);
+                }}
+              />
             </div>
           )}
           {act.error && <Note kind="crit" className="my-0">{act.error}</Note>}
