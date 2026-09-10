@@ -1,10 +1,12 @@
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
-import { Btn, Tag, Card, B, Note, In, Sel, Area, Modal, Empty, Async, SecH, DeleteModal } from "../ui";
+import { Btn, Tag, Card, B, Note, In, Sel, Area, Modal, Empty, Async, SecH, DataTable, DeleteModal } from "../ui";
 import { useStore } from "../store";
 import api from "../lib/api";
 import { useApi } from "../lib/useApi";
 import type { Admin, Branch, PermissionGroup, PermissionKey, Role, StaffAssignment } from "../lib/types";
+import type { LockedAccount } from "../lib/api";
+import { fmtDateTime, fmtTime } from "../lib/format";
 
 /* ---------------- shared: permission catalog + matrix ---------------- */
 
@@ -502,6 +504,125 @@ export function ChangePasswordForm({ requireCurrent, onDone }: { requireCurrent:
       <In label="New password again" type="password" value={again} onChange={setAgain} />
       {err && <Note kind="crit">{err}</Note>}
       <div className="flex justify-end"><Btn disabled={busy} onClick={submit}>{busy ? "Saving…" : "Save password"}</Btn></div>
+    </div>
+  );
+}
+
+/* ===================== SIGN-IN SECURITY (super admin) ===================== */
+
+/**
+ * Staff sign-in throttling, and the un-sticking of a locked-out colleague.
+ *
+ * Testing a panel means signing in repeatedly, which is exactly what
+ * brute-force protection is built to stop — so there has to be a way to hold it
+ * off. What there must NOT be is an on/off switch: protection that can be
+ * disabled indefinitely is protection that is eventually found off, months
+ * later, by nobody in particular.
+ *
+ * So the control is a window. You choose how long, you say why, it goes in the
+ * audit log as a warning, and it turns itself back on. The page stays loud
+ * while it is off.
+ */
+const PAUSE_CHOICES: [number, string][] = [[30, "30 minutes"], [60, "1 hour"], [240, "4 hours"], [480, "8 hours"], [1440, "24 hours"]];
+
+export function SignInSecurityTab() {
+  const { toast } = useStore();
+  const settings = useApi(() => api.security.get(), []);
+  const locked = useApi(() => api.security.lockedAccounts().catch(() => [] as LockedAccount[]), []);
+  const [minutes, setMinutes] = useState(60);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const apply = async (paused: boolean) => {
+    setBusy(true);
+    try {
+      const r = await api.security.setLoginRateLimit(paused ? { paused, minutes, reason } : { paused });
+      toast((r.message as string) ?? "Updated");
+      setReason("");
+      settings.reload();
+    } catch (e) { toast((e as Error).message); } finally { setBusy(false); }
+  };
+
+  const unlock = async (a: LockedAccount) => {
+    try {
+      const r = await api.security.unlock(a._id);
+      toast((r.message as string) ?? "Unlocked");
+      locked.reload();
+    } catch (e) { toast((e as Error).message); }
+  };
+
+  return (
+    <div className="grid gap-3.5">
+      <Async q={settings} label="Reading the security settings…" rows={3}>
+        {(s) => {
+          const rl = s.loginRateLimit;
+          return (
+            <Card className="p-4">
+              <SecH t="Sign-in throttling"
+                right={<Tag kind={rl.active ? "ok" : "err"}>{rl.active ? "On" : "Paused"}</Tag>} />
+
+              {rl.active ? (
+                <p className="mb-3 text-[12.5px] text-ink2">
+                  After <B>10 failed</B> sign-in attempts in 15 minutes, that email is asked to wait.
+                  Successful sign-ins are never counted, and each account has its own budget — one
+                  person mistyping a password cannot lock out the centre.
+                </p>
+              ) : (
+                <Note kind="crit" className="mb-3">
+                  <B>Throttling is off.</B> Anyone can guess staff passwords as fast as they like until{" "}
+                  <B>{fmtDateTime(rl.pausedUntil)}</B> ({rl.minutesRemaining} min left).
+                  {rl.pausedByName ? <> Paused by {rl.pausedByName}.</> : null}
+                  {rl.pausedReason ? <> Reason: “{rl.pausedReason}”.</> : null}
+                </Note>
+              )}
+
+              {rl.active ? (
+                <div className="rounded-xl border border-border bg-ivory p-3">
+                  <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-ink3">Pause it while testing</div>
+                  <div className="mb-2 flex flex-wrap gap-1.5">
+                    {PAUSE_CHOICES.filter(([m]) => m <= rl.maxPauseMinutes).map(([m, label]) => (
+                      <button key={m} onClick={() => setMinutes(m)}
+                        className={`rounded-lg px-2.5 py-1.5 text-[12px] font-semibold ${minutes === m ? "bg-primary text-white" : "border border-border bg-surface text-ink2"}`}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <In label="Why (goes in the audit log)" value={reason} onChange={setReason}
+                    placeholder="Testing the dermatologist panel sign-in" full />
+                  <div className="mt-2.5 flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-ink3">It turns itself back on — there is no permanent off.</span>
+                    <Btn kind="gold" disabled={busy || reason.trim().length < 3} onClick={() => apply(true)}>
+                      {busy ? "Pausing…" : "Pause throttling"}
+                    </Btn>
+                  </div>
+                </div>
+              ) : (
+                <Btn disabled={busy} onClick={() => apply(false)}>{busy ? "Turning it on…" : "Turn throttling back on now"}</Btn>
+              )}
+            </Card>
+          );
+        }}
+      </Async>
+
+      <Card className="p-4">
+        <SecH t="Locked out" em="· 10 wrong passwords locks an account for an hour" />
+        <Async q={locked} label="" rows={2}>
+          {(rows) => rows.length === 0 ? (
+            <div className="text-[12px] text-ink3">Nobody is locked out, and nobody has a failed attempt on record.</div>
+          ) : (
+            <DataTable cols={["Who", "Role", "Failed attempts", "Status", ""]}
+              rows={rows.map((a) => [
+                <span key={a._id}><B>{a.name ?? "—"}</B><br /><span className="text-[11px] text-ink3">{a.email}</span></span>,
+                a.role,
+                <span key={`${a._id}f`} className="tabular-nums">{a.failedLoginAttempts}</span>,
+                a.lockedUntil
+                  ? <Tag key={`${a._id}s`} kind="err">Locked until {fmtTime(a.lockedUntil)}</Tag>
+                  : <Tag key={`${a._id}s`} kind="warn">Can still sign in</Tag>,
+                <Btn key={`${a._id}b`} kind="ghost" className="!py-1 !text-[11.5px]" onClick={() => unlock(a)}>Clear</Btn>,
+              ])} />
+          )}
+        </Async>
+      </Card>
     </div>
   );
 }

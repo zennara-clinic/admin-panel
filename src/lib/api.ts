@@ -771,6 +771,38 @@ export const consultationNotes = {
   remove: (id: Id) => requestRaw(`/consultation-notes/${id}`, { method: "DELETE" }),
 };
 
+/* ==================== sign-in security (super admin) ==================== */
+export type SignInSecurity = {
+  loginRateLimit: {
+    /** True when throttling is doing its job. */
+    active: boolean;
+    pausedUntil: string | null;
+    minutesRemaining: number;
+    pausedByName: string | null;
+    pausedReason: string | null;
+    maxPauseMinutes: number;
+  };
+};
+
+export type LockedAccount = {
+  _id: Id;
+  name?: string;
+  email: string;
+  role: string;
+  failedLoginAttempts: number;
+  /** Null when they are only part-way to a lock. */
+  lockedUntil: string | null;
+};
+
+export const security = {
+  get: () => request<SignInSecurity>("/admin/security-settings"),
+  /** Pause throttling for a bounded window, or resume it now. */
+  setLoginRateLimit: (body: { paused: boolean; minutes?: number; reason?: string }) =>
+    requestRaw<SignInSecurity>("/admin/security-settings/login-rate-limit", { method: "PATCH", body }),
+  lockedAccounts: () => request<LockedAccount[]>("/admin/security-settings/locked-accounts"),
+  unlock: (id: Id) => requestRaw(`/admin/security-settings/unlock/${id}`, { method: "POST", body: {} }),
+};
+
 /* ============================ analytics ============================ */
 export type FinancialAnalytics = {
   overview: {
@@ -1246,7 +1278,7 @@ export const api = {
   auth, branches, patients, bookings, services, serviceTypes, categories, packages, packageAssignments, consultationNotes,
   doctors, availability, productAvailability, patientPhotos, purchaseOrders, bulk, formTemplates, schedules, feeRequests, products, brands, formulations, coupons, orders, inventory, vendors,
   appStudio, media, chat, notifications, reviews, support, preConsult, consentForms,
-  serviceCards, analytics, audit, staff, zenoti, contactChange, banners, roles, providerBlocks, invoices, memberships, stockControl, templates,
+  serviceCards, analytics, audit, staff, zenoti, contactChange, banners, security, roles, providerBlocks, invoices, memberships, stockControl, templates,
 };
 
 export default api;

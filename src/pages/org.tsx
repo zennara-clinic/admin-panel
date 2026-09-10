@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { Area, AreaChart, Async, B, Btn, Card, ChartCard, DataTable, DateRange, DeleteModal, Drawer, Empty, GBars, HBars, Hint, In, Menu, MenuButton, Modal, Note, Page, RatingValue, SecH, Sel, StaleBanner, Stars, Stats, Switch, Tabs, Tag, exportCsv } from "../ui";
 import { useStore, ROLE_LABEL } from "../store";
@@ -11,7 +11,7 @@ import {
 } from "../lib/format";
 import type { Admin, AdminRole, AuditEntry, Branch, ConsultationReview, PermissionGroup, PermissionKey, ProductReview, Role, ServiceReview, StaffAssignment } from "../lib/types";
 import { SESSION_SLOT_MINUTES } from "../lib/scheduling";
-import { RolesManager, StaffAccessFields, RoleChip, useCatalog, CentreRolesEditor, SignInControls } from "./access";
+import { RolesManager, SignInSecurityTab, StaffAccessFields, RoleChip, useCatalog, CentreRolesEditor, SignInControls } from "./access";
 
 /* ================= BRANCHES ================= */
 const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
@@ -1032,7 +1032,7 @@ type StaffRow = Admin & {
 
 
 export function Roles() {
-  const { can } = useStore();
+  const { can, isSuperAdmin } = useStore();
   const canViewStaff = can("staff.view");
   const canViewRoles = can("roles.view");
   // Land on whichever tab the account can actually see.
@@ -1041,17 +1041,24 @@ export function Roles() {
   const rolesQ = useApi(() => (canViewRoles || canViewStaff ? api.roles.list() : Promise.resolve([] as Role[])), []);
   const roleCount = rolesQ.data?.length;
 
-  const tabs: [string, (number | string)?][] = [];
-  if (canViewStaff) tabs.push(["Staff"]);
-  if (canViewRoles) tabs.push(["Roles & permissions", roleCount]);
-  const showTabs = tabs.length > 1;
-  // Map the visible tab index to which panel to render.
-  const active = showTabs ? tab : (canViewStaff ? 0 : 1);
+  /*
+   * Sign-in security is super-admin-only and by ROLE, not permission: these
+   * switches govern who can get into the panels at all, so they must not be
+   * grantable through a custom role someone assembles later. The server
+   * enforces the same rule.
+   */
+  const panels: { label: string; count?: number | string; render: () => ReactNode }[] = [];
+  if (canViewStaff) panels.push({ label: "Staff", render: () => <StaffTab roles={rolesQ.data ?? []} /> });
+  if (canViewRoles) panels.push({ label: "Roles & permissions", count: roleCount, render: () => <RolesManager /> });
+  if (isSuperAdmin) panels.push({ label: "Sign-in security", render: () => <SignInSecurityTab /> });
+
+  const showTabs = panels.length > 1;
+  const active = Math.min(tab, panels.length - 1);
 
   return (
     <Page title="Staff & roles" sub="Who signs into the panel, and exactly what each person can do">
-      {showTabs && <Tabs items={tabs} active={tab} onChange={setTab} />}
-      {active === 0 ? <StaffTab roles={rolesQ.data ?? []} /> : <RolesManager />}
+      {showTabs && <Tabs items={panels.map((p) => [p.label, p.count] as [string, (number | string)?])} active={active} onChange={setTab} />}
+      {panels[active]?.render() ?? null}
     </Page>
   );
 }

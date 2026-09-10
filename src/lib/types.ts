@@ -1255,11 +1255,20 @@ export type PreConsultForm = {
   drugAllergies?: string | null;
   otherAllergies?: string | null;
   dailyRoutine?: Record<string, string | null>;
-  diet?: { type?: string; [k: string]: unknown };
+  diet?: { type?: string; waterIntakeLiters?: number | null; [k: string]: unknown };
   planningForPregnancy?: boolean;
   lastMenstrualPeriod?: string | null;
   additionalInfo?: Record<string, unknown>;
   doctorName?: string | null;
+  /* Answers the record has always carried but the panel never showed, because
+     nothing in the panel could open a form. See src/preconsult.tsx. */
+  maritalStatus?: string | null;
+  numberOfChildren?: number | null;
+  referralSource?: string | null;
+  referredBy?: string | null;
+  /** "Name|fontStyle" as the guest signed it in the app or at the desk. */
+  clientSignature?: string | null;
+  healthDataConsent?: { accepted?: boolean; acceptedAt?: string | null; consentText?: string };
   status: "Draft" | "Submitted" | "Approved" | "Reviewed" | "Rejected";
   dateOfVisit?: string;
   createdAt?: string;

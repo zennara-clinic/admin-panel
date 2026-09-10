@@ -5,6 +5,7 @@ import { ActiveFilters, Area, AreaChart, Async, B, Btn, CalendarSkeleton, Card, 
 import { LifecycleActions, LIFECYCLE_TOAST, StatusHistory, useLifecycle } from "../lifecycle";
 import { useStore } from "../store";
 import api from "../lib/api";
+import { PreConsultModal } from "../preconsult";
 import { DayBookGrid, TodaysSalesModal } from "./daybook";
 import { InvoiceModal, useOpenInvoice, GuestInvoices } from "./billing";
 import { TemplatePicker } from "./templates";
@@ -18,7 +19,7 @@ import { CLINIC_TZ,
   statusKey, mapToRows, isConsultationBooking, clinicHM, addClinicDays, clinicMonthEnd,
   clinicMonthStart, clinicWeekday, dayKeyDate, fmtDayKey, zenotiDiaryLabel, visitTimes,
 } from "../lib/format";
-import type { ConsultationStage, Booking, Branch, Chat as ChatThread, ChatMessage, Consultation, Doctor, PackageAssignment, User, Package } from "../lib/types";
+import type { ConsultationStage, Booking, Branch, Chat as ChatThread, ChatMessage, Consultation, Doctor, PackageAssignment, PreConsultForm, User, Package } from "../lib/types";
 
 /* ================= OVERVIEW ================= */
 const RANGE_PRESETS: [string, () => { startDate: string; endDate: string }][] = [
@@ -2022,6 +2023,8 @@ export function PatientDetail() {
   const [selBooking, setSelBooking] = useState<string | null>(null);
   const [grantOpen, setGrantOpen] = useState(false);
   const [payOpen, setPayOpen] = useState(false);
+  /** The pre-consult the doctor clicked open in the record table. */
+  const [openForm, setOpenForm] = useState<PreConsultForm | null>(null);
   const [sp, setSp] = useSearchParams();
   // Opened from the list (router state) or from a notification / link (?id=).
   const routeState = loc.state as { id?: string; returnTo?: string } | null;
@@ -2132,10 +2135,15 @@ export function PatientDetail() {
           /* clinical records */
           recordCount === 0
             ? <Empty key="r" title="No clinical records" hint="Pre-consult forms, consultation notes and service cards appear here as they are written." />
-            : <DataTable key="r" cols={["Date", "Record", "Dermatologist", "Status"]} rows={[
+            : <DataTable key="r" cols={["Date", "Record", "Dermatologist", "Status"]}
+                /* A pre-consult is the first n rows, so a click on one of them
+                   opens it. The rest of this table is already-summarised text
+                   with nothing more to show. */
+                onRow={(i) => { if (i < forms.length) setOpenForm(forms[i]); }}
+                rows={[
                 ...forms.map((f) => [
                   fmtDate(f.dateOfVisit || f.createdAt),
-                  "Pre-consult form",
+                  <span key={`pcf${f._id}`} className="font-semibold text-primary underline decoration-primary/30 underline-offset-2">Pre-consult form</span>,
                   f.doctorName ?? "—",
                   <Tag key={f._id} kind={f.status === "Approved" || f.status === "Reviewed" ? "ok" : f.status === "Rejected" ? "err" : "warn"}>{f.status}</Tag>,
                 ]),
@@ -2487,6 +2495,7 @@ export function PatientDetail() {
             <RecordMembershipPaymentModal open={payOpen} onClose={() => setPayOpen(false)} user={p} onDone={() => { setPayOpen(false); q.reload(); }} />
             <EditPatientModal open={editOpen} onClose={() => setEditOpen(false)} user={p} onSaved={q.reload} />
             <BookingDrawer id={selBooking} onClose={() => setSelBooking(null)} onChanged={q.reload} />
+            <PreConsultModal form={openForm} open={!!openForm} onClose={() => setOpenForm(null)} />
           </Page>
         );
       }}
