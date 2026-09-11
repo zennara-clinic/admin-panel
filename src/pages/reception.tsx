@@ -1,6 +1,6 @@
 import {
   ArrowDown, ArrowUp, CalendarDays, CalendarRange, Check, CheckCircle2, ChevronLeft, ChevronRight, IndianRupee, LayoutGrid,
-  List as ListIcon, Maximize2, Minimize2, Printer, Sparkles, Stethoscope, UserPlus, X, type LucideIcon,
+  List as ListIcon, MapPin, Maximize2, Minimize2, Printer, Sparkles, Stethoscope, UserPlus, X, type LucideIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -1182,6 +1182,37 @@ function ViewSwitch({ view, onChange }: { view: TodayView; onChange: (v: TodayVi
   );
 }
 
+/**
+ * The clinics as one row — a single tap to move the book between centres,
+ * even in full screen where the panel's header picker is out of sight. Uses
+ * the same store as that picker, so the whole panel follows the choice.
+ * Pharmacies and the training centre are stock locations and never listed.
+ */
+function CentreSwitch() {
+  const { clinics, branchId, setBranchById, toast } = useStore();
+  if (!clinics.length) return null;
+  const options = [{ id: "", name: "All branches" }, ...clinics.map((c) => ({ id: c._id, name: c.name }))];
+  const pick = (id: string, name: string) => {
+    if (id === branchId) return;
+    setBranchById(id);
+    toast(id ? `Switched to ${name}` : "Showing all branches");
+  };
+  return (
+    <div role="radiogroup" aria-label="Centre" className="flex max-w-full overflow-x-auto rounded-(--radius-btn) border border-border bg-sage p-0.5">
+      {options.map((o) => {
+        const on = branchId === o.id;
+        return (
+          <button key={o.id || "all"} type="button" role="radio" aria-checked={on} onClick={() => pick(o.id, o.name)}
+            className={`flex items-center gap-1.5 whitespace-nowrap rounded-[10px] px-3 py-1.5 text-[12.5px] font-bold transition-colors ${
+              on ? "bg-surface text-primary shadow-[0_1px_3px_rgba(3,47,34,0.12)]" : "text-ink3 hover:text-ink"}`}>
+            {on && <MapPin size={13} aria-hidden />}{o.name}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function OthersButton({ active, onClick }: { active: boolean; onClick: () => void }) {
   return (
     <button type="button" onClick={onClick} aria-haspopup="dialog"
@@ -1532,9 +1563,16 @@ export function Today() {
               ? createPortal(
                   <div className="fixed inset-0 z-[60] flex flex-col gap-3 bg-bg p-3 sm:p-4" role="region" aria-label="Appointment book, full screen">
                     <div className="flex flex-wrap items-center gap-2">
-                      <div className="mr-auto min-w-0">
-                        <div className="text-[16px] font-extrabold leading-tight">Appointment book</div>
-                        <div className="text-[11.5px] text-ink3">{branch || "All branches"} · {countLabel}</div>
+                      <div className="mr-auto flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+                        <div className="min-w-0">
+                          <div className="text-[16px] font-extrabold leading-tight">Appointment book</div>
+                          <div className="flex items-center gap-1.5 text-[11.5px] text-ink3">
+                            {branch || "All branches"} · {bookingsQ.loading ? "loading…" : countLabel}
+                            {bookingsQ.loading && <Spinner className="h-3 w-3" />}
+                          </div>
+                        </div>
+                        {/* Switch centre without leaving full screen. */}
+                        <CentreSwitch />
                       </div>
                       <DateNav day={day} onChange={setDay} />
                       <OthersButton active={!!kind} onClick={() => setOthersOpen(true)} />
