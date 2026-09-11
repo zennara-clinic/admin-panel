@@ -543,12 +543,23 @@ export function DayBookGrid({ date, bookings, onOpen, onChanged, onNewAt, onInvo
       <div ref={scroller} className={fill ? "min-h-0 flex-1 overflow-auto" : "overflow-x-auto"}>
         <div style={{ width: LEFT_W + cols * COL_W, position: "relative" }}>
           {/* header */}
-          <div className="sticky top-0 z-[3] flex border-b border-border bg-ivory">
-            <div className="shrink-0 border-r border-border px-3 py-2 text-[11px] font-bold" style={{ width: LEFT_W }}>{book?.branch?.name ?? "All centres"}</div>
+          {/*
+           * Layers, bottom to top: cards → the "now" line → the pinned
+           * dermatologist column → the time ruler. The name column stays put
+           * while the schedule slides under it; the ruler stays put while the
+           * rows scroll under it (full screen). The corner cell is both.
+           */}
+          <div className="sticky top-0 z-[6] flex border-b border-border bg-ivory">
+            <div className="sticky left-0 z-[2] shrink-0 border-r border-border bg-ivory px-3 py-2 text-[11px] font-bold shadow-[6px_0_10px_-8px_rgba(3,47,34,0.35)]" style={{ width: LEFT_W }}>{book?.branch?.name ?? "All centres"}</div>
             {/* Two-line axis, the way Zenoti heads its book: the hour named in
                 full on top, each quarter marked underneath, so a card that
                 starts at 11:45 can be read off the ruler instead of counted. */}
             <div className="relative" style={{ width: cols * COL_W, height: 34 }}>
+              {/* The clock sits in the ruler, above the line it heads. */}
+              {isToday && nowMin >= axisStart && nowMin <= axisEnd && (
+                <span className="pointer-events-none absolute top-[3px] z-[1] -translate-x-1/2 rounded bg-err px-1 font-mono text-[9.5px] font-bold text-white"
+                  style={{ left: x(nowMin) }}>{toHHMM(nowMin)}</span>
+              )}
               {Array.from({ length: Math.ceil((axisEnd - hourFloor(axisStart)) / 60) }, (_, i) => hourFloor(axisStart) + i * 60)
                 .filter((h) => h + 60 > axisStart)
                 .map((h) => (
@@ -578,7 +589,7 @@ export function DayBookGrid({ date, bookings, onOpen, onChanged, onNewAt, onInvo
            */}
           {shifts.loading && !book && Array.from({ length: 5 }, (_, i) => (
             <div key={`sk${i}`} className="flex animate-pulse border-b border-border last:border-0">
-              <div className="shrink-0 border-r border-border px-3 py-3" style={{ width: LEFT_W }}>
+              <div className="sticky left-0 z-[5] shrink-0 border-r border-border bg-surface px-3 py-3" style={{ width: LEFT_W }}>
                 <div className="flex items-center gap-2">
                   <span className="inline-block h-6 w-1 rounded-full bg-border" />
                   <div className="min-w-0 flex-1">
@@ -601,7 +612,7 @@ export function DayBookGrid({ date, bookings, onOpen, onChanged, onNewAt, onInvo
             const blocks = p.row?.blocks ?? [];
             return (
               <div key={p.key} className="flex border-b border-border last:border-0">
-                <div className="shrink-0 border-r border-border px-3 py-2" style={{ width: LEFT_W }}>
+                <div className="sticky left-0 z-[5] shrink-0 border-r border-border bg-surface px-3 py-2 shadow-[6px_0_10px_-8px_rgba(3,47,34,0.35)]" style={{ width: LEFT_W }}>
                   <div className="flex items-center gap-2">
                     <span className="inline-block h-6 w-1 rounded-full" style={{ background: p.row ? (p.row.tier === "senior-consultant" ? "#e0c391" : "#0b4a37") : "#c9c9c9" }} />
                     <div className="min-w-0">
@@ -661,9 +672,8 @@ export function DayBookGrid({ date, bookings, onOpen, onChanged, onNewAt, onInvo
 
           {/* now line */}
           {isToday && nowMin >= axisStart && nowMin <= axisEnd && (
-            <div className="pointer-events-none absolute top-0 z-[4] h-full border-l-2 border-dotted border-err" style={{ left: LEFT_W + x(nowMin) }}>
-              <span className="absolute -left-[22px] top-[6px] rounded bg-err px-1 font-mono text-[9.5px] font-bold text-white">{toHHMM(nowMin)}</span>
-            </div>
+            // Under the ruler and the pinned name column; its clock label lives in the ruler.
+            <div className="pointer-events-none absolute top-0 z-[4] h-full border-l-2 border-dotted border-err" style={{ left: LEFT_W + x(nowMin) }} />
           )}
         </div>
       </div>

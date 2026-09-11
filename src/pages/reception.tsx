@@ -1,5 +1,5 @@
 import {
-  ArrowDown, ArrowUp, CalendarDays, CalendarRange, Check, CheckCircle2, ChevronLeft, ChevronRight, IndianRupee, LayoutGrid,
+  ArrowDown, ArrowUp, CalendarDays, CalendarRange, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, IndianRupee, LayoutGrid,
   List as ListIcon, MapPin, Maximize2, Minimize2, Printer, Sparkles, Stethoscope, UserPlus, X, type LucideIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -1183,32 +1183,66 @@ function ViewSwitch({ view, onChange }: { view: TodayView; onChange: (v: TodayVi
 }
 
 /**
- * The clinics as one row — a single tap to move the book between centres,
- * even in full screen where the panel's header picker is out of sight. Uses
- * the same store as that picker, so the whole panel follows the choice.
- * Pharmacies and the training centre are stock locations and never listed.
+ * Centre dropdown — moves the book between centres, even in full screen where
+ * the panel's header picker is out of sight. Uses the same store as that
+ * picker, so the whole panel follows the choice. Pharmacies and the training
+ * centre are stock locations and are never listed.
  */
-function CentreSwitch() {
-  const { clinics, branchId, setBranchById, toast } = useStore();
+function CentreSelect() {
+  const { clinics, branch, branchId, setBranchById, toast } = useStore();
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      // Close the list only — not full screen behind it.
+      e.stopImmediatePropagation();
+      setOpen(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open]);
+
   if (!clinics.length) return null;
   const options = [{ id: "", name: "All branches" }, ...clinics.map((c) => ({ id: c._id, name: c.name }))];
   const pick = (id: string, name: string) => {
+    setOpen(false);
     if (id === branchId) return;
     setBranchById(id);
     toast(id ? `Switched to ${name}` : "Showing all branches");
   };
+
   return (
-    <div role="radiogroup" aria-label="Centre" className="flex max-w-full overflow-x-auto rounded-(--radius-btn) border border-border bg-sage p-0.5">
-      {options.map((o) => {
-        const on = branchId === o.id;
-        return (
-          <button key={o.id || "all"} type="button" role="radio" aria-checked={on} onClick={() => pick(o.id, o.name)}
-            className={`flex items-center gap-1.5 whitespace-nowrap rounded-[10px] px-3 py-1.5 text-[12.5px] font-bold transition-colors ${
-              on ? "bg-surface text-primary shadow-[0_1px_3px_rgba(3,47,34,0.12)]" : "text-ink3 hover:text-ink"}`}>
-            {on && <MapPin size={13} aria-hidden />}{o.name}
-          </button>
-        );
-      })}
+    <div className="relative">
+      <button type="button" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-2 rounded-(--radius-btn) border border-border bg-surface py-2 pl-3 pr-2.5 text-[12.5px] font-bold text-ink transition-colors hover:border-gold-dark">
+        <MapPin size={14} className="text-primary" aria-hidden />
+        <span className="max-w-[200px] truncate">{branchId ? branch : "All branches"}</span>
+        <ChevronDown size={14} className={`text-ink3 transition-transform ${open ? "rotate-180" : ""}`} aria-hidden />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-[94]" onClick={() => setOpen(false)} />
+          <div role="listbox" aria-label="Centre"
+            className="absolute left-0 z-[95] mt-1.5 w-[250px] overflow-hidden rounded-xl border border-border bg-surface py-1.5 shadow-[0_18px_45px_rgba(3,47,34,0.18)] motion-safe:animate-[fade-in_.12s_ease-out]">
+            <div className="px-3 pb-1 pt-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-ink3">Centre</div>
+            {options.map((o) => {
+              const on = branchId === o.id;
+              return (
+                <button key={o.id || "all"} type="button" role="option" aria-selected={on} onClick={() => pick(o.id, o.name)}
+                  className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] transition-colors hover:bg-ivory ${on ? "font-bold text-primary" : "font-medium text-ink2"}`}>
+                  <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg ${on ? "bg-primary text-white" : "bg-sage text-primary"}`}>
+                    {o.id ? <MapPin size={13} aria-hidden /> : <LayoutGrid size={13} aria-hidden />}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{o.name}</span>
+                  {on && <Check size={14} aria-hidden />}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1572,7 +1606,7 @@ export function Today() {
                           </div>
                         </div>
                         {/* Switch centre without leaving full screen. */}
-                        <CentreSwitch />
+                        <CentreSelect />
                       </div>
                       <DateNav day={day} onChange={setDay} />
                       <OthersButton active={!!kind} onClick={() => setOthersOpen(true)} />
