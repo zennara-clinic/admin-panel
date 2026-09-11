@@ -349,7 +349,8 @@ export function zenotiDiaryLabel(src?: {
   if (s === "vanished") return "Removed from diary";
   const base = src.statusLabel
     || (s === "-2" ? "No show" : s === "-1" ? "Cancelled" : s === "21" ? "Voided" : s === "1" ? "Serviced (closed)"
-      : s === "2" ? "Checked in" : s === "3" ? "Confirmed" : s === "4" ? "In service" : s === "11" ? "Reserved" : s === "0" ? "Booked" : s || "—");
+      // 4 is Zenoti's "Confirm" — being in the room is progress 1, shown below.
+      : s === "2" ? "Checked in" : s === "3" ? "Confirmed" : s === "4" ? "Confirmed" : s === "11" ? "Reserved" : s === "0" ? "Booked" : s || "—");
   const p = Number(src.progress ?? 0);
   return p === 2 ? `${base} · service completed` : p === 1 ? `${base} · service started` : base;
 }
