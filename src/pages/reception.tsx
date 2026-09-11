@@ -1532,14 +1532,21 @@ export function Today() {
   useEffect(() => { if (view !== "calendar") setFullscreen(false); }, [view]);
   useEffect(() => {
     if (!fullscreen) return;
-    const prev = document.body.style.overflow;
+    // Lock both scroll roots, so the page behind shows no scrollbar either.
+    const prevBody = document.body.style.overflow;
+    const prevHtml = document.documentElement.style.overflow;
     document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
     const onKey = (e: KeyboardEvent) => {
       // An open card or dialog owns Escape; only a bare book leaves full screen.
       if (e.key === "Escape" && !document.querySelector('[role="dialog"]')) setFullscreen(false);
     };
     window.addEventListener("keydown", onKey);
-    return () => { document.body.style.overflow = prev; window.removeEventListener("keydown", onKey); };
+    return () => {
+      document.body.style.overflow = prevBody;
+      document.documentElement.style.overflow = prevHtml;
+      window.removeEventListener("keydown", onKey);
+    };
   }, [fullscreen]);
 
   const printList = () => {

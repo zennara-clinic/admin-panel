@@ -487,6 +487,13 @@ export function DayBookGrid({ date, bookings, onOpen, onChanged, onNewAt, onInvo
   }, [overlay]);
   const [now, setNow] = useState(() => new Date());
   const scroller = useRef<HTMLDivElement>(null);
+  /*
+   * The book scrolls with its scrollbars hidden. A trackpad or wheel scrolls
+   * it as before; with a mouse, press on empty schedule and drag to pan.
+   * Cards and other buttons keep their clicks — dragging starts only off them.
+   */
+  const pan = useRef<{ x: number; y: number; left: number; top: number; moved: boolean } | null>(null);
+  const [panning, setPanning] = useState(false);
   useEffect(() => { const t = window.setInterval(() => setNow(new Date()), 60000); return () => window.clearInterval(t); }, []);
 
   const book: DayBook | undefined = shifts.data;
@@ -540,7 +547,33 @@ export function DayBookGrid({ date, bookings, onOpen, onChanged, onNewAt, onInvo
         <span className="ml-auto hidden lg:inline">Click a card for its actions · right-click a free cell to book or block it</span>
       </div>
 
-      <div ref={scroller} className={fill ? "min-h-0 flex-1 overflow-auto" : "overflow-x-auto"}>
+      <div ref={scroller}
+        className={`no-scrollbar ${fill ? "min-h-0 flex-1 overflow-auto" : "overflow-x-auto"} ${panning ? "cursor-grabbing select-none" : "cursor-grab"}`}
+        onPointerDown={(e) => {
+          // Mouse only — touch and trackpads already scroll natively.
+          if (e.pointerType !== "mouse" || e.button !== 0) return;
+          if ((e.target as HTMLElement).closest("button, a, input, [role='dialog']")) return;
+          const el = scroller.current;
+          if (!el) return;
+          pan.current = { x: e.clientX, y: e.clientY, left: el.scrollLeft, top: el.scrollTop, moved: false };
+        }}
+        onPointerMove={(e) => {
+          const p = pan.current;
+          const el = scroller.current;
+          if (!p || !el) return;
+          const dx = e.clientX - p.x;
+          const dy = e.clientY - p.y;
+          if (!p.moved) {
+            if (Math.abs(dx) + Math.abs(dy) < 5) return; // a click, not a drag
+            p.moved = true;
+            setPanning(true);
+            el.setPointerCapture(e.pointerId);
+          }
+          el.scrollLeft = p.left - dx;
+          el.scrollTop = p.top - dy;
+        }}
+        onPointerUp={() => { pan.current = null; setPanning(false); }}
+        onPointerCancel={() => { pan.current = null; setPanning(false); }}>
         <div style={{ width: LEFT_W + cols * COL_W, position: "relative" }}>
           {/* header */}
           {/*
@@ -654,7 +687,7 @@ export function DayBookGrid({ date, bookings, onOpen, onChanged, onNewAt, onInvo
                       <button key={b._id} title={tooltipText(b)}
                         onClick={(e) => setQuick({ b, x: e.clientX, y: e.clientY })}
                         onContextMenu={(e) => { e.preventDefault(); setQuick({ b, x: e.clientX, y: e.clientY }); }}
-                        className={`absolute overflow-hidden rounded-md border border-l-[3px] border-black/10 px-1.5 text-left text-[10.5px] leading-tight shadow-sm transition-shadow hover:z-[2] hover:shadow-md ${st.bg} ${st.text}`}
+                        className={`absolute cursor-pointer overflow-hidden rounded-md border border-l-[3px] border-black/10 px-1.5 text-left text-[10.5px] leading-tight shadow-sm transition-shadow hover:z-[2] hover:shadow-md ${st.bg} ${st.text}`}
                         style={{ left: x(start) + 1, width: Math.max(COL_W - 2, x(end) - x(start) - 2), top: 3 + lane * ROW_H, height: ROW_H - 6, borderLeftColor: st.swatch }}>
                         <div className="flex items-center truncate">
                           <b className="truncate text-[11px] font-bold">{b.fullName}</b>

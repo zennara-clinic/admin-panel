@@ -138,6 +138,15 @@ body {
 }
 
 /* Print: the page body only — no sidebar, header, search or buttons. */
+/* Scrolls, but shows no scrollbar (the day book pans by wheel, trackpad or drag). */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 /* Side sheets slide in from the right edge; the dim layer fades. */
 @keyframes sheet-in {
   from { transform: translateX(28px); opacity: 0; }
