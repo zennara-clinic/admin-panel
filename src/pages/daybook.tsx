@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { IndianRupee, Package, RotateCw, Star, StickyNote, UserCheck, X, type LucideIcon } from "lucide-react";
+import {
+  ArrowUpRight, Clock3, IndianRupee, Package, Phone, RotateCw, Sparkles, Star, Stethoscope, StickyNote, UserCheck, X, type LucideIcon,
+} from "lucide-react";
 import { LifecycleActions, LIFECYCLE_TOAST, useLifecycle } from "../lifecycle";
 import { Btn, Tag, Modal, Note, In, Sel, Area, B, SecH, DataTable, Async } from "../ui";
 import { useStore } from "../store";
@@ -117,9 +119,18 @@ function tooltipText(b: Booking) {
 
 /* ------------------------------ quick card ------------------------------ */
 
-function QuickCard({ b, anchor, onClose, onOpen, onChanged, onCheckIn, onCheckOut, onInvoice }: {
+function DetailRow({ icon: Icon, children }: { icon: LucideIcon; children: ReactNode }) {
+  return (
+    <div className="flex items-start gap-2.5">
+      <Icon size={14} strokeWidth={2} className="mt-[3px] shrink-0 text-ink3" aria-hidden />
+      <div className="min-w-0 flex-1">{children}</div>
+    </div>
+  );
+}
+
+function QuickCard({ b, anchor, onClose, onOpen, onChanged, onInvoice }: {
   b: Booking; anchor: { x: number; y: number }; onClose: () => void; onOpen: () => void; onChanged: () => void;
-  onCheckIn: () => void; onCheckOut: () => void; onInvoice: () => void;
+  onInvoice: () => void;
 }) {
   const { toast, audit, can } = useStore();
   const nav = useNavigate();
@@ -134,73 +145,124 @@ function QuickCard({ b, anchor, onClose, onOpen, onChanged, onCheckIn, onCheckOu
   const idOf = (v: unknown) => (typeof v === "string" ? v : (v as { _id?: string })?._id ?? "");
 
   /*
-   * The desk's actions come from the SERVER, not a list kept here.
+   * ONE set of status actions, and they come from the SERVER.
    *
-   * This card hand-rolled its own, and it had already drifted: no entry at all
-   * for "Checked In", "Undo check-in" shown for a booking that was actually
-   * In Progress (that undo is undo-start), and — since Zenoti's AA102 refusal
-   * was honoured on 2026-09-08 — an "Undo check-out" that the backend no
-   * longer accepts, so pressing it only produced an error. lifecycleState()
-   * already answers exactly this question, honours the Zenoti-owned rules, and
-   * is what the reception drawer uses.
+   * This card used to show the server's actions AND a hand-kept row of
+   * "Check in / Start session / Complete session" buttons underneath that only
+   * opened the booking drawer — two buttons with the same name doing different
+   * things. lifecycleState() answers which actions are legal right now, honours
+   * the Zenoti-owned rules, and every action it offers is written to Zenoti in
+   * the same request, so these buttons are the only ones the desk needs.
    */
-  const { state: lifecycleState, reload: reloadLifecycle } = useLifecycle(b._id);
+  const life = useLifecycle(b._id);
+
+  // Measure after render so the whole card stays on screen, however many
+  // actions the server offered.
+  const box = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ left: anchor.x, top: anchor.y });
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const { width, height } = el.getBoundingClientRect();
+    setPos({
+      left: Math.max(8, Math.min(anchor.x + 10, window.innerWidth - width - 8)),
+      top: Math.max(8, Math.min(anchor.y + 10, window.innerHeight - height - 8)),
+    });
+  }, [anchor.x, anchor.y, life.state, life.loading, life.error, act.error]);
+
+  const startMin = d ? toMin(clinicHM(d)) : null;
+  const initials = b.fullName.split(" ").filter(Boolean).map((p) => p[0]).slice(0, 2).join("").toUpperCase();
+  const createdVia = b.source === "app" ? "Booked in the app" : b.source === "zenoti" ? "Booked in Zenoti" : "Booked at reception";
+  const note = b.notes || b.adminNotes;
+  const guestId = idOf(b.userId);
+  const payment = b.invoiceId
+    ? { label: "Show invoice", kind: "ghost" as const, run: onInvoice }
+    : b.paymentStatus === "paid"
+      ? { label: "Show payment", kind: "ghost" as const, run: onOpen }
+      : canManage && !["Cancelled", "No Show"].includes(b.status)
+        ? { label: "Take payment", kind: "gold" as const, run: onInvoice }
+        : null;
 
   return (
     <>
       <div className="fixed inset-0 z-[80]" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
-      <div role="dialog" aria-label={`Appointment for ${b.fullName}`}
-        className="fixed z-[81] w-[320px] overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl"
-        style={{
-          left: Math.max(8, Math.min(anchor.x, window.innerWidth - 340)),
-          top: Math.max(8, Math.min(anchor.y, window.innerHeight - 360)),
-        }}>
-        <div className="flex items-start gap-3 bg-side px-4 py-3 text-white">
-          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white/15 text-[12px] font-bold">{b.fullName.split(" ").map((p) => p[0]).slice(0, 2).join("")}</div>
+      <div ref={box} role="dialog" aria-label={`Appointment for ${b.fullName}`}
+        className="fixed z-[81] w-[340px] max-w-[calc(100vw-16px)] overflow-hidden rounded-2xl border border-border bg-surface shadow-[0_24px_60px_rgba(3,47,34,0.22)] motion-safe:animate-[fade-in_.12s_ease-out]"
+        style={pos}>
+        <div className="h-1.5" style={{ background: st.swatch }} />
+
+        <div className="flex items-start gap-3 px-4 pb-3 pt-3">
+          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-primary text-[13px] font-bold text-white">{initials || "?"}</div>
           <div className="min-w-0 flex-1">
-            <div className="truncate text-[14px] font-bold">{b.fullName}</div>
-            <div className="text-[11.5px] opacity-80">{b.mobileNumber || "no phone"}{b.isPackageIncluded ? " · package" : ""}</div>
-          </div>
-          <button className="text-[11px] underline-offset-2 hover:underline" onClick={() => nav("/patient", { state: { id: idOf(b.userId) } })}>Profile</button>
-        </div>
-        <div className="grid gap-2 px-4 py-3 text-[12.5px]">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[10.5px] font-bold uppercase tracking-wider text-ink3">Service details</span>
-            <span className={`rounded-full px-2 py-0.5 text-[10.5px] font-bold ${st.bg} ${st.text}`}>{st.label}</span>
-          </div>
-          <div><B>{bookingServiceName(b, "Service")}</B></div>
-          <div className="text-ink2">{d ? `${label12(toMin(clinicHM(d)))} – ${label12(toMin(clinicHM(d)) + durationOf(b))}` : "time TBC"} <span className="text-ink3">|</span> {bookingProvider(b)}</div>
-          {(b.notes || b.adminNotes) && <div className="rounded-lg bg-ivory px-2.5 py-1.5 text-[11.5px] text-ink2"><span className="text-[10px] font-bold uppercase tracking-wider text-ink3">Notes</span><br />{b.notes || b.adminNotes}</div>}
-          {canManage && (
-            <div className="grid gap-1.5">
-              <LifecycleActions
-                state={lifecycleState}
-                busy={act.busy}
-                canOverride={canManage}
-                onRun={async (action, over) => {
-                  const ok = await act.mutate(
-                    () => api.bookings.lifecycle(b._id, { action, ...over })
-                      .then(() => audit("BOOKING_UPDATED", `${b.fullName} · ${action}`, { bookingId: b._id })),
-                    LIFECYCLE_TOAST[action],
-                  );
-                  await reloadLifecycle();
-                  return Boolean(ok);
-                }}
-              />
+            <div className="truncate text-[15px] font-extrabold leading-tight text-ink">{b.fullName}</div>
+            <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11.5px] text-ink3">
+              {b.mobileNumber && <span className="inline-flex items-center gap-1"><Phone size={11} aria-hidden />{b.mobileNumber}</span>}
+              {b.isPackageIncluded && <span className="inline-flex items-center gap-1"><Package size={11} aria-hidden />Package</span>}
+              {guestId && (
+                <button type="button" className="inline-flex items-center gap-0.5 font-semibold text-primary hover:underline"
+                  onClick={() => nav("/patient", { state: { id: guestId } })}>
+                  Profile<ArrowUpRight size={11} aria-hidden />
+                </button>
+              )}
             </div>
-          )}
-          {act.error && <Note kind="crit" className="my-0">{act.error}</Note>}
-          <div className="grid grid-cols-2 gap-2 pt-1">
-            {canManage && (b.status === "Confirmed" || b.status === "Rescheduled" || b.status === "No Show") && <Btn onClick={() => { onClose(); onCheckIn(); }}>Check in</Btn>}
-            {canManage && b.status === "Checked In" && <Btn onClick={() => { onClose(); onCheckIn(); }}>Start session</Btn>}
-            {canManage && b.status === "In Progress" && <Btn kind="gold" onClick={() => { onClose(); onCheckOut(); }}>Complete session</Btn>}
-            {b.invoiceId
-              ? <Btn kind="ghost" onClick={() => { onClose(); onInvoice(); }}>Show invoice</Btn>
-              : b.paymentStatus === "paid"
-                ? <Btn kind="ghost" onClick={() => { onClose(); onOpen(); }}>Show payment</Btn>
-                : canManage && !["Cancelled", "No Show"].includes(b.status) && <Btn kind="gold" onClick={() => { onClose(); onInvoice(); }}>Take payment</Btn>}
-            <Btn kind="ghost" onClick={() => { onClose(); onOpen(); }}>Open booking</Btn>
           </div>
+          <button type="button" aria-label="Close" onClick={onClose}
+            className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-ink3 hover:bg-sage hover:text-ink"><X size={14} /></button>
+        </div>
+
+        <div className="mx-4 grid gap-2 rounded-xl bg-ivory px-3 py-2.5 text-[12.5px] text-ink">
+          <div className="flex items-center justify-between gap-2">
+            <span className={`rounded-full px-2 py-0.5 text-[10.5px] font-bold ${st.bg} ${st.text}`}>{st.label}</span>
+            <span className="truncate text-[10.5px] text-ink3">{createdVia}</span>
+          </div>
+          <DetailRow icon={Sparkles}><span className="font-semibold">{bookingServiceName(b, "Service")}</span></DetailRow>
+          <DetailRow icon={Clock3}>{startMin !== null ? `${label12(startMin)} – ${label12(startMin + durationOf(b))}` : "Time to be confirmed"}</DetailRow>
+          <DetailRow icon={Stethoscope}>{bookingProvider(b)}</DetailRow>
+          {note && <DetailRow icon={StickyNote}><span className="line-clamp-3 text-ink2">{note}</span></DetailRow>}
+        </div>
+
+        {canManage && (
+          <div className="grid gap-2 px-4 pt-3">
+            {life.state ? (
+              life.state.actions.length ? (
+                <LifecycleActions
+                  variant="card"
+                  state={life.state}
+                  busy={act.busy}
+                  canOverride={canManage}
+                  onRun={async (action, over) => {
+                    const ok = await act.mutate(
+                      () => api.bookings.lifecycle(b._id, { action, ...over })
+                        .then(() => audit("BOOKING_UPDATED", `${b.fullName} · ${action}`, { bookingId: b._id })),
+                      LIFECYCLE_TOAST[action],
+                    );
+                    await life.reload();
+                    return Boolean(ok);
+                  }}
+                />
+              ) : (
+                <div className="text-center text-[11.5px] text-ink3">No status changes left for this appointment.</div>
+              )
+            ) : life.loading ? (
+              <div className="grid gap-1.5" aria-label="Loading actions">
+                <div className="h-10 animate-pulse rounded-(--radius-btn) bg-sage" />
+                <div className="h-7 w-2/3 animate-pulse rounded-lg bg-sage/70" />
+              </div>
+            ) : life.error ? (
+              <Note kind="crit" className="my-0">
+                Couldn't load what can be done here.{" "}
+                <button type="button" className="font-bold underline" onClick={() => void life.reload()}>Retry</button>
+              </Note>
+            ) : null}
+            {act.error && <Note kind="crit" className="my-0">{act.error}</Note>}
+          </div>
+        )}
+
+        <div className="mt-3 flex gap-2 border-t border-border bg-ivory/60 px-4 py-3">
+          {payment && (
+            <Btn kind={payment.kind} className="flex-1 !px-3 !py-2 !text-[12.5px]" onClick={() => { onClose(); payment.run(); }}>{payment.label}</Btn>
+          )}
+          <Btn kind="ghost" className="flex-1 !px-3 !py-2 !text-[12.5px]" onClick={() => { onClose(); onOpen(); }}>Open booking</Btn>
         </div>
       </div>
     </>
@@ -382,17 +444,17 @@ export function TodaysSalesModal({ open, onClose, date }: { open: boolean; onClo
 
 /* ------------------------------ the grid ------------------------------- */
 
-export function DayBookGrid({ date, bookings, onOpen, onChanged, onNewAt, onCheckIn, onCheckOut, onInvoice, filterKind }: {
+export function DayBookGrid({ date, bookings, onOpen, onChanged, onNewAt, onInvoice, filterKind, fill = false }: {
   date: string;
   bookings: Booking[];
   onOpen: (id: string) => void;
   onChanged: () => void;
   onNewAt: (preset: { doctorId?: string; doctorName?: string; time?: string }) => void;
-  onCheckIn: (id: string) => void;
-  onCheckOut: (id: string) => void;
   /** "Take payment" / "Show invoice" — opens the bill for this visit. */
   onInvoice: (id: string) => void;
   filterKind?: "" | "consultation" | "treatment";
+  /** Stretch to the parent's height and scroll inside — the full-screen book. */
+  fill?: boolean;
 }) {
   const { branchId, can, toast } = useStore();
   const shifts = useApi(() => api.schedules.dayShifts(date, branchId || null), [date, branchId]);
@@ -463,22 +525,22 @@ export function DayBookGrid({ date, bookings, onOpen, onChanged, onNewAt, onChec
   const totals = {
     guests: new Set(rows.map((b) => (typeof b.userId === "string" ? b.userId : (b.userId as { _id?: string })?._id) || b.mobileNumber)).size,
     bookings: rows.length,
-    open: rows.filter((b) => ["Awaiting Confirmation", "Confirmed", "Rescheduled", "In Progress"].includes(b.status)).length,
+    open: rows.filter((b) => ["Awaiting Confirmation", "Confirmed", "Rescheduled", "Checked In", "In Progress"].includes(b.status)).length,
     value: rows.filter((b) => !["Cancelled", "No Show"].includes(b.status)).reduce((n, b) => n + (b.amount || 0), 0),
   };
 
   const legend = ["pending", "confirmed", "checkedin", "inprogress", "completed", "late", "rescheduled", "noshow", "block"] as const;
 
   return (
-    <div className="rounded-(--radius-card) border border-border bg-surface">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-3 py-2 text-[10.5px] text-ink3">
+    <div className={`overflow-hidden rounded-(--radius-card) border border-border bg-surface ${fill ? "flex h-full min-h-0 flex-col" : ""}`}>
+      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-3 py-2 text-[10.5px] text-ink3">
         {legend.map((k) => <span key={k} className="inline-flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-sm border border-black/10" style={{ background: STATE_STYLE[k].swatch }} />{STATE_STYLE[k].label}</span>)}
         <span className="inline-flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-sm bg-[#efe6d2]" />Leave</span>
         <span className="inline-flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-sm bg-ivory" />Off shift</span>
-        <span className="ml-auto">Right-click a free cell to book or block it · hover a card for details</span>
+        <span className="ml-auto hidden lg:inline">Click a card for its actions · right-click a free cell to book or block it</span>
       </div>
 
-      <div ref={scroller} className="overflow-x-auto">
+      <div ref={scroller} className={fill ? "min-h-0 flex-1 overflow-auto" : "overflow-x-auto"}>
         <div style={{ width: LEFT_W + cols * COL_W, position: "relative" }}>
           {/* header */}
           <div className="sticky top-0 z-[3] flex border-b border-border bg-ivory">
@@ -581,8 +643,8 @@ export function DayBookGrid({ date, bookings, onOpen, onChanged, onNewAt, onChec
                       <button key={b._id} title={tooltipText(b)}
                         onClick={(e) => setQuick({ b, x: e.clientX, y: e.clientY })}
                         onContextMenu={(e) => { e.preventDefault(); setQuick({ b, x: e.clientX, y: e.clientY }); }}
-                        className={`absolute overflow-hidden rounded-md border border-black/10 px-1.5 text-left text-[10.5px] leading-tight shadow-sm hover:z-[2] hover:shadow-md ${st.bg} ${st.text}`}
-                        style={{ left: x(start) + 1, width: Math.max(COL_W - 2, x(end) - x(start) - 2), top: 3 + lane * ROW_H, height: ROW_H - 6 }}>
+                        className={`absolute overflow-hidden rounded-md border border-l-[3px] border-black/10 px-1.5 text-left text-[10.5px] leading-tight shadow-sm transition-shadow hover:z-[2] hover:shadow-md ${st.bg} ${st.text}`}
+                        style={{ left: x(start) + 1, width: Math.max(COL_W - 2, x(end) - x(start) - 2), top: 3 + lane * ROW_H, height: ROW_H - 6, borderLeftColor: st.swatch }}>
                         <div className="flex items-center truncate">
                           <b className="truncate text-[11px] font-bold">{b.fullName}</b>
                           {b.mobileNumber && <span className="ml-1 truncate opacity-70">({b.mobileNumber})</span>}
@@ -607,7 +669,7 @@ export function DayBookGrid({ date, bookings, onOpen, onChanged, onNewAt, onChec
       </div>
 
       {/* footer totals */}
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-t border-border bg-ivory px-3 py-2 text-[11.5px] text-ink2">
+      <div className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-1 border-t border-border bg-ivory px-3 py-2 text-[11.5px] text-ink2">
         <span>Total guests: <B>{totals.guests}</B></span>
         <span>Total appointments: <B>{totals.bookings}</B></span>
         <span>Open appointments: <B>{totals.open}</B></span>
@@ -617,8 +679,11 @@ export function DayBookGrid({ date, bookings, onOpen, onChanged, onNewAt, onChec
       </div>
 
       {quick && (
-        <QuickCard b={quick.b} anchor={{ x: quick.x, y: quick.y }} onClose={() => setQuick(null)} onOpen={() => onOpen(quick.b._id)}
-          onChanged={() => { onChanged(); shifts.reload(); }} onCheckIn={() => onCheckIn(quick.b._id)} onCheckOut={() => onCheckOut(quick.b._id)} onInvoice={() => onInvoice(quick.b._id)} />
+        // The booking is re-read from the live list, so an action taken from
+        // the card (checked in, started…) shows on the card straight away.
+        <QuickCard b={bookings.find((x) => x._id === quick.b._id) ?? quick.b} anchor={{ x: quick.x, y: quick.y }}
+          onClose={() => setQuick(null)} onOpen={() => onOpen(quick.b._id)}
+          onChanged={() => { onChanged(); shifts.reload(); }} onInvoice={() => onInvoice(quick.b._id)} />
       )}
       {menu && (
         <ContextMenu at={menu} onClose={() => setMenu(null)} items={[

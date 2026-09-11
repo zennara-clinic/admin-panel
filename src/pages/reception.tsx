@@ -1,12 +1,16 @@
-import { ArrowDown, ArrowUp, Check, CheckCircle2, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ArrowDown, ArrowUp, CalendarDays, CalendarRange, Check, CheckCircle2, ChevronLeft, ChevronRight, IndianRupee, LayoutGrid,
+  List as ListIcon, Maximize2, Minimize2, Printer, Sparkles, Stethoscope, UserPlus, X, type LucideIcon,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { ActiveFilters, Area, AreaChart, Async, B, Btn, CalendarSkeleton, Card, ChartCard, Chips, DataTable, DateRange, Drawer, Empty, ExportModal, FSection, FilterDrawer, GBars, HBars, Hint, In, Loading, Menu, MenuButton, Modal, MultiSelect, Note, NumRange, Otp, Page, Prog, RatingValue, STATUS, SecH, Sel, Spinner, StaleBanner, Stats, Tabs, Tag, exportCsv } from "../ui";
 import { LifecycleActions, LIFECYCLE_TOAST, StatusHistory, useLifecycle } from "../lifecycle";
 import { useStore } from "../store";
 import api from "../lib/api";
 import { PreConsultModal } from "../preconsult";
-import { DayBookGrid, TodaysSalesModal } from "./daybook";
+import { DayBookGrid, STATE_STYLE, TodaysSalesModal } from "./daybook";
 import { InvoiceModal, useOpenInvoice, GuestInvoices } from "./billing";
 import { TemplatePicker } from "./templates";
 import { ZenotiMembershipCard, ZenotiPackageCard, appointmentState, fmtZDate, fmtZWhen, membershipActive, money, pkgActive } from "./zenoti";
@@ -1125,11 +1129,257 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser, preset }:
 }
 
 /* ================= TODAY ================= */
+
+const WEEKDAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+/** "Thu, 11 Sep 2026" for a clinic day key. */
+const dayHeading = (day: string) => `${WEEKDAY_SHORT[clinicWeekday(day)]}, ${fmtDate(dayKeyDate(day))}`;
+
+/** Previous day · the day itself (opens the date picker) · next day · back to today. */
+function DateNav({ day, onChange }: { day: string; onChange: (day: string) => void }) {
+  const picker = useRef<HTMLInputElement>(null);
+  const today = isoDay();
+  const openPicker = () => {
+    const el = picker.current;
+    if (!el) return;
+    try { el.showPicker(); } catch { el.focus(); el.click(); }
+  };
+  const step = "grid w-9 place-items-center text-ink2 transition-colors hover:bg-ivory hover:text-ink";
+  return (
+    <div className="relative flex items-stretch overflow-hidden rounded-(--radius-btn) border border-border bg-surface">
+      <button type="button" aria-label="Previous day" onClick={() => onChange(addClinicDays(day, -1))} className={step}><ChevronLeft size={16} /></button>
+      <button type="button" onClick={openPicker} aria-label={`Pick a date. Showing ${dayHeading(day)}`}
+        className="flex items-center gap-2 border-x border-border px-3 py-2 text-[12.5px] font-bold text-ink transition-colors hover:bg-ivory">
+        <CalendarDays size={15} className="text-primary" aria-hidden />
+        <span className="whitespace-nowrap tabular-nums">{dayHeading(day)}</span>
+      </button>
+      <button type="button" aria-label="Next day" onClick={() => onChange(addClinicDays(day, 1))} className={step}><ChevronRight size={16} /></button>
+      <button type="button" disabled={day === today} onClick={() => onChange(today)}
+        className="border-l border-border px-3 text-[12px] font-bold text-primary transition-colors hover:bg-sage disabled:cursor-default disabled:text-ink3 disabled:hover:bg-transparent">
+        Today
+      </button>
+      <input ref={picker} type="date" value={day} tabIndex={-1} aria-hidden="true"
+        onChange={(e) => { if (e.target.value) onChange(e.target.value); }}
+        className="pointer-events-none absolute bottom-0 left-12 h-px w-px opacity-0" />
+    </div>
+  );
+}
+
+type TodayView = "calendar" | "list";
+
+/** Calendar or list — one at a time. */
+function ViewSwitch({ view, onChange }: { view: TodayView; onChange: (v: TodayView) => void }) {
+  const options: [TodayView, string, LucideIcon][] = [["calendar", "Calendar", CalendarRange], ["list", "List", ListIcon]];
+  return (
+    <div role="tablist" aria-label="View" className="flex rounded-(--radius-btn) border border-border bg-sage p-0.5">
+      {options.map(([v, label, Icon]) => (
+        <button key={v} type="button" role="tab" aria-selected={view === v} onClick={() => onChange(v)}
+          className={`flex items-center gap-1.5 rounded-[10px] px-3 py-1.5 text-[12.5px] font-bold transition-colors ${
+            view === v ? "bg-surface text-primary shadow-[0_1px_3px_rgba(3,47,34,0.12)]" : "text-ink3 hover:text-ink"}`}>
+          <Icon size={14} aria-hidden />{label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function OthersButton({ active, onClick }: { active: boolean; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} aria-haspopup="dialog"
+      className="relative flex items-center gap-2 rounded-(--radius-btn) bg-primary px-4 py-2 text-[12.5px] font-bold text-white transition-colors hover:bg-primary-hover">
+      <LayoutGrid size={15} aria-hidden />Others
+      {active && <span className="absolute -right-1 -top-1 h-3 w-3 rounded-full border-2 border-bg bg-gold" title="Showing part of the day" />}
+    </button>
+  );
+}
+
+/** The floor at a glance, in the day book's own colours. Each figure opens the list filtered to it. */
+function DaySummary({ rows, onPick }: { rows: Booking[]; onPick: (status: string) => void }) {
+  const count = (k: string) => rows.filter((b) => statusKey(b) === k).length;
+  const total = rows.length;
+  const done = count("completed");
+  const cancelled = count("cancelled");
+  const noShow = count("noshow");
+  const rescheduled = count("rescheduled");
+  const live = total - cancelled - noShow;
+  const cells: { label: string; value: number; hint: string; swatch: string; filter: string; alert?: boolean }[] = [
+    { label: "Unconfirmed", value: count("pending"), hint: "needs a call", swatch: STATE_STYLE.pending.swatch, filter: "Pending" },
+    { label: "Expected", value: count("confirmed"), hint: "confirmed, not in yet", swatch: STATE_STYLE.confirmed.swatch, filter: "Confirmed" },
+    { label: "Running late", value: count("late"), hint: "past their slot", swatch: STATE_STYLE.late.swatch, filter: "Late", alert: count("late") > 0 },
+    { label: "Checked in", value: count("checkedin"), hint: "waiting to start", swatch: STATE_STYLE.checkedin.swatch, filter: "Checked in" },
+    { label: "In session", value: count("inprogress"), hint: "on the floor", swatch: STATE_STYLE.inprogress.swatch, filter: "In progress" },
+    { label: "Completed", value: done, hint: `of ${live} on the book`, swatch: STATE_STYLE.completed.swatch, filter: "Completed" },
+  ];
+  const pctDone = live > 0 ? Math.round((done / live) * 100) : 0;
+  return (
+    <div className="mb-4 overflow-hidden rounded-(--radius-card) border border-border bg-surface">
+      <div className="grid grid-cols-2 gap-px bg-border sm:grid-cols-3 xl:grid-cols-6">
+        {cells.map((c) => (
+          <button key={c.label} type="button" onClick={() => onPick(c.filter)} title={`Show ${c.label.toLowerCase()} in the list`}
+            className="flex flex-col items-start gap-1 bg-surface px-4 py-3 text-left transition-colors hover:bg-ivory">
+            <span className="flex items-center gap-1.5 text-[10.5px] font-bold uppercase tracking-[0.08em] text-ink3">
+              <span className="h-2 w-2 rounded-full ring-1 ring-black/10" style={{ background: c.swatch }} />{c.label}
+            </span>
+            <span className={`text-[26px] font-extrabold leading-none tracking-tight tabular-nums ${c.alert ? "text-err" : "text-ink"}`}>{c.value}</span>
+            <span className="text-[11px] text-ink3">{c.hint}</span>
+          </button>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-border px-4 py-2.5 text-[11.5px] text-ink3">
+        <span className="text-[10.5px] font-bold uppercase tracking-[0.08em]">Day progress</span>
+        <div className="h-1.5 min-w-[140px] flex-1 overflow-hidden rounded-full bg-sage" role="progressbar" aria-label="Appointments completed" aria-valuenow={pctDone} aria-valuemin={0} aria-valuemax={100}>
+          <div className="h-full rounded-full bg-primary transition-[width] duration-500" style={{ width: `${pctDone}%` }} />
+        </div>
+        <span><b className="tabular-nums text-ink">{pctDone}%</b> done</span>
+        <span className="tabular-nums">{total} booked</span>
+        {cancelled + noShow > 0 && <span className="tabular-nums">{cancelled} cancelled · {noShow} no-show</span>}
+        {rescheduled > 0 && <span className="tabular-nums">{rescheduled} reschedule request{rescheduled === 1 ? "" : "s"}</span>}
+      </div>
+    </div>
+  );
+}
+
+function ActionTile({ icon: Icon, title, text, onClick, tone, children }: {
+  icon: LucideIcon; title: string; text: string; onClick: () => void; tone?: "gold"; children?: ReactNode;
+}) {
+  return (
+    <button type="button" onClick={onClick}
+      className="group flex w-full items-start gap-3 rounded-xl border border-border bg-surface px-3.5 py-3.5 text-left transition-colors hover:border-gold-dark hover:bg-ivory">
+      <span className={`grid h-10 w-10 shrink-0 place-items-center rounded-lg ${tone === "gold" ? "bg-gold text-primary" : "bg-sage text-primary"}`}>
+        <Icon size={18} aria-hidden />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center justify-between gap-2 text-[14px] font-bold text-ink">
+          {title}
+          <ChevronRight size={15} className="shrink-0 text-ink3 transition-transform group-hover:translate-x-0.5" aria-hidden />
+        </span>
+        <span className="mt-0.5 block text-[12px] leading-snug text-ink3">{text}</span>
+        {children}
+      </span>
+    </button>
+  );
+}
+
+/**
+ * Everything on the Today page that is not the book itself: what the book
+ * shows, a walk-in, the day's takings and the printable list.
+ */
+function OthersDrawer({ open, onClose, day, branch, allRows, kind, onKind, canBook, onWalkIn, onSales, onPrint }: {
+  open: boolean; onClose: () => void; day: string; branch: string; allRows: Booking[];
+  kind: string; onKind: (kind: string) => void; canBook: boolean;
+  onWalkIn: () => void; onSales: () => void; onPrint: () => void;
+}) {
+  const { branchId } = useStore();
+  const sales = useApi(
+    () => (open
+      ? api.analytics.todaySales({ date: day, branchId: branchId || null })
+      : (Promise.resolve(null) as unknown as ReturnType<typeof api.analytics.todaySales>)),
+    [open, day, branchId],
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopImmediatePropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  const consultations = allRows.filter(isConsultationBooking).length;
+  const shows: { v: string; label: string; hint: string; count: number; Icon: LucideIcon }[] = [
+    { v: "", label: "Every appointment", hint: "Consultations and treatments together", count: allRows.length, Icon: LayoutGrid },
+    { v: "consultation", label: "Consultations", hint: "Dermatologist consultations only", count: consultations, Icon: Stethoscope },
+    { v: "treatment", label: "Treatments", hint: "Treatments and package sessions only", count: allRows.length - consultations, Icon: Sparkles },
+  ];
+  const totals = sales.data?.totals;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[70]">
+      <div className="absolute inset-0 bg-primary/35 motion-safe:animate-[fade-in_.18s_ease-out]" onClick={onClose} />
+      <aside role="dialog" aria-modal="true" aria-label="Others"
+        className="absolute right-0 top-0 flex h-full w-full max-w-[420px] flex-col bg-bg shadow-[-24px_0_60px_rgba(3,47,34,0.18)] motion-safe:animate-[sheet-in_.24s_cubic-bezier(.2,.8,.2,1)]">
+        <div className="bg-primary px-5 pb-5 pt-4 text-white">
+          <div className="flex items-center justify-between">
+            <span className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-side-ink">Others</span>
+            <button type="button" onClick={onClose} aria-label="Close"
+              className="grid h-8 w-8 place-items-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"><X size={15} /></button>
+          </div>
+          <div className="mt-2 text-[21px] font-extrabold leading-tight tracking-[-0.01em]">{dayHeading(day)}</div>
+          <div className="mt-1 text-[12px] text-side-ink">{branch} · {allRows.length} appointment{allRows.length === 1 ? "" : "s"}</div>
+        </div>
+
+        <div className="grid flex-1 content-start gap-6 overflow-auto px-5 py-5">
+          <section>
+            <h4 className="mb-2 text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink3">Show on the book</h4>
+            <div className="grid gap-2" role="radiogroup" aria-label="Show on the book">
+              {shows.map(({ v, label, hint, count, Icon }) => {
+                const on = kind === v;
+                return (
+                  <button key={v || "all"} type="button" role="radio" aria-checked={on} onClick={() => onKind(v)}
+                    className={`flex items-center gap-3 rounded-xl border px-3.5 py-3 text-left transition-colors ${
+                      on ? "border-primary bg-sage" : "border-border bg-surface hover:border-gold-dark"}`}>
+                    <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ${on ? "bg-primary text-white" : "bg-ivory text-primary"}`}>
+                      <Icon size={17} aria-hidden />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[13.5px] font-bold text-ink">{label}</span>
+                      <span className="block text-[11.5px] text-ink3">{hint}</span>
+                    </span>
+                    <span className="text-[18px] font-extrabold tabular-nums text-ink">{count}</span>
+                    <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border ${on ? "border-primary bg-primary text-white" : "border-border bg-surface"}`}>
+                      {on && <Check size={12} strokeWidth={3} />}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          <section>
+            <h4 className="mb-2 text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink3">At the desk</h4>
+            <div className="grid gap-2.5">
+              {canBook && (
+                <ActionTile icon={UserPlus} tone="gold" title="New walk-in" onClick={onWalkIn}
+                  text="Book a guest who is at the desk. A new mobile number opens a patient record." />
+              )}
+              <ActionTile icon={IndianRupee} title="Today's sales" onClick={onSales}
+                text={`Every bill and payment taken on ${fmtDate(dayKeyDate(day))}.`}>
+                {totals ? (
+                  <span className="mt-2.5 grid grid-cols-3 gap-2">
+                    {([["Collected", fmtINR(totals.amount)], ["Due", fmtINR(totals.due)], ["Open bills", String(totals.open ?? 0)]] as [string, string][]).map(([k, v]) => (
+                      <span key={k} className="rounded-lg bg-ivory px-2 py-1.5">
+                        <span className="block text-[9.5px] font-bold uppercase tracking-[0.08em] text-ink3">{k}</span>
+                        <span className="block text-[13px] font-extrabold tabular-nums text-ink">{v}</span>
+                      </span>
+                    ))}
+                  </span>
+                ) : sales.loading ? (
+                  <span className="mt-2.5 block h-9 animate-pulse rounded-lg bg-sage" />
+                ) : null}
+              </ActionTile>
+              <ActionTile icon={Printer} title="Print list" onClick={onPrint}
+                text="A paper copy of the day's appointments for the floor. Switches to the list view first." />
+            </div>
+          </section>
+        </div>
+      </aside>
+    </div>,
+    document.body,
+  );
+}
+
 export function Today() {
-  const { branch, branchId, branches } = useStore();
+  const { branch, branchId, can } = useStore();
   const [day, setDay] = useState(isoDay());
   const liveDay = useRef(isoDay());
-  const [view, setView] = useState<"day" | "list">("day");
+  // Calendar and list are two views of the same day, never stacked on one page.
+  const [view, setView] = useState<"calendar" | "list">("calendar");
+  const [fullscreen, setFullscreen] = useState(false);
+  const [othersOpen, setOthersOpen] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
   const [newPreset, setNewPreset] = useState<{ doctorId?: string; doctorName?: string; time?: string } | null>(null);
   const [salesOpen, setSalesOpen] = useState(false);
@@ -1211,58 +1461,97 @@ export function Today() {
     || srcF !== "All sources" || payF !== "Any payment" || roomF !== "All rooms" || sortF !== "Time";
   const resetToday = () => { setProvF("All dermatologists"); setStF("All statuses"); setTherF("All therapists"); setSrcF("All sources"); setPayF("Any payment"); setRoomF("All rooms"); setSortF("Time"); };
 
-  const count = (k: string) => rows.filter((b) => statusKey(b) === k).length;
+  const canBook = can("bookings.manage");
+
+  // Full screen belongs to the calendar alone; leaving the calendar leaves it.
+  useEffect(() => { if (view !== "calendar") setFullscreen(false); }, [view]);
+  useEffect(() => {
+    if (!fullscreen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => {
+      // An open card or dialog owns Escape; only a bare book leaves full screen.
+      if (e.key === "Escape" && !document.querySelector('[role="dialog"]')) setFullscreen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => { document.body.style.overflow = prev; window.removeEventListener("keydown", onKey); };
+  }, [fullscreen]);
+
+  const printList = () => {
+    setOthersOpen(false);
+    setView("list");
+    // Let the list render before the print dialog takes its snapshot.
+    window.setTimeout(() => window.print(), 250);
+  };
+  const showStatus = (label: string) => { setStF(label); setView("list"); };
+
+  const grid = (
+    <DayBookGrid date={day} bookings={allRows} filterKind={kind as "" | "consultation" | "treatment"} fill={fullscreen}
+      onOpen={(id) => setSel(id)} onChanged={bookingsQ.reload}
+      onInvoice={(id) => bill.openForBooking(id, branchId || null)}
+      onNewAt={(preset) => { setNewPreset(preset); setNewOpen(true); }} />
+  );
+  const countLabel = `${rows.length} appointment${rows.length === 1 ? "" : "s"}`;
 
   return (
-    <Page title="Today" sub={`${fmtDateFull(day)} · ${branch || "All branches"}`}
+    <Page title="Today" sub={`${branch || "All branches"} · ${bookingsQ.data ? countLabel : "loading the book…"}`}
       actions={<>
-        <input type="date" value={day} onChange={(e) => setDay(e.target.value)}
-          className="rounded-(--radius-btn) border border-border bg-surface px-3 py-1.5 text-[12.5px] outline-none focus:border-gold-dark" />
-        <div className="flex overflow-hidden rounded-(--radius-btn) border border-border">
-          {(["day", "list"] as const).map((v) => (
-            <button key={v} onClick={() => setView(v)}
-              className={`px-3.5 py-2 text-[12.5px] font-bold capitalize ${view === v ? "bg-primary text-white" : "bg-surface text-ink2"}`}>{v}</button>
-          ))}
-        </div>
-        <div className="flex overflow-hidden rounded-(--radius-btn) border border-border">
-          {([["", "All"], ["consultation", "Consultations"], ["treatment", "Treatments"]] as [string, string][]).map(([v, l]) => (
-            <button key={v} onClick={() => setKind(v)}
-              className={`px-3 py-2 text-[12.5px] font-bold ${kind === v ? "bg-primary text-white" : "bg-surface text-ink2"}`}>{l}</button>
-          ))}
-        </div>
-        <Btn kind="ghost" onClick={() => setSalesOpen(true)}>Today's sales</Btn>
-        <Btn kind="ghost" onClick={() => window.print()}>Print list</Btn>
-        <Btn kind="gold" onClick={() => { setNewPreset(null); setNewOpen(true); }}>+ Walk-in</Btn>
+        <DateNav day={day} onChange={setDay} />
+        <ViewSwitch view={view} onChange={setView} />
+        {view === "calendar" && (
+          <button type="button" onClick={() => setFullscreen(true)} title="Show the appointment book full screen"
+            className="flex items-center gap-1.5 rounded-(--radius-btn) border border-border bg-surface px-3 py-2 text-[12.5px] font-bold text-ink2 transition-colors hover:bg-ivory">
+            <Maximize2 size={14} aria-hidden /><span className="hidden sm:inline">Full screen</span>
+          </button>
+        )}
+        <OthersButton active={!!kind} onClick={() => setOthersOpen(true)} />
       </>}>
-      <Hint id="today-live" steps={[
-        "This is the live appointment book for the selected centre and date — one column per dermatologist. Switch between dermatologist consultations and treatments with the toggle.",
-        "Click any appointment to open it. Confirm, check in, complete, reschedule or cancel from the panel on the right.",
-        "Use + Walk-in for a guest at the desk. A new mobile number opens a patient record automatically.",
-        "Filter the list below by dermatologist or status during rush hour; Print list gives the floor a paper copy.",
+      <Hint id="today-book" steps={[
+        "The live appointment book for the selected centre and date. Calendar shows one row per dermatologist; List shows the same day as a table you can filter.",
+        "Click any appointment for its actions. Check in, start, complete, no-show and cancel are one set of buttons, and each reaches Zenoti in the same step.",
+        "Others holds the rest of the desk: consultations or treatments only, a new walk-in, today's sales and the printable list.",
+        "Full screen gives the calendar the whole display. Press Escape or Exit full screen to come back.",
       ]} />
       <StaleBanner error={bookingsQ.data ? bookingsQ.error : null} onRetry={bookingsQ.reload} />
+      {kind && (
+        <div className="mb-3 flex">
+          <span className="inline-flex items-center gap-2 rounded-full bg-cream px-3 py-1 text-[12px] font-semibold text-primary">
+            Showing {kind === "consultation" ? "dermatologist consultations" : "treatments"} only
+            <button type="button" aria-label="Show every appointment" onClick={() => setKind("")}
+              className="grid h-5 w-5 place-items-center rounded-full hover:bg-cream-border"><X size={12} /></button>
+          </span>
+        </div>
+      )}
 
       <Async q={bookingsQ} label="Loading the day book…" rows={6}>
         {() => (
           <>
-            <Stats items={[
-              { k: "Expected", v: count("confirmed") + count("late"), d: "confirmed, not yet in", hot: count("late") > 0 },
-              { k: "In chair", v: count("inprogress"), d: "on the floor" },
-              { k: "Unconfirmed", v: count("pending"), d: "needs a call", hot: count("pending") > 0 },
-              { k: "Running late", v: count("late"), d: "past their slot" },
-              { k: "Day total", v: rows.length, d: `${count("completed")} completed` },
-              { k: "Consultations", v: allRows.filter(isConsultationBooking).length, d: `${allRows.length - allRows.filter(isConsultationBooking).length} treatments`, onClick: () => setKind(kind === "consultation" ? "" : "consultation") },
-            ]} />
+            <DaySummary rows={rows} onPick={showStatus} />
 
-            {view === "day" ? (
-              <DayBookGrid date={day} bookings={allRows} filterKind={kind as "" | "consultation" | "treatment"}
-                onOpen={(id) => setSel(id)} onChanged={bookingsQ.reload}
-                onCheckIn={(id) => setSel(id)} onCheckOut={(id) => setSel(id)}
-                onInvoice={(id) => bill.openForBooking(id, branchId || null)}
-                onNewAt={(preset) => { setNewPreset(preset); setNewOpen(true); }} />
-            ) : null}
+            {view === "calendar" && (fullscreen
+              ? createPortal(
+                  <div className="fixed inset-0 z-[60] flex flex-col gap-3 bg-bg p-3 sm:p-4" role="region" aria-label="Appointment book, full screen">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="mr-auto min-w-0">
+                        <div className="text-[16px] font-extrabold leading-tight">Appointment book</div>
+                        <div className="text-[11.5px] text-ink3">{branch || "All branches"} · {countLabel}</div>
+                      </div>
+                      <DateNav day={day} onChange={setDay} />
+                      <OthersButton active={!!kind} onClick={() => setOthersOpen(true)} />
+                      <button type="button" onClick={() => setFullscreen(false)}
+                        className="flex items-center gap-1.5 rounded-(--radius-btn) border border-border bg-surface px-3 py-2 text-[12.5px] font-bold text-ink2 transition-colors hover:bg-ivory">
+                        <Minimize2 size={14} aria-hidden />Exit full screen
+                      </button>
+                    </div>
+                    <div className="min-h-0 flex-1">{grid}</div>
+                  </div>,
+                  document.body,
+                )
+              : grid)}
 
-            <div className={`mt-4 flex flex-wrap items-center justify-between gap-3 ${view === "list" ? "print-only-list" : ""}`}>
+            {view === "list" && (
+            <>
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <SecH t="Appointments" em={`· ${list.length} on ${fmtDate(day)}`} />
               <div className="flex flex-wrap items-center gap-2">
                 {todayFilters.map(([key, value, setter, options]) => (
@@ -1302,10 +1591,25 @@ export function Today() {
                   )}
                 </div>
               ))}
+            </>
+            )}
           </>
         )}
       </Async>
 
+      <OthersDrawer
+        open={othersOpen}
+        onClose={() => setOthersOpen(false)}
+        day={day}
+        branch={branch || "All branches"}
+        allRows={allRows}
+        kind={kind}
+        onKind={(k) => setKind(k)}
+        canBook={canBook}
+        onWalkIn={() => { setOthersOpen(false); setNewPreset(null); setNewOpen(true); }}
+        onSales={() => { setOthersOpen(false); setSalesOpen(true); }}
+        onPrint={printList}
+      />
       <NewBookingModal open={newOpen} onClose={() => setNewOpen(false)} onBooked={bookingsQ.reload} preset={{ date: day, ...(newPreset ?? {}) }} />
       <TodaysSalesModal open={salesOpen} onClose={() => setSalesOpen(false)} date={day} />
       <InvoiceModal open={!!bill.invoiceId} invoiceId={bill.invoiceId} onClose={() => bill.setInvoiceId(null)} onChanged={bookingsQ.reload} />
