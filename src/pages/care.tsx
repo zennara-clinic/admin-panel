@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { ActiveFilters, Area, AreaChart, Async, B, Btn, Card, ChartCard, Chips, DataTable, DeleteModal, Drawer, Empty, FSection, FilterDrawer, GBars, HBars, Hint, In, Loading, Menu, MenuButton, Modal, MultiSelect, Note, NumRange, Page, RatingValue, SecH, Sel, StaleBanner, Stats, Switch, Tabs, Tag, Toggle, UploadField, exportCsv } from "../ui";
 import { useStore } from "../store";
+import { DEFAULT_METRIC_RANGE, metricWindow, type MetricRange } from "../lib/ranges";
+import { RangeSwitch } from "../rangeSwitch";
 import api from "../lib/api";
 import { openHtmlExport, download } from "../lib/http";
 import { AssignPackageModal, PatientPickerModal } from "./reception";
@@ -2080,19 +2082,17 @@ export function DermatologistDetail() {
   const [sp] = useSearchParams();
   const id = sp.get("id") ?? "";
   const { toast, audit, can, clinics: branches, admin } = useStore();
-  const [range, setRange] = useState("Last 90 days");
+  const [range, setRange] = useState<MetricRange>(DEFAULT_METRIC_RANGE);
   const [editOpen, setEditOpen] = useState(false);
   const [acctEmail, setAcctEmail] = useState("");
   const [acctPhone, setAcctPhone] = useState("");
   const [busy, setBusy] = useState(false);
 
+  // Same periods as every metrics page, in clinic days. The stats endpoint falls
+  // back to its own last 90 days without a start, so All time sends the floor.
   const win = useMemo(() => {
-    const e = new Date(); const s = new Date();
-    if (range === "Last 30 days") s.setDate(e.getDate() - 29);
-    else if (range === "Last 90 days") s.setDate(e.getDate() - 89);
-    else if (range === "This year") s.setMonth(0, 1);
-    else s.setFullYear(e.getFullYear() - 5);
-    return { startDate: isoDay(s), endDate: isoDay(e) };
+    const w = metricWindow(range);
+    return { startDate: w.floorStart, endDate: w.endDate, label: w.label };
   }, [range]);
 
   const q = useApi(() => (id ? api.doctors.get(id) : Promise.reject(new Error("No dermatologist selected"))), [id]);
@@ -2123,7 +2123,7 @@ export function DermatologistDetail() {
         <Page title={doc.name}
           sub={`${tierTitle} · ${fmtINR(fee)} per consultation · ${(doc.availableCentres ?? []).join(", ") || "no centre yet"}${doc.experienceYears ? ` · ${doc.experienceYears} yrs` : ""}`}
           actions={<>
-            <Menu button={<MenuButton kind="ghost">{range}</MenuButton>} items={["Last 30 days", "Last 90 days", "This year", "All time"].map((l) => ({ label: l, onClick: () => setRange(l) }))} />
+            <RangeSwitch value={range} onChange={setRange} />
             <Btn kind="ghost" onClick={() => nav("/doctors")}>← All dermatologists</Btn>
             <Btn kind="ghost" onClick={() => nav(`/doctors/schedule?doctorId=${encodeURIComponent(doc.doctorId)}`)}>Working hours</Btn>
             <Btn kind="ghost" onClick={() => nav(`/bookings?scope=all`, { state: { specialistId: doc.doctorId } })}>Bookings</Btn>

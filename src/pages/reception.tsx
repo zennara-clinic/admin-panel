@@ -8,6 +8,8 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { ActiveFilters, Area, AreaChart, Async, B, Btn, CalendarSkeleton, Card, ChartCard, Chips, DataTable, DateRange, Drawer, Empty, ExportModal, FSection, FilterDrawer, GBars, HBars, Hint, In, Loading, Menu, MenuButton, Modal, MultiSelect, Note, NumRange, Otp, Page, Prog, RatingValue, STATUS, SecH, Sel, Spinner, StaleBanner, Stats, Tabs, Tag, exportCsv } from "../ui";
 import { LifecycleActions, LIFECYCLE_TOAST, StatusHistory, useLifecycle } from "../lifecycle";
 import { useStore } from "../store";
+import { DEFAULT_METRIC_RANGE, customWindow, metricWindow, type MetricRange } from "../lib/ranges";
+import { RangeSwitch } from "../rangeSwitch";
 import api from "../lib/api";
 import { PreConsultModal } from "../preconsult";
 import { DayBookGrid, STATE_STYLE, TodaysSalesModal } from "./daybook";
@@ -26,22 +28,15 @@ import { CLINIC_TZ,
 import type { ConsultationStage, Booking, Branch, Chat as ChatThread, ChatMessage, Consultation, Doctor, PackageAssignment, PreConsultForm, User, Package } from "../lib/types";
 
 /* ================= OVERVIEW ================= */
-const RANGE_PRESETS: [string, () => { startDate: string; endDate: string }][] = [
-  ["Today", () => { const e = isoDay(); return { startDate: e, endDate: e }; }],
-  ["Last 7 days", () => { const e = isoDay(); return { startDate: addClinicDays(e, -6), endDate: e }; }],
-  ["Last 30 days", () => { const e = isoDay(); return { startDate: addClinicDays(e, -29), endDate: e }; }],
-  ["This month", () => { const e = isoDay(); return { startDate: clinicMonthStart(e), endDate: e }; }],
-  ["Last month", () => { const e = addClinicDays(clinicMonthStart(isoDay()), -1); return { startDate: clinicMonthStart(e), endDate: clinicMonthEnd(e) }; }],
-  ["Last 90 days", () => { const e = isoDay(); return { startDate: addClinicDays(e, -89), endDate: e }; }],
-  ["This year", () => { const e = isoDay(); return { startDate: `${e.slice(0, 4)}-01-01`, endDate: e }; }],
-];
-
 export function Overview() {
   const nav = useNavigate();
   const { branchId, branch } = useStore();
-  const [range, setRange] = useState("Last 30 days");
+  // This month by default — the 1st to today (lib/ranges.ts). All time sends no
+  // start date; the dashboard endpoint finds the oldest record itself.
+  const [range, setRange] = useState<MetricRange>(DEFAULT_METRIC_RANGE);
   const [custom, setCustom] = useState<{ startDate: string; endDate: string } | null>(null);
-  const window = useMemo(() => custom ?? (RANGE_PRESETS.find(([l]) => l === range)?.[1]() ?? RANGE_PRESETS[2][1]()), [range, custom]);
+  const win = useMemo(() => (custom ? customWindow(custom.startDate, custom.endDate) : metricWindow(range)), [range, custom]);
+  const window = useMemo(() => ({ startDate: win.startDate, endDate: win.endDate }), [win]);
 
   const q = useApi(() => api.analytics.dashboard({ ...window, branchId: branchId || undefined }), [window.startDate, window.endDate, branchId]);
   usePoll(q.reload, 120000, true);
@@ -71,17 +66,10 @@ export function Overview() {
   const growth = d?.revenue.growthPercent;
 
   return (
-    <Page title="Overview" sub={`${branch && branch !== "All branches" ? branch : "All centres"} · ${custom ? `${custom.startDate} → ${custom.endDate}` : range}`}
+    <Page title="Overview" sub={`${branch && branch !== "All branches" ? branch : "All centres"} · ${custom ? `Custom · ${win.label}` : range === "All time" ? "All time" : `${range} · ${win.label}`}`}
       actions={<>
-        <Menu button={<MenuButton kind="ghost">{custom ? "Custom range" : range}</MenuButton>}
-          items={[...RANGE_PRESETS.map(([l]) => ({ label: l, onClick: () => { setCustom(null); setRange(l); } })), { label: "Custom…", onClick: () => setCustom(window) }]} />
-        {custom && (
-          <div className="flex items-center gap-1.5">
-            <input type="date" value={custom.startDate} max={custom.endDate} onChange={(e) => setCustom({ ...custom, startDate: e.target.value })} className="rounded-lg border border-border bg-ivory px-2 py-1.5 text-[12px]" />
-            <span className="text-ink3">→</span>
-            <input type="date" value={custom.endDate} min={custom.startDate} onChange={(e) => setCustom({ ...custom, endDate: e.target.value })} className="rounded-lg border border-border bg-ivory px-2 py-1.5 text-[12px]" />
-          </div>
-        )}
+        <RangeSwitch value={range} onChange={setRange} custom={custom} onCustom={setCustom}
+          seed={{ startDate: win.startDate ?? metricWindow(DEFAULT_METRIC_RANGE).startDate!, endDate: win.endDate }} />
         <Btn kind="ghost" disabled={!d} onClick={() => d && exportCsv("zennara-overview",
           ["Metric", "Value"],
           [
@@ -3307,13 +3295,11 @@ export function AssignPackageModal({ open, onClose, user, onAssigned }: {
 export function Consultations() {
   const nav = useNavigate();
   const { branch } = useStore();
-  const [days, setDays] = useState(30);
-
-  const window = useMemo(() => {
-    const end = new Date(); const start = new Date();
-    start.setDate(end.getDate() - days);
-    return { startDate: isoDay(start), endDate: isoDay(end) };
-  }, [days]);
+  const [range, setRange] = useState<MetricRange>(DEFAULT_METRIC_RANGE);
+  const win = useMemo(() => metricWindow(range), [range]);
+  // Appointments and services fall back to their own last 30 days without a
+  // start, so All time sends the floor rather than no date.
+  const window = useMemo(() => ({ startDate: win.floorStart, endDate: win.endDate }), [win]);
 
   const q = useApi(async () => {
     const [bookingsRes, appts, svc, forms] = await Promise.all([
@@ -3326,11 +3312,8 @@ export function Consultations() {
   }, [branch, window.startDate, window.endDate]);
 
   return (
-    <Page title="Consultations" sub={`Dermatologist sessions · last ${days} days · ${branch || "all centres"}`}
-      actions={
-        <Menu button={<MenuButton kind="ghost">Last {days} days</MenuButton>}
-          items={[7, 30, 90].map((d) => ({ label: `Last ${d} days`, onClick: () => setDays(d) }))} />
-      }>
+    <Page title="Consultations" sub={`Dermatologist sessions · ${range === "All time" ? "All time" : `${range} · ${win.label}`} · ${branch || "all centres"}`}
+      actions={<RangeSwitch value={range} onChange={setRange} />}>
       <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
       <Async q={q} label="Loading consultations…" rows={6}>
         {({ bookings, appts, svc, forms }) => {

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { Area, AreaChart, Async, B, Btn, Card, ChartCard, DataTable, DateRange, DeleteModal, Drawer, Empty, GBars, HBars, Hint, In, Menu, MenuButton, Modal, Note, Page, RatingValue, SecH, Sel, StaleBanner, Stars, Stats, Switch, Tabs, Tag, exportCsv } from "../ui";
 import { useStore, ROLE_LABEL } from "../store";
+import { DEFAULT_METRIC_RANGE, customWindow, isMetricRange, metricWindow, type MetricRange } from "../lib/ranges";
+import { RangeSwitch } from "../rangeSwitch";
 import api from "../lib/api";
 import { useApi, useDebounced } from "../lib/useApi";
 import { useQueryNumber, useQueryPage, useQueryString } from "../lib/useListState";
@@ -584,14 +586,14 @@ export function Reviews() {
 
 /* ================= ANALYTICS ================= */
 /*
- * "All time" is the default, and it is not a number of days.
+ * The period follows every metrics page (lib/ranges.ts): This month by
+ * default — the 1st to today — then Last 90 days, All time, or custom dates.
  *
- * The clinic reads this page to answer "how are we doing", and a 90-day window
- * hid four years of history behind a picker nobody knew to move — the totals
- * looked small and wrong. 0 means "send no start date", and the server falls
- * back to the oldest record it holds.
+ * "All time" is not a number of days. The dashboard is sent no start and finds
+ * the oldest record itself. Financial, appointments and services fall back to
+ * their OWN last 30 days when no start is given — which is how "All time" used
+ * to show a month on those tabs — so they are sent the all-time floor instead.
  */
-const ANALYTICS_RANGES: Record<string, number> = { "All time": 0, "7 days": 7, "30 days": 30, "90 days": 90, "6 months": 182, "This year": 365 };
 const ANALYTICS_TABS: [string, (number | string)?][] = [["Revenue"], ["Appointments"], ["Dermatologists"], ["Services"], ["Guests"], ["Products & orders"], ["Packages & memberships"], ["Stock"], ["Staff sales"]];
 
 /** Group a daily series into ≤ n buckets (sum) for bar charts. */
@@ -611,31 +613,29 @@ function bucketLabels(rows: { date: string }[], n: number): string[] {
 export function Analytics() {
   // Trade happens at the three clinics; a pharmacy filter would always be empty.
   const { clinics: branches } = useStore();
-  const [range, setRange] = useQueryString("range", "All time");
+  const [rangeParam, setRange] = useQueryString("range", DEFAULT_METRIC_RANGE);
+  // An old link can still carry "30 days" or "This year"; it opens on the default.
+  const range: MetricRange = isMetricRange(rangeParam) ? rangeParam : DEFAULT_METRIC_RANGE;
   const [custom, setCustom] = useState<{ startDate: string; endDate: string } | null>(null);
   const [branchId, setBranchId] = useQueryString("branch", "");
   const [tab, setTab] = useQueryNumber("tab", 0, { min: 0, max: ANALYTICS_TABS.length - 1 });
 
-  const window = useMemo(() => {
-    if (custom) return custom;
-    const end = isoDay();
-    // All time: no startDate at all, so the server uses its own floor.
-    if (range === "All time") return { startDate: undefined as string | undefined, endDate: end };
-    const start = range === "This year"
-      ? `${end.slice(0, 4)}-01-01`
-      : addClinicDays(end, -(ANALYTICS_RANGES[range] ?? 90) + 1);
-    return { startDate: start as string | undefined, endDate: end };
-  }, [range, custom]);
+  const win = useMemo(() => (custom ? customWindow(custom.startDate, custom.endDate) : metricWindow(range)), [range, custom]);
+  const window = useMemo(() => ({ startDate: win.startDate, endDate: win.endDate }), [win]);
   const scope = { ...window, branchId: branchId || undefined };
+  /** For the endpoints that cannot take an open start (see above). */
+  const bounded = { ...scope, startDate: win.floorStart };
+  // The guests endpoint wants a day count.
+  const rangeDays = win.days;
 
   const q = useApi(async () => {
     const [dash, financial, appointments, patients, services, inventory, monthly, acquisition, demographics, sources, top, orders, products, pkgStats] =
       await Promise.all([
         api.analytics.dashboard(scope).catch((e) => { throw new Error(`Dashboard: ${(e as Error).message}`); }),
-        api.analytics.financial(scope).catch(() => undefined),
-        api.analytics.appointments(scope).catch((e) => { throw new Error(`Appointments: ${(e as Error).message}`); }),
+        api.analytics.financial(bounded).catch(() => undefined),
+        api.analytics.appointments(bounded).catch((e) => { throw new Error(`Appointments: ${(e as Error).message}`); }),
         api.analytics.patients({ ...scope, days: rangeDays }).catch(() => undefined),
-        api.analytics.services(scope).catch(() => undefined),
+        api.analytics.services(bounded).catch(() => undefined),
         api.analytics.inventory(window).catch(() => undefined),
         api.analytics.monthlyRevenue({ branchId: branchId || undefined }).catch(() => []),
         api.analytics.patientAcquisition().catch(() => []),
@@ -650,22 +650,13 @@ export function Analytics() {
   }, [window.startDate, window.endDate, branchId, range]);
 
   const branchName = branches.find((b) => b._id === branchId)?.name ?? "All centres";
-  const label = custom ? `${custom.startDate} → ${custom.endDate}` : range;
-  // The patients endpoint wants a day count; all-time asks for the lot.
-  const rangeDays = range === "All time" ? 3650 : (ANALYTICS_RANGES[range] ?? 90);
+  const label = custom ? `Custom · ${win.label}` : range === "All time" ? "All time" : `${range} · ${win.label}`;
 
   return (
     <Page title="Analytics" sub={`${branchName} · ${label}`}
       actions={<>
-        <Menu button={<MenuButton kind="ghost">{custom ? "Custom" : range}</MenuButton>}
-          items={[...Object.keys(ANALYTICS_RANGES).map((r) => ({ label: r, onClick: () => { setCustom(null); setRange(r); } })), { label: "Custom…", onClick: () => setCustom({ startDate: window.startDate ?? isoDay().slice(0, 4) + "-01-01", endDate: window.endDate }) }]} />
-        {custom && (
-          <div className="flex items-center gap-1.5">
-            <input type="date" value={custom.startDate} max={custom.endDate} onChange={(e) => setCustom({ ...custom, startDate: e.target.value })} className="rounded-lg border border-border bg-ivory px-2 py-1.5 text-[12px]" />
-            <span className="text-ink3">→</span>
-            <input type="date" value={custom.endDate} min={custom.startDate} onChange={(e) => setCustom({ ...custom, endDate: e.target.value })} className="rounded-lg border border-border bg-ivory px-2 py-1.5 text-[12px]" />
-          </div>
-        )}
+        <RangeSwitch value={range} onChange={setRange} custom={custom} onCustom={setCustom}
+          seed={{ startDate: win.startDate ?? metricWindow(DEFAULT_METRIC_RANGE).startDate!, endDate: win.endDate }} />
         <Menu button={<MenuButton kind="ghost">{branchName}</MenuButton>}
           items={[{ label: "All centres", onClick: () => setBranchId("") }, ...branches.map((b) => ({ label: b.name, onClick: () => setBranchId(b._id) }))]} />
         <Btn kind="ghost" disabled={!q.data} onClick={() => {
