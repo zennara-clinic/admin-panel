@@ -51,10 +51,10 @@ export function ContactChanges() {
   return (
     <Page
       title="Contact change requests"
-      sub="Customer email & mobile changes — verified in the app and applied automatically."
+      sub="Guest email & mobile changes — verified in the app and applied automatically."
     >
       <Note kind="gold" className="mb-4">
-        These are handled automatically: once a customer verifies their current contact, the change
+        These are handled automatically: once a guest verifies their current contact, the change
         applies a few hours later. This view is read-only — for support and audit.
       </Note>
 
@@ -66,7 +66,7 @@ export function ContactChanges() {
         {(rows) =>
           rows.length ? (
             <DataTable
-              cols={["Customer", "Change", "From", "To", "Status", "When", "Requested"]}
+              cols={["Guest", "Change", "From", "To", "Status", "When", "Requested"]}
               rows={rows.map((r) => [
                 r.customer?.fullName || "—",
                 r.type === "email" ? "Email" : "Mobile",

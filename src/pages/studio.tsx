@@ -614,7 +614,7 @@ export function MembershipCard() {
                       </div>
                     </div>
                     <Note className="mb-0 text-[11.5px]">
-                      Membership is granted per guest from their patient record — open a patient and use <B>Grant Zen membership</B>.
+                      Membership is granted per guest from their guest record — open a guest and use <B>Grant Zen membership</B>.
                     </Note>
                   </>
                 )}

@@ -756,10 +756,10 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
 
       <Note>
         {srcFilter === "app"
-          ? <>These are <b>app orders</b> only — the ones you pack and ship. Products bought at the clinic counter are rung up in Zenoti and appear on the guest’s own record under <b>Patients</b>, not here.</>
+          ? <>These are <b>app orders</b> only — the ones you pack and ship. Products bought at the clinic counter are rung up in Zenoti and appear on the guest’s own record under <b>Guests</b>, not here.</>
           : srcFilter === "zenoti"
-            ? <>Counter sales mirrored from Zenoti, shown for history. They are already handed over, so there is nothing to fulfil — the same rows appear on each guest’s record under <b>Patients</b>.</>
-            : <>App orders and clinic counter sales together. Only <b>app</b> orders can be fulfilled from here; clinic rows are history, and also appear on the guest’s record under <b>Patients</b>.</>}
+            ? <>Counter sales mirrored from Zenoti, shown for history. They are already handed over, so there is nothing to fulfil — the same rows appear on each guest’s record under <b>Guests</b>.</>
+            : <>App orders and clinic counter sales together. Only <b>app</b> orders can be fulfilled from here; clinic rows are history, and also appear on the guest’s record under <b>Guests</b>.</>}
       </Note>
 
       <div className="mb-2 flex flex-wrap items-center gap-2">

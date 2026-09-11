@@ -46,11 +46,11 @@ export function Forms() {
   const reload = () => setNonce((n) => n + 1);
 
   return (
-    <Page title="Consultation forms" sub="Build the forms patients fill in, and read what they answered."
+    <Page title="Consultation forms" sub="Build the forms guests fill in, and read what they answered."
       actions={can("forms.manage") ? <Btn kind="gold" onClick={() => setCreateOpen(true)}>New form</Btn> : undefined}>
       <Async q={list} label="Loading forms…" rows={4}>
         {(forms) => forms.length === 0
-          ? <Empty title="No forms yet" hint="Build one to ask patients whatever this clinic needs before a consultation." />
+          ? <Empty title="No forms yet" hint="Build one to ask guests whatever this clinic needs before a consultation." />
           : (
             <div className="grid gap-2">
               {forms.map((f) => (
@@ -161,7 +161,7 @@ function FormEditor({ open, template, onClose, onDone }: {
         <In label="Form name" value={name} onChange={setName} />
         <div className="flex items-end pb-2">
           <label className="flex items-center gap-2 text-[12px] font-semibold text-ink2">
-            <Toggle on={isActive} onChange={setIsActive} /> Live — patients can fill it in
+            <Toggle on={isActive} onChange={setIsActive} /> Live — guests can fill it in
           </label>
         </div>
       </div>
@@ -239,7 +239,7 @@ function Submissions({ template, onClose }: { template: FormTemplate | null; onC
   );
 
   const cols = useMemo(
-    () => ["When", "Patient", "Appointment", "Version"],
+    () => ["When", "Guest", "Appointment", "Version"],
     [],
   );
 
@@ -247,7 +247,7 @@ function Submissions({ template, onClose }: { template: FormTemplate | null; onC
     <Modal open={!!template} onClose={onClose} title={template ? `Submissions — ${template.name}` : ""} wide>
       <Async q={rows} label="Loading submissions…" rows={4}>
         {(list) => list.length === 0
-          ? <Empty title="No submissions yet" hint="They appear here as soon as patients start filling this form in." />
+          ? <Empty title="No submissions yet" hint="They appear here as soon as guests start filling this form in." />
           : (
             <DataTable
               cols={cols}

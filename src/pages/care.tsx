@@ -226,7 +226,7 @@ export function Services() {
 
   return (
     <Page title="Services"
-      sub={`${inCatalogCount} in the app catalogue · ${services.length} in the service master — the master is everything the clinic bills for, the catalogue is what a customer can buy`}
+      sub={`${inCatalogCount} in the app catalogue · ${services.length} in the service master — the master is everything the clinic bills for, the catalogue is what a guest can buy`}
       actions={<>
         <div className="flex overflow-hidden rounded-(--radius-btn) border border-border">
           <button onClick={() => setGrid(false)} className={`px-3 py-2 text-[12.5px] font-bold ${!grid ? "bg-primary text-white" : "bg-surface text-ink2"}`}><span className="inline-flex items-center gap-1.5"><List size={13} /> List</span></button>
@@ -253,7 +253,7 @@ export function Services() {
         entity="services"
         title="Import services"
         onDone={() => { q.reload(); cats.reload(); }}
-        formatHint="Zenoti's own service-master export imports as-is — ServiceCode, ServiceName, Category, Sub Category, BusinessUnitName, ServiceType, ServiceLength. Its title rows are skipped automatically. Imported services are master data; publish the ones a customer should see."
+        formatHint="Zenoti's own service-master export imports as-is — ServiceCode, ServiceName, Category, Sub Category, BusinessUnitName, ServiceType, ServiceLength. Its title rows are skipped automatically. Imported services are master data; publish the ones a guest should see."
       />
       <Hint id="services-live">Pick a type or category on the left; everything on the right is exactly what the app shows. Click a service to edit its photo, gallery, price, copy, pre/post care and FAQs.</Hint>
       <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
@@ -969,7 +969,7 @@ export function Packages() {
     ["Custom", buckets?.custom],
   ];
   return (
-    <Page title="Packages" sub="Premade packages the desk can assign to any patient, and custom ones built for one guest"
+    <Page title="Packages" sub="Premade packages the desk can assign to any guest, and custom ones built for one guest"
       actions={<>
         <Btn kind="ghost" disabled={!list.length} onClick={() => exportCsv("zennara-packages",
           ["Name", "Code", "Kind", "Price", "Services", "Validity (days)", "Grace", "Centres", "Bookings", "In app"],
@@ -987,7 +987,7 @@ export function Packages() {
             can see what they already hold. A custom package starts by choosing
             the guest it is for, so that button carries its own picker. */}
         {can("packages.manage") && tab === 1 && (
-          <Btn kind="gold" onClick={() => setPickOpen(true)}>+ Custom package for a patient</Btn>
+          <Btn kind="gold" onClick={() => setPickOpen(true)}>+ Custom package for a guest</Btn>
         )}
         {can("packages.manage") && tab === 0 && (
           <Btn onClick={() => { setCreating(true); setEdit(null); }}>+ New premade package</Btn>
@@ -1163,7 +1163,7 @@ function PackageEditor({ open, pkg, seed, onClose, onSaved, onDelete, onClone }:
               <In label="Package price (₹)" type="number" value={String(f.price ?? 0)} onChange={(v) => set("price")(Number(v) || 0)} hint={listPrice ? `List value ${fmtINR(listPrice)}` : undefined} />
               <In label="Validity (months)" type="number" value={String(f.validityMonths ?? 12)}
                 onChange={(v) => set("validityMonths")(Math.max(1, Number(v) || 12))}
-                hint="How long a customer has to use it after it is assigned — 12 = one year, 6 = six months" />
+                hint="How long a guest has to use it after it is assigned — 12 = one year, 6 = six months" />
             </div>
             <div className="mt-3"><Area label="Description — shown in the app" value={f.description ?? ""} onChange={set("description")} rows={3} /></div>
             <div className="mt-3">
@@ -1337,7 +1337,7 @@ function AssignmentsConsole() {
       <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
       <Async q={q} label="Loading assignments…" rows={6}>
         {() => rows.length === 0 ? (
-          <Empty title="No assignments" hint="Assign a package from a patient's record (Patients → open → Assign package)." />
+          <Empty title="No assignments" hint="Assign a package from a guest's record (Guests → open → Assign package)." />
         ) : (
           <>
             <DataTable cols={["Guest", "Package", "Sessions", "Paid", "Valid until", "Status"]}
@@ -2138,7 +2138,7 @@ export function DermatologistDetail() {
                     { k: "Consultations", v: st.summary.consultations, d: `${st.summary.treatments} treatments` },
                     { k: "Completed", v: st.summary.completed, d: `${st.summary.bookings} booked · ${st.summary.upcoming} upcoming` },
                     { k: "No-shows", v: st.summary.noShow, d: `${st.summary.cancelled} cancelled`, tone: st.summary.noShow ? "dn" : undefined },
-                    { k: "Patients", v: st.summary.patients, d: `${st.allTime.patients} all time` },
+                    { k: "Guests", v: st.summary.patients, d: `${st.allTime.patients} all time` },
                     { k: "Rating", v: st.summary.avgRating ? <RatingValue value={st.summary.avgRating} /> : "—", d: `${st.summary.ratings} rating${st.summary.ratings === 1 ? "" : "s"}${st.summary.avgSessionMinutes ? ` · ${st.summary.avgSessionMinutes} min avg` : ""}` },
                   ]} />
                   <div className="grid gap-3 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">

@@ -253,7 +253,7 @@ export function DeletedAccounts() {
     <Page title="Deleted accounts" sub="Guests who deleted their account from the app, kept in full so they can be brought back"
       actions={<Btn kind="ghost" onClick={() => setShowRestored((v) => !v)}>{showRestored ? "Hide restored" : "Show restored too"}</Btn>}>
       <Hint id="deleted-accounts">Deleting an account removes the person from every live screen, but their bookings, orders, forms and chats are archived here. Restore puts everything back exactly as it was — unless the same email or phone has since signed up again.</Hint>
-      <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name, email, phone or patient ID…"
+      <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name, email, phone or guest ID…"
         className="mb-3 w-full max-w-[420px] rounded-(--radius-btn) border border-border bg-surface px-3.5 py-2 text-[13px] outline-none focus:border-gold-dark" />
       <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
       <Async q={q} label="Loading archive…" rows={5}>

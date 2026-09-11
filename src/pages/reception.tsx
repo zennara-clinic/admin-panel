@@ -91,7 +91,7 @@ export function Overview() {
             ...d.revenue.streams.map((s) => [`${s.label} count`, s.count] as [string, number]),
             ["Bookings", d.counts.bookings], ["Completed", d.counts.completed], ["No-shows", d.counts.noShow], ["Cancelled", d.counts.cancelled],
             ["Product orders", d.counts.orders], ["Packages assigned", d.counts.packagesAssigned], ["Memberships sold", d.counts.membershipsSold],
-            ["New patients", d.counts.newPatients], ["Active Zen members", d.counts.activeZen], ["Outstanding", d.counts.outstanding], ["Average ticket", d.counts.averageTicket],
+            ["New guests", d.counts.newPatients], ["Active Zen members", d.counts.activeZen], ["Outstanding", d.counts.outstanding], ["Average ticket", d.counts.averageTicket],
             ...d.dermatologists.map((x) => [`${x.name} (${x.level})`, `${x.bookings} bookings · ${x.completed} completed · ₹${x.revenue}`] as [string, string]),
           ])}>Export CSV</Btn>
       </>}>
@@ -120,7 +120,7 @@ export function Overview() {
               { k: "Consultations", v: d.counts.consultations, d: `${d.counts.completedConsultations ?? 0} completed · ${d.counts.bookings} bookings in total`, onClick: () => nav("/bookings") },
               { k: "Treatments", v: d.counts.treatments, d: `${d.counts.completedTreatments ?? d.counts.completed} completed`, onClick: () => nav("/bookings") },
               { k: "Product orders", v: d.counts.orders, d: `${d.counts.openOrders} open · ${d.counts.paidOrders} paid`, onClick: () => nav("/orders") },
-              { k: "New patients", v: d.counts.newPatients.toLocaleString("en-IN"), d: `${d.counts.totalPatients.toLocaleString("en-IN")} on file`, onClick: () => nav("/patients") },
+              { k: "New guests", v: d.counts.newPatients.toLocaleString("en-IN"), d: `${d.counts.totalPatients.toLocaleString("en-IN")} on file`, onClick: () => nav("/patients") },
               { k: "Zen members", v: d.counts.activeZen, d: `${d.counts.membershipsSold} sold · ${d.counts.zenExpiring} expiring`, tone: d.counts.zenExpiring ? "dn" : undefined, onClick: () => nav("/patients") },
               { k: "No-show rate", v: `${d.counts.noShowRate}%`, d: `${d.counts.noShow} no-shows · ${d.counts.cancellationRate}% cancelled`, tone: d.counts.noShowRate > 10 ? "dn" : undefined, onClick: () => nav("/bookings?tab=7") },
             ]} />
@@ -145,7 +145,7 @@ export function Overview() {
                       <HBars rows={[...d.dermatologists].sort((a, b) => b.revenue - a.revenue).slice(0, 6)
                         .map((x) => [x.name, x.revenue, fmtCompactINR(x.revenue)] as [string, number, string])} />
                     </div>
-                    <DataTable cols={["Dermatologist", "Level", "Bookings", "Consults", "Treatments", "Completed", "No-show", "Patients", "Rating", "Revenue"]}
+                    <DataTable cols={["Dermatologist", "Level", "Bookings", "Consults", "Treatments", "Completed", "No-show", "Guests", "Rating", "Revenue"]}
                       onRow={(i) => nav(`/bookings?scope=all`, { state: { specialistId: d.dermatologists[i].doctorId } })}
                       rows={d.dermatologists.map((x, i) => [
                         <span key={x.doctorId} className="flex items-center gap-2">
@@ -562,7 +562,7 @@ function BookingDrawer({ id, onClose, onChanged }: {
               )}
               <Btn kind="ghost" onClick={() => nav("/patient", {
                 state: { id: idOf(bk.userId), returnTo: `${route.pathname}${route.search}` },
-              })}>Open patient record</Btn>
+              })}>Open guest record</Btn>
               {bk.source === "zenoti" && !["Cancelled", "Completed", "No Show"].includes(bk.status) && (
                 <Note><B>Reschedule, cancel &amp; no-show: managed in Zenoti.</B> The change shows here within seconds. Check-in, check-out and completion are recorded here and written back to Zenoti.</Note>
               )}
@@ -1409,7 +1409,7 @@ function OthersDrawer({ open, onClose, day, branch, allRows, kind, onKind, canBo
             <div className="grid gap-2.5">
               {canBook && (
                 <ActionTile icon={UserPlus} tone="gold" title="New walk-in" onClick={onWalkIn}
-                  text="Book a guest who is at the desk. A new mobile number opens a patient record." />
+                  text="Book a guest who is at the desk. A new mobile number opens a guest record." />
               )}
               <ActionTile icon={IndianRupee} title="Today's sales" onClick={onSales}
                 text={`Every bill and payment taken on ${fmtDate(dayKeyDate(day))}.`}>
@@ -2199,7 +2199,7 @@ export function Patients() {
   const total = pagination?.totalUsers ?? 0;
 
   return (
-    <Page title="Patients" sub={`${(stats.totalPatients ?? total).toLocaleString("en-IN")} on file${stats.clinicCustomers ? ` · ${Number(stats.clinicCustomers).toLocaleString("en-IN")} from the Zennara clinic` : ""}`}
+    <Page title="Guests" sub={`${(stats.totalPatients ?? total).toLocaleString("en-IN")} on file${stats.clinicCustomers ? ` · ${Number(stats.clinicCustomers).toLocaleString("en-IN")} from the Zennara clinic` : ""}`}
       actions={<>
         <Menu align="right" button={<Btn kind="ghost">Sort: {sortLabel} {applied.sortOrder === "asc" ? "↑" : "↓"}</Btn>}
           items={[
@@ -2210,25 +2210,25 @@ export function Patients() {
           Filters{chips.length ? ` (${chips.length})` : ""}
         </Btn>
         <Btn kind="ghost" disabled={!total} onClick={() => setExportOpen(true)}>Export CSV</Btn>
-        {can("patients.manage") && <Btn onClick={() => setNewOpen(true)}>+ New patient</Btn>}
+        {can("patients.manage") && <Btn onClick={() => setNewOpen(true)}>+ New guest</Btn>}
       </>}>
       <Hint id="patients-live">Click any row to open the full record — visits, packages, forms, orders and consents. Use Filters to slice by centre, age, membership, visits, spend, treatments had, or lapsed guests; Export honours the same filters.</Hint>
 
       <div className="mb-3">
-        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name, phone, email or patient ID…"
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name, phone, email or guest ID…"
           className="w-full max-w-[420px] rounded-(--radius-btn) border border-border bg-surface px-3.5 py-2 text-[13px] outline-none focus:border-gold-dark" />
       </div>
       <ActiveFilters items={chips} onClear={() => clear({ ...EMPTY_PF, sortBy: applied.sortBy, sortOrder: applied.sortOrder })} />
       <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
 
-      <Async q={q} label="Loading patients…" rows={8}>
+      <Async q={q} label="Loading guests…" rows={8}>
         {() => users.length === 0 ? (
-          <Empty title="No patients here" hint={debounced || chips.length ? "Nothing matched the current search/filters." : "Add the first patient to get started."}
-            action={chips.length ? <Btn kind="ghost" onClick={() => clear(EMPTY_PF)}>Clear filters</Btn> : can("patients.manage") ? <Btn onClick={() => setNewOpen(true)}>+ New patient</Btn> : undefined} />
+          <Empty title="No guests here" hint={debounced || chips.length ? "Nothing matched the current search/filters." : "Add the first guest to get started."}
+            action={chips.length ? <Btn kind="ghost" onClick={() => clear(EMPTY_PF)}>Clear filters</Btn> : can("patients.manage") ? <Btn onClick={() => setNewOpen(true)}>+ New guest</Btn> : undefined} />
         ) : (
           <>
             <DataTable
-              cols={["Patient", "Patient ID", "Phone", "Centre", "Source", "Zenoti", "Joined", "Visits", "Spend", "Membership", "Flags"]}
+              cols={["Guest", "Guest ID", "Phone", "Centre", "Source", "Zenoti", "Joined", "Visits", "Spend", "Membership", "Flags"]}
               onRow={(i) => nav("/patient", { state: { id: users[i]._id } })}
               rows={users.map((p) => {
                 const flags = patientFlags(p);
@@ -2258,7 +2258,7 @@ export function Patients() {
             />
             {pagination && pagination.totalPages > 1 && (
               <div className="mt-3 flex items-center justify-between text-[12.5px] text-ink3">
-                <span>Page {pagination.currentPage} of {pagination.totalPages} · {pagination.totalUsers.toLocaleString("en-IN")} patients</span>
+                <span>Page {pagination.currentPage} of {pagination.totalPages} · {pagination.totalUsers.toLocaleString("en-IN")} guests</span>
                 <div className="flex gap-2">
                   <Btn kind="ghost" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>← Previous</Btn>
                   <Btn kind="ghost" disabled={page >= pagination.totalPages} onClick={() => setPage((p) => p + 1)}>Next →</Btn>
@@ -2269,7 +2269,7 @@ export function Patients() {
         )}
       </Async>
 
-      <FilterDrawer open={drawer} onClose={() => setDrawer(false)} title="Filter patients" activeCount={chips.length}
+      <FilterDrawer open={drawer} onClose={() => setDrawer(false)} title="Filter guests" activeCount={chips.length}
         onApply={() => setApplied(draft)} onReset={() => { setDraft({ ...EMPTY_PF, sortBy: draft.sortBy, sortOrder: draft.sortOrder }); }}>
         <FSection title="Source">
           <Chips options={[["", "All"], ["app", "App sign-ups"], ["reception", "Walk-ins"], ["zenoti", "Zennara clinic"]]} value={draft.source} onChange={(v) => set("source", v as string)} />
@@ -2304,7 +2304,7 @@ export function Patients() {
           <div className="mb-1 mt-2 text-[11px] font-bold text-ink2">Lifetime spend</div>
           <NumRange prefix="₹" min={draft.spendMin} max={draft.spendMax} onChange={(a, b) => setDraft((d) => ({ ...d, spendMin: a, spendMax: b }))} />
         </FSection>
-        <FSection title="Treatments" hint="Patients who have had…">
+        <FSection title="Treatments" hint="Guests who have had…">
           <Chips options={[["", "Anything"], ["consultation", "A dermatologist consultation"], ["treatment", "A treatment"]]} value={draft.kind} onChange={(v) => set("kind", v as string)} />
           {categoryOpts.length > 0 && <div className="mt-2"><Chips multi options={categoryOpts.map((c) => [c, c] as [string, string])} value={draft.category} onChange={(v) => set("category", v as string[])} /></div>}
           <MultiSelect className="mt-2" options={services.map((c) => [c._id, c.name])} value={draft.consultationId}
@@ -2326,7 +2326,7 @@ export function Patients() {
       </FilterDrawer>
 
       <ExportModal open={exportOpen} onClose={() => setExportOpen(false)} columns={PATIENT_EXPORT_COLS} filename="zennara-patients"
-        summary={`${total.toLocaleString("en-IN")} patient${total === 1 ? "" : "s"} match the current search and filters.`}
+        summary={`${total.toLocaleString("en-IN")} guest${total === 1 ? "" : "s"} match the current search and filters.`}
         fetchRows={(fields) => api.patients.exportAll({ ...query, page: undefined as unknown as string, limit: 20000, fields: fields.join(",") })} />
 
       <NewPatientModal open={newOpen} onClose={() => setNewOpen(false)} onCreated={(id) => { q.reload(); nav("/patient", { state: { id } }); }} />
@@ -2353,7 +2353,7 @@ function NewPatientModal({ open, onClose, onCreated }: {
 
   const submit = async () => {
     setErr(null);
-    if (f.fullName.trim().length < 2) return setErr("Enter the patient's full name");
+    if (f.fullName.trim().length < 2) return setErr("Enter the guest's full name");
     if (f.phone.replace(/\D/g, "").length < 10) return setErr("Enter a valid mobile number");
     if (!f.email.trim()) return setErr("An email is required — it is the login for the app");
     if (!f.dateOfBirth) return setErr("Date of birth is required");
@@ -2371,7 +2371,7 @@ function NewPatientModal({ open, onClose, onCreated }: {
   };
 
   return (
-    <Modal open={open} onClose={onClose} title="New patient" wide>
+    <Modal open={open} onClose={onClose} title="New guest" wide>
       <div className="grid gap-3 md:grid-cols-2">
         <In label="Full name" value={f.fullName} onChange={set("fullName")} />
         <In label="Mobile" value={f.phone} onChange={set("phone")} placeholder="+91 …" />
@@ -2381,11 +2381,11 @@ function NewPatientModal({ open, onClose, onCreated }: {
         <Sel label="Gender" value={f.gender} onChange={set("gender")} options={["Male", "Female", "Other"]} />
         <Sel label="Home centre" value={f.location} onChange={set("location")} options={branches.map((b) => b.name)} />
       </div>
-      <Note>A patient ID is generated automatically. If this email or number is already on file the server will say so rather than creating a duplicate.</Note>
+      <Note>A guest ID is generated automatically. If this email or number is already on file the server will say so rather than creating a duplicate.</Note>
       {err && <Note kind="crit">{err}</Note>}
       <div className="mt-3 flex justify-end gap-2">
         <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn disabled={busy} onClick={submit}>{busy ? "Creating…" : "Create patient"}</Btn>
+        <Btn disabled={busy} onClick={submit}>{busy ? "Creating…" : "Create guest"}</Btn>
       </div>
     </Modal>
   );
@@ -2426,7 +2426,7 @@ export function PatientDetail() {
   const gm = useApi(() => (id ? api.memberships.currentForUser(id).catch(() => null) : Promise.resolve(null)), [id, grantOpen, payOpen]);
 
   const q = useApi(async () => {
-    if (!id) throw new Error("No patient selected — open one from the Patients list.");
+    if (!id) throw new Error("No guest selected — open one from the Guests list.");
     const [user, bookings, assignments, orders, forms, consents, cards, clinicalNotes] = await Promise.all([
       api.patients.get(id),
       // Every list is scoped server-side to this guest; the client filter is a belt-and-braces guard.
@@ -2453,7 +2453,7 @@ export function PatientDetail() {
   };
 
   return (
-    <Async q={q} label="Loading patient record…" rows={8}>
+    <Async q={q} label="Loading guest record…" rows={8}>
       {({ user: p, bookings, assignments, orders, forms, consents, cards, clinicalNotes }) => {
         const flags = patientFlags(p);
         const age = ageFrom(p.dateOfBirth);
@@ -2687,12 +2687,12 @@ export function PatientDetail() {
               age ? `${age} ${p.gender ?? ""}`.trim() : p.gender,
               p.phone, p.location, p.patientId ? `ID ${p.patientId}` : "",
               `${p.totalVisits ?? 0} visits`,
-              p.source === "zenoti" ? "Clinic customer" : "App sign-up",
+              p.source === "zenoti" ? "Clinic guest" : "App sign-up",
               zd?.syncedAt ? `clinic data ${fmtAgo(zd.syncedAt)}` : "",
             ].filter(Boolean).join(" · ")}
             actions={<>
               <Btn kind="ghost" onClick={() => setEditOpen(true)}>Edit</Btn>
-              <Btn kind="ghost" onClick={() => nav(patientListPath)}>← All patients</Btn>
+              <Btn kind="ghost" onClick={() => nav(patientListPath)}>← All guests</Btn>
               {zLinked && (
                 <Btn kind="ghost" disabled={clinicBusy} onClick={refreshClinic}>
                   {clinicBusy ? "Refreshing…" : "Refresh from Zenoti"}
@@ -2740,7 +2740,7 @@ export function PatientDetail() {
                     <div className="grid gap-1.5 text-[12px] text-ink2">
                       {zProfile.code && <div>Guest code <B>{zProfile.code}</B></div>}
                       {zProfile.preferredName && <div>Preferred name <B>{zProfile.preferredName}</B></div>}
-                      {zProfile.memberSince && <div>Clinic customer since <B>{fmtZDate(zProfile.memberSince)}</B></div>}
+                      {zProfile.memberSince && <div>Clinic guest since <B>{fmtZDate(zProfile.memberSince)}</B></div>}
                       {zProfile.address && (zProfile.address.line1 || zProfile.address.city) && <div>Address <B>{[zProfile.address.line1, zProfile.address.city, zProfile.address.zip].filter(Boolean).join(", ")}</B></div>}
                       {(zProfile.isOnlineBookingBlocked || zProfile.isClassBookingBlocked || zProfile.isBlockedForNoShow) && (
                         <Note kind="crit" className="mb-0 mt-1">Booking restriction is active in Zenoti.</Note>
@@ -2921,7 +2921,7 @@ function EditPatientModal({ open, onClose, user, onSaved }: {
               fullName: f.fullName, phone: f.phone, email: f.email, dateOfBirth: f.dateOfBirth,
               gender: f.gender, location: f.location, drugAllergies: f.drugAllergies, medicalHistory: f.medicalHistory,
             });
-            toast("Patient updated"); onSaved(); onClose();
+            toast("Guest updated"); onSaved(); onClose();
           } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
         }}>{busy ? "Saving…" : "Save changes"}</Btn>
       </div>
@@ -3085,7 +3085,7 @@ function GrantMembershipModal({ open, onClose, user, onDone }: { open: boolean; 
 
 
 /** Search-and-pick a patient (used where an action needs a guest first, e.g. assigning a package). */
-export function PatientPickerModal({ open, onClose, onPick, title = "Choose a patient" }: { open: boolean; onClose: () => void; onPick: (u: User) => void; title?: string }) {
+export function PatientPickerModal({ open, onClose, onPick, title = "Choose a guest" }: { open: boolean; onClose: () => void; onPick: (u: User) => void; title?: string }) {
   const [term, setTerm] = useState("");
   const debounced = useDebounced(term);
   const q = useApi(() => (open && debounced.length >= 2 ? api.patients.list({ search: debounced, limit: 12 }) : Promise.resolve(undefined)), [open, debounced]);
@@ -3093,12 +3093,12 @@ export function PatientPickerModal({ open, onClose, onPick, title = "Choose a pa
   useEffect(() => { if (open) setTerm(""); }, [open]);
   return (
     <Modal open={open} onClose={onClose} title={title}>
-      <input autoFocus value={term} onChange={(e) => setTerm(e.target.value)} placeholder="Type a name, phone, email or patient ID…"
+      <input autoFocus value={term} onChange={(e) => setTerm(e.target.value)} placeholder="Type a name, phone, email or guest ID…"
         className="w-full rounded-lg border border-border bg-ivory px-3 py-2 text-[13px] outline-none focus:border-gold-dark" />
       <div className="mt-2 max-h-[320px] overflow-y-auto">
-        {debounced.length < 2 ? <div className="px-1 py-3 text-[12px] text-ink3">Start typing to search the patient list (app sign-ups and Zennara clinic customers).</div>
+        {debounced.length < 2 ? <div className="px-1 py-3 text-[12px] text-ink3">Start typing to search the guest list (app sign-ups and Zennara clinic guests).</div>
           : q.loading && !q.data ? <div className="p-3"><Spinner /></div>
-          : rows.length === 0 ? <div className="px-1 py-3 text-[12px] text-ink3">No patients match “{debounced}”.</div>
+          : rows.length === 0 ? <div className="px-1 py-3 text-[12px] text-ink3">No guests match “{debounced}”.</div>
           : rows.map((u) => (
             <button key={u._id} onClick={() => onPick(u)} className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left hover:bg-ivory">
               <span><B>{u.fullName}</B><span className="ml-2 text-[11.5px] text-ink3">{u.phone} · {u.location ?? "—"}</span></span>
@@ -3671,7 +3671,7 @@ export function Chat() {
                   </div>
                   <div className="flex shrink-0 gap-2">
                     <Btn kind="ghost" className="!px-2.5 !py-1 !text-[11.5px]"
-                      onClick={() => nav("/patient", { state: { id: idOf(cur.userId) } })}>Open patient ↗</Btn>
+                      onClick={() => nav("/patient", { state: { id: idOf(cur.userId) } })}>Open guest ↗</Btn>
                     {cur.status === "active" && (
                       canWorkChat && (
                         <>

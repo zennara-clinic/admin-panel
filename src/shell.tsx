@@ -34,7 +34,7 @@ const NAV: NavGroup[] = [
   ]},
   { g: "Operations", items: [
     { to: "/bookings", label: "Bookings", icon: <BookOpenCheck className={ic} />, badge: "bookings", perm: "bookings.view" },
-    { to: "/patients", label: "Patients", icon: <Users className={ic} />, perm: "patients.view" },
+    { to: "/patients", label: "Guests", icon: <Users className={ic} />, perm: "patients.view" },
     { to: "/deleted-accounts", label: "Deleted accounts", icon: <UserCog className={ic} />, perm: "patients.delete" },
     { to: "/contact-changes", label: "Contact changes", icon: <UserCog className={ic} />, perm: "contactChanges.view" },
     { to: "/chat", label: "Chat", icon: <MessagesSquare className={ic} />, badge: "chat", perm: "chat.view" },
@@ -186,19 +186,19 @@ function SearchOverlay() {
       <div className="relative w-full max-w-[560px] overflow-hidden rounded-(--radius-lg2) bg-surface shadow-2xl">
         <div className="flex items-center gap-2.5 border-b border-border px-4 py-3">
           <Search className="h-4 w-4 text-ink3" />
-          <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search patients, services, products…"
+          <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search guests, services, products…"
             className="flex-1 bg-transparent text-[14px] outline-none" />
           {results.loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-ink3" />}
           <kbd className="rounded border border-border bg-ivory px-1.5 font-mono text-[10px] text-ink3">esc</kbd>
         </div>
         <div className="max-h-[50vh] overflow-auto p-2">
           {q.trim().length < 2 && (
-            <div className="px-3 py-6 text-center text-[12.5px] text-ink3">Type at least two characters to search across patients, services and products.</div>
+            <div className="px-3 py-6 text-center text-[12.5px] text-ink3">Type at least two characters to search across guests, services and products.</div>
           )}
           {q.trim().length >= 2 && empty && !results.loading && (
             <div className="px-3 py-6 text-center text-[12.5px] text-ink3">Nothing matched “{q}”.</div>
           )}
-          {r.patients.length > 0 && <div className="px-3 pt-2 font-mono text-[9.5px] font-bold uppercase tracking-[0.12em] text-ink3">Patients</div>}
+          {r.patients.length > 0 && <div className="px-3 pt-2 font-mono text-[9.5px] font-bold uppercase tracking-[0.12em] text-ink3">Guests</div>}
           {r.patients.map((p) => (
             <button key={p._id} onClick={() => go(patientPath, { id: p._id })}
               className="block w-full rounded-lg px-3 py-2 text-left text-[13px] hover:bg-ivory">
@@ -470,7 +470,7 @@ export function Shell({ children }: { children: ReactNode }) {
           />
           <button data-tour="search" onClick={() => setSearchOpen(true)}
             className="mx-auto flex w-full min-w-[160px] max-w-[440px] flex-1 items-center justify-between rounded-(--radius-btn) border border-border bg-ivory px-3 py-1.5 text-[12.5px] text-ink3 hover:border-gold-dark">
-            <span className="flex items-center gap-2"><Search className="h-3.5 w-3.5" /> Search patients, bookings, services…</span>
+            <span className="flex items-center gap-2"><Search className="h-3.5 w-3.5" /> Search guests, bookings, services…</span>
             <kbd className="rounded border border-border bg-surface px-1.5 font-mono text-[10px]">⌘K</kbd>
           </button>
           <div className="flex items-center gap-3">

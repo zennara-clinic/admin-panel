@@ -409,7 +409,7 @@ export function TodaysSalesModal({ open, onClose, date }: { open: boolean; onClo
             </div>
             {lookErr && <Note kind="crit" className="my-0 mb-2">{lookErr}</Note>}
             {rows.length === 0 ? <div className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-[12px] text-ink3">No bills or payments on this day.</div> : (
-              <DataTable cols={["Invoice no", "Receipt no", "Customer", "Sale items (qty)", "Amount", "Due", "Status", "Source", ""]}
+              <DataTable cols={["Invoice no", "Receipt no", "Guest", "Sale items (qty)", "Amount", "Due", "Status", "Source", ""]}
                 rows={rows.map((r) => [
                   <span key="r" className="font-mono text-[11px]">{r.ref ?? "—"}</span>,
                   <span key="rc" className="font-mono text-[11px] text-ink3">{r.receipt ?? "—"}</span>,

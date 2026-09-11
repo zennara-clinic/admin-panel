@@ -592,7 +592,7 @@ export function Reviews() {
  * back to the oldest record it holds.
  */
 const ANALYTICS_RANGES: Record<string, number> = { "All time": 0, "7 days": 7, "30 days": 30, "90 days": 90, "6 months": 182, "This year": 365 };
-const ANALYTICS_TABS: [string, (number | string)?][] = [["Revenue"], ["Appointments"], ["Dermatologists"], ["Services"], ["Patients"], ["Products & orders"], ["Packages & memberships"], ["Stock"], ["Staff sales"]];
+const ANALYTICS_TABS: [string, (number | string)?][] = [["Revenue"], ["Appointments"], ["Dermatologists"], ["Services"], ["Guests"], ["Products & orders"], ["Packages & memberships"], ["Stock"], ["Staff sales"]];
 
 /** Group a daily series into ≤ n buckets (sum) for bar charts. */
 function bucketSeries<T>(rows: T[], n: number, pick: (r: T) => number): number[] {
@@ -676,7 +676,7 @@ export function Analytics() {
             ...d.revenue.streams.map((s) => [`${s.label} revenue`, s.revenue] as [string, number]),
             ...d.revenue.streams.map((s) => [`${s.label} count`, s.count] as [string, number]),
             ["Bookings", a.totalBookings], ["Completed", a.completedBookings], ["Cancellation rate %", a.cancellationRate], ["No-show rate %", a.noShowRate],
-            ["New patients", d.counts.newPatients], ["Active Zen members", d.counts.activeZen], ["Orders", d.counts.orders], ["Packages assigned", d.counts.packagesAssigned],
+            ["New guests", d.counts.newPatients], ["Active Zen members", d.counts.activeZen], ["Orders", d.counts.orders], ["Packages assigned", d.counts.packagesAssigned],
             ...d.dermatologists.map((x) => [`${x.name}`, `${x.bookings} bookings · ${x.completed} completed · ₹${x.revenue}`] as [string, string]),
             ...d.topServices.map((x) => [`Service: ${x.name}`, `${x.bookings} · ₹${x.revenue}`] as [string, string]),
           ]);
@@ -716,11 +716,11 @@ export function Analytics() {
                     window-relative answer to that is just wrong.
                   */}
                   <Stats items={[
-                    { k: "Patients on file", v: d.counts.totalPatients.toLocaleString("en-IN"), hot: true,
+                    { k: "Guests on file", v: d.counts.totalPatients.toLocaleString("en-IN"), hot: true,
                       d: `${d.counts.newThisMonth ?? 0} joined this month` },
                     { k: "New in this period", v: (d.counts.newPatients ?? 0).toLocaleString("en-IN"),
                       d: d.period.isAllTime ? "all time" : `${d.period.days} days` },
-                    { k: "Returning patients", v: (d.counts.returningPatients ?? 0).toLocaleString("en-IN"),
+                    { k: "Returning guests", v: (d.counts.returningPatients ?? 0).toLocaleString("en-IN"),
                       d: "seen more than once", tone: "up" },
                     { k: "Appointments to date", v: (d.counts.appointmentsAllTime ?? 0).toLocaleString("en-IN"),
                       d: `${d.counts.completed.toLocaleString("en-IN")} completed in period` },
@@ -828,7 +828,7 @@ export function Analytics() {
                     </ChartCard>
                   </div>
                   <div className="mt-3">
-                    <DataTable cols={["Dermatologist", "Level", "Bookings", "Consults", "Treatments", "Completed", "No-show", "Patients", "Rating", "Revenue", "Per booking"]}
+                    <DataTable cols={["Dermatologist", "Level", "Bookings", "Consults", "Treatments", "Completed", "No-show", "Guests", "Rating", "Revenue", "Per booking"]}
                       rows={d.dermatologists.map((x, i) => [
                         <span key={x.doctorId} className="flex items-center gap-2"><span className={`grid h-6 w-6 place-items-center rounded-full text-[10px] font-bold ${i === 0 && x.revenue > 0 ? "bg-gold text-primary" : "bg-sage text-ink2"}`}>{i + 1}</span><B>{x.name}</B>{!x.onboarded && <Tag kind="info">Zenoti</Tag>}</span>,
                         <Tag key={`${x.doctorId}l`} kind={!x.onboarded ? "info" : x.level === "Senior Dermatologist" ? "gold" : "mute"}>{x.level}</Tag>,
@@ -873,29 +873,29 @@ export function Analytics() {
               {tab === 4 && (
                 <>
                   <Stats items={[
-                    { k: "Patients on file", v: d.counts.totalPatients.toLocaleString("en-IN"), hot: true, d: `${d.counts.newPatients} new in period` },
-                    { k: "New patients", v: d.counts.newPatients, d: patients ? `${pct(patients.overview.newPatientRatio)} of bookers` : "" },
+                    { k: "Guests on file", v: d.counts.totalPatients.toLocaleString("en-IN"), hot: true, d: `${d.counts.newPatients} new in period` },
+                    { k: "New guests", v: d.counts.newPatients, d: patients ? `${pct(patients.overview.newPatientRatio)} of bookers` : "" },
                     { k: "Retention", v: patients ? pct(patients.overview.retentionRate) : "—", d: patients ? `${patients.overview.returningPatients} returning` : "" },
                     { k: "Zen members", v: d.counts.activeZen, d: `${d.counts.zenExpiring} expiring in 30d`, tone: d.counts.zenExpiring ? "dn" : undefined },
-                    { k: "Birthdays today", v: patients?.birthdaysToday?.length ?? 0, d: "send a wish from the patient page" },
+                    { k: "Birthdays today", v: patients?.birthdaysToday?.length ?? 0, d: "send a wish from the guest page" },
                     { k: "Inactive", v: patients?.inactivePatients?.count ?? 0, d: `no visit in ${patients?.inactivePatients?.threshold ?? 90}d` },
                   ]} />
                   <div className="grid gap-3 xl:grid-cols-2">
-                    <ChartCard title="New patients per month" hero={String(d.counts.newPatients)}>
-                      {acquisition.length > 1 ? <AreaChart pts={acquisition.map((m) => Number(m.count) || 0)} labels={acquisition.map((m) => String(m.month))} label="New patients" /> : <Empty title="Not enough history yet" />}
+                    <ChartCard title="New guests per month" hero={String(d.counts.newPatients)}>
+                      {acquisition.length > 1 ? <AreaChart pts={acquisition.map((m) => Number(m.count) || 0)} labels={acquisition.map((m) => String(m.month))} label="New guests" /> : <Empty title="Not enough history yet" />}
                     </ChartCard>
-                    <ChartCard title="By home centre" sub="Registered patients">
+                    <ChartCard title="By home centre" sub="Registered guests">
                       {sources.length ? <HBars color="var(--color-c2)" rows={sources.map((x) => [x.source || "Unknown", x.count, `${x.count} · ${pct(x.percentage)}`] as [string, number, string])} /> : <Empty title="No data" />}
                     </ChartCard>
                     {demographics && (
                       <>
-                        <ChartCard title="Age groups" sub="Registered patients"><HBars rows={(demographics.ageGroups ?? []).map((g) => [(g as { range?: string; group?: string }).range ?? (g as { group?: string }).group ?? "—", g.count] as [string, number])} /></ChartCard>
-                        <ChartCard title="Gender" sub="Registered patients"><HBars color="var(--color-c3)" rows={Object.entries(demographics.gender ?? {}).filter(([k]) => k !== "total").map(([k, v]) => [k, Number(v)] as [string, number])} /></ChartCard>
+                        <ChartCard title="Age groups" sub="Registered guests"><HBars rows={(demographics.ageGroups ?? []).map((g) => [(g as { range?: string; group?: string }).range ?? (g as { group?: string }).group ?? "—", g.count] as [string, number])} /></ChartCard>
+                        <ChartCard title="Gender" sub="Registered guests"><HBars color="var(--color-c3)" rows={Object.entries(demographics.gender ?? {}).filter(([k]) => k !== "total").map(([k, v]) => [k, Number(v)] as [string, number])} /></ChartCard>
                       </>
                     )}
                     <Card className="p-4 xl:col-span-2">
-                      <SecH t="Top patients by spend" em={`· ${label}`} />
-                      {top.length === 0 ? <Empty title="No spend recorded" /> : <DataTable cols={["Patient", "Spend", "Visits"]} rows={top.map((t) => [<B key={t._id}>{t.fullName}</B>, fmtINR(t.totalSpent), t.visits ?? "—"])} />}
+                      <SecH t="Top guests by spend" em={`· ${label}`} />
+                      {top.length === 0 ? <Empty title="No spend recorded" /> : <DataTable cols={["Guest", "Spend", "Visits"]} rows={top.map((t) => [<B key={t._id}>{t.fullName}</B>, fmtINR(t.totalSpent), t.visits ?? "—"])} />}
                     </Card>
                   </div>
                 </>
