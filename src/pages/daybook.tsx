@@ -9,7 +9,7 @@ import { useStore } from "../store";
 import api, { type TodaysSales } from "../lib/api";
 import { useApi, useMutation } from "../lib/useApi";
 import {
-  bookingProvider, bookingServiceName, bookingSlotDate, clinicHM, fmtAgo, fmtINR, fmtWhen, isConsultationBooking, statusKey,
+  bookingProvider, bookingServiceName, bookingSlotDate, clinicHM, fmtAgo, fmtINR, fmtWhen, guestCodeOf, isConsultationBooking, statusKey,
 } from "../lib/format";
 import type { Booking, Consultation, DayBook, DayBookBlock, DayBookProvider } from "../lib/types";
 import { InvoiceModal } from "./billing";
@@ -413,7 +413,7 @@ export function TodaysSalesModal({ open, onClose, date }: { open: boolean; onClo
                 rows={rows.map((r) => [
                   <span key="r" className="font-mono text-[11px]">{r.ref ?? "—"}</span>,
                   <span key="rc" className="font-mono text-[11px] text-ink3">{r.receipt ?? "—"}</span>,
-                  <span key="c"><B>{r.customer ?? "—"}</B>{r.patientId ? <span className="ml-1 font-mono text-[10px] text-ink3">{r.patientId}</span> : null}</span>,
+                  <span key="c"><B>{r.customer ?? "—"}</B>{guestCodeOf(r) ? <span className="ml-1 font-mono text-[10px] text-ink3">{guestCodeOf(r)}</span> : null}</span>,
                   <span key="i" className="text-[11.5px]">{r.items.join(", ")}<span className="text-ink3">{r.method ? ` · ${r.method}` : ""}</span></span>,
                   <span key="a" className="tabular-nums">{fmtINR(r.amount)}</span>,
                   <span key="d" className={`tabular-nums ${r.due > 0 ? "font-bold text-err" : ""}`}>{fmtINR(r.due)}</span>,

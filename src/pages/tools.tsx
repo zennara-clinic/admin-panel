@@ -13,7 +13,7 @@ import { useStore } from "../store";
 import api from "../lib/api";
 import { download } from "../lib/http";
 import { useApi } from "../lib/useApi";
-import { fmtDate } from "../lib/format";
+import { fmtDate, guestCodeOf } from "../lib/format";
 import type { BulkPreview, BulkResult, FormTemplate, FormTemplateField, Id } from "../lib/types";
 
 type Entity = "services" | "categories" | "products";
@@ -252,11 +252,11 @@ function Submissions({ template, onClose }: { template: FormTemplate | null; onC
             <DataTable
               cols={cols}
               rows={list.map((s) => {
-                const user = (s.userId ?? {}) as { fullName?: string; patientId?: string };
+                const user = (s.userId ?? {}) as { fullName?: string; patientId?: string; guestCode?: string | null };
                 const booking = (s.bookingId ?? {}) as { referenceNumber?: string };
                 return [
                   fmtDate(s.submittedAt ?? s.createdAt ?? ""),
-                  `${user.fullName ?? "—"}${user.patientId ? ` · ${user.patientId}` : ""}`,
+                  `${user.fullName ?? "—"}${guestCodeOf(user) ? ` · ${guestCodeOf(user)}` : ""}`,
                   booking.referenceNumber ?? "—",
                   `v${s.templateVersion}`,
                 ];

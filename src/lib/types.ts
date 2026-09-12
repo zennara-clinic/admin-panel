@@ -99,6 +99,7 @@ export type DeletedAccount = {
   phone?: string;
   fullName?: string;
   patientId?: string;
+  guestCode?: string | null;
   deletedAt: string;
   deletedBy: "user" | "admin";
   reason?: string;
@@ -206,6 +207,8 @@ export type DayBook = {
 export type User = {
   _id: Id;
   patientId?: string;
+  /** Zenoti's own guest code — the one the clinic prints and the desk quotes. */
+  guestCode?: string | null;
   /** How the guest found the clinic (asked once at the desk). */
   referralSource?: string | null;
   referredByUserId?: Id | null;
@@ -950,7 +953,7 @@ export type FormSubmissionRow = {
   _id: Id;
   templateId: Id;
   templateVersion: number;
-  userId?: { fullName?: string; email?: string; phone?: string; patientId?: string } | Id | null;
+  userId?: { fullName?: string; email?: string; phone?: string; patientId?: string; guestCode?: string | null } | Id | null;
   bookingId?: { referenceNumber?: string; eventAt?: string } | Id | null;
   answers: Record<string, unknown>;
   status: "draft" | "submitted";
@@ -1554,7 +1557,7 @@ export type Invoice = {
   branchId: Id | { _id: Id; name: string; invoicePrefix?: string | null };
   seller?: { name?: string | null; legalName?: string | null; gstin?: string | null; pan?: string | null; stateCode?: string | null; address?: string | null; phone?: string | null; email?: string | null };
   userId?: Id | (Pick<User, "_id" | "fullName" | "phone" | "email" | "patientId"> & { gender?: string; memberType?: string; zenMembershipExpiryDate?: string | null }) | null;
-  guest: { name?: string | null; phone?: string | null; email?: string | null; patientId?: string | null; gender?: string | null; stateCode?: string | null; gstin?: string | null };
+  guest: { name?: string | null; phone?: string | null; email?: string | null; patientId?: string | null; guestCode?: string | null; gender?: string | null; stateCode?: string | null; gstin?: string | null };
   visitGroupId?: string | null;
   status: InvoiceStatus;
   source: "desk" | "app" | "zenoti";

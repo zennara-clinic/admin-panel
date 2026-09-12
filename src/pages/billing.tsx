@@ -6,7 +6,7 @@ import { useStore } from "../store";
 import api, { type NewInvoiceLine } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { buildGuestLedger, type LedgerRow } from "../lib/guestLedger";
-import { fmtDate, fmtINR, fmtWhen, fmtAgo, isoDay } from "../lib/format";
+import { fmtDate, fmtINR, fmtWhen, fmtAgo, guestCodeOf, isoDay } from "../lib/format";
 import type { Invoice, InvoiceLine, GuestPackageBalance, GuestMembership, PaymentMethod, Consultation, Product, Inventory, Package, Doctor, Membership, InvoiceSummary, ProductOrder, PackageAssignment, MembershipAssignment } from "../lib/types";
 
 /* ------------------------------------------------------------------------- *
@@ -281,7 +281,7 @@ export function InvoiceModal({ open, invoiceId, onClose, onChanged }: { open: bo
                   <button className="font-bold underline-offset-2 hover:underline" onClick={() => { const uid = idOf(inv.userId); if (uid) { close(); nav("/patient", { state: { id: uid } }); } }}>{guestName}</button>
                   {inv.guest?.phone && <span className="opacity-80">| {inv.guest.phone}</span>}
                   {inv.guest?.email ? <span className="opacity-80">| {inv.guest.email}</span> : <button className="text-[11px] underline-offset-2 opacity-80 hover:underline" onClick={() => setSendOpen(true)}>Add email</button>}
-                  {inv.guest?.patientId && <span className="font-mono text-[11px] opacity-70">{inv.guest.patientId}</span>}
+                  {guestCodeOf(inv.guest) && <span className="font-mono text-[11px] opacity-70">{guestCodeOf(inv.guest)}</span>}
                   {inv.membership?.name && <span className="rounded-full bg-gold/30 px-2 py-0.5 text-[10.5px] font-bold">{inv.membership.name}{inv.membership.memberNumber ? ` · ${inv.membership.memberNumber}` : ""}</span>}
                 </div>
               </div>

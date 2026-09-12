@@ -290,6 +290,16 @@ export function nameOf(v: unknown, fallback = "—"): string {
   return o.fullName ?? o.name ?? o.inventoryName ?? fallback;
 }
 
+/**
+ * The human-readable guest code, wherever one is shown.
+ *
+ * Zenoti's own code is what the clinic prints on paper and the desk quotes.
+ * `patientId` is the locally generated id it replaced, kept only as a fallback
+ * for the handful of guests Zenoti has never seen.
+ */
+export const guestCodeOf = (g: { guestCode?: string | null; patientId?: string | null } | null | undefined) =>
+  g?.guestCode || g?.patientId || "";
+
 export function initials(name: string | undefined | null): string {
   if (!name) return "?";
   const parts = name.replace(/^Dr\.?\s+/i, "").trim().split(/\s+/).filter(Boolean);

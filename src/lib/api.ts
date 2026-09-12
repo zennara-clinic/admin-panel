@@ -895,7 +895,7 @@ export type Dashboard = {
 };
 
 /** A row on the "Today's sales" register. */
-export type SaleRow = { kind: "invoice" | "visit" | "order" | "package"; id: Id; ref: string | null; receipt?: string | null; customer: string | null; phone: string | null; patientId: string | null; userId?: Id | null; items: string[]; amount: number; due: number; method: string | null; methods?: Record<string, number>; at: string | null; status: string; source: string; staff: string | null };
+export type SaleRow = { kind: "invoice" | "visit" | "order" | "package"; id: Id; ref: string | null; receipt?: string | null; customer: string | null; phone: string | null; patientId: string | null; guestCode?: string | null; userId?: Id | null; items: string[]; amount: number; due: number; method: string | null; methods?: Record<string, number>; at: string | null; status: string; source: string; staff: string | null };
 export type TodaysSales = { date: string | null; totals: { count: number; amount: number; visits: number; products: number; packages: number; due: number; dueCount: number; open?: number; void?: number; byMethod: Record<string, number> }; rows: SaleRow[] };
 
 /* ============================ billing ============================ */

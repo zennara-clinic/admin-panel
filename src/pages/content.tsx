@@ -8,7 +8,7 @@ import { useStore } from "../store";
 import api from "../lib/api";
 import { useApi, useDebounced } from "../lib/useApi";
 import { useQueryPage, useQueryString } from "../lib/useListState";
-import { fmtDate, fmtWhen, fmtAgo } from "../lib/format";
+import { fmtDate, fmtWhen, fmtAgo, guestCodeOf } from "../lib/format";
 import type { Banner, DeletedAccount, StockMovement } from "../lib/types";
 
 /* =====================================================================
@@ -253,7 +253,7 @@ export function DeletedAccounts() {
     <Page title="Deleted accounts" sub="Guests who deleted their account from the app, kept in full so they can be brought back"
       actions={<Btn kind="ghost" onClick={() => setShowRestored((v) => !v)}>{showRestored ? "Hide restored" : "Show restored too"}</Btn>}>
       <Hint id="deleted-accounts">Deleting an account removes the person from every live screen, but their bookings, orders, forms and chats are archived here. Restore puts everything back exactly as it was — unless the same email or phone has since signed up again.</Hint>
-      <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name, email, phone or guest ID…"
+      <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name, email, phone or guest code…"
         className="mb-3 w-full max-w-[420px] rounded-(--radius-btn) border border-border bg-surface px-3.5 py-2 text-[13px] outline-none focus:border-gold-dark" />
       <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
       <Async q={q} label="Loading archive…" rows={5}>
@@ -263,7 +263,7 @@ export function DeletedAccounts() {
           <DataTable cols={["Guest", "Contact", "Deleted", "By", "Records", "Status"]}
             onRow={(i) => setSel(rows[i])}
             rows={rows.map((a) => [
-              <B key={a._id}>{a.fullName ?? "—"}{a.patientId ? <span className="ml-1.5 font-mono text-[10px] text-ink3">{a.patientId}</span> : null}</B>,
+              <B key={a._id}>{a.fullName ?? "—"}{guestCodeOf(a) ? <span className="ml-1.5 font-mono text-[10px] text-ink3">{guestCodeOf(a)}</span> : null}</B>,
               <span key={`${a._id}c`} className="text-[12px]">{a.email ?? "—"}<br /><span className="text-ink3">{a.phone ?? ""}</span></span>,
               <span key={`${a._id}d`}>{fmtWhen(a.deletedAt)}<br /><span className="text-[11px] text-ink3">{fmtAgo(a.deletedAt)} ago</span></span>,
               a.deletedBy === "admin" ? "Staff" : "Guest (app)",
