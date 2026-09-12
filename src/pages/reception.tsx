@@ -11,7 +11,7 @@ import { useStore } from "../store";
 import { DEFAULT_METRIC_RANGE, customWindow, metricWindow, type MetricRange } from "../lib/ranges";
 import { RangeSwitch } from "../rangeSwitch";
 import api from "../lib/api";
-import { PreConsultModal } from "../preconsult";
+import { DigitisePreConsultModal, PreConsultModal, originSummary } from "../preconsult";
 import { DayBookGrid, STATE_STYLE, TodaysSalesModal } from "./daybook";
 import { InvoiceModal, useOpenInvoice, GuestInvoices } from "./billing";
 import { TemplatePicker } from "./templates";
@@ -25,7 +25,7 @@ import { CLINIC_TZ,
   statusKey, mapToRows, isConsultationBooking, clinicHM, addClinicDays, clinicMonthEnd,
   clinicMonthStart, clinicWeekday, dayKeyDate, fmtDayKey, zenotiDiaryLabel, visitTimes,
 } from "../lib/format";
-import type { ConsultationStage, Booking, Branch, Chat as ChatThread, ChatMessage, Consultation, Doctor, PackageAssignment, PreConsultForm, User, Package } from "../lib/types";
+import type { ConsultationStage, Booking, Branch, Chat as ChatThread, ChatMessage, Consultation, Doctor, IntakeDetail, IntakeState, PackageAssignment, PreConsultForm, User, Package } from "../lib/types";
 
 /* ================= OVERVIEW ================= */
 export function Overview() {
@@ -2118,10 +2118,12 @@ type PatientFilters = {
   visitsMin: string; visitsMax: string; spendMin: string; spendMax: string;
   flags: string[]; isActive: string; verified: string;
   kind: string; consultationId: string[]; category: string[]; specialistId: string[];
+  /** Pre-consult intake: '' | digital | paper | none — `?intake=` on the list. */
+  intake: string;
   sortBy: string; sortOrder: string;
 };
 const EMPTY_PF: PatientFilters = {
-  source: "", memberType: "", zen: "", location: [], gender: [], ageMin: "", ageMax: "", joinedFrom: "", joinedTo: "",
+  source: "", memberType: "", zen: "", intake: "", location: [], gender: [], ageMin: "", ageMax: "", joinedFrom: "", joinedTo: "",
   lastLoginFrom: "", lastLoginTo: "", lastVisitFrom: "", lastVisitTo: "", noVisitSince: "", visitsMin: "", visitsMax: "",
   spendMin: "", spendMax: "", flags: [], isActive: "", verified: "", kind: "", consultationId: [], category: [], specialistId: [],
   sortBy: "createdAt", sortOrder: "desc",
@@ -2139,6 +2141,20 @@ function patientQuery(f: PatientFilters): Record<string, string | number> {
     else if (v !== "" && v !== undefined) q[k] = v;
   });
   return q;
+}
+
+const INTAKE_LABEL: Record<IntakeState, string> = { digital: "Digital", paper: "On paper", none: "Not yet" };
+const INTAKE_KIND: Record<IntakeState, "ok" | "gold" | "mute"> = { digital: "ok", paper: "gold", none: "mute" };
+
+/**
+ * Digital / On paper / Not yet. Most guests on file filled the form on paper
+ * at the desk years before the app; "On paper" is a real state, not a gap.
+ * An older backend sends no `intake` at all — that renders as a dash, never as "Not yet".
+ */
+function IntakeTag({ state, label }: { state?: IntakeState | null; label?: string | null }) {
+  if (!state) return <span className="text-ink3">—</span>;
+  const title = state === "paper" ? "Filled on paper at the clinic — not yet digitised" : state === "digital" ? "Digital pre-consult form on file" : "No pre-consult form yet";
+  return <span title={title}><Tag kind={INTAKE_KIND[state]}>{label || INTAKE_LABEL[state]}</Tag></span>;
 }
 
 export function Patients() {
@@ -2187,6 +2203,7 @@ export function Patients() {
   if (applied.source) chips.push({ key: "source", label: applied.source === "zenoti" ? "Zennara clinic" : applied.source === "reception" ? "Walk-ins" : "App sign-ups", onRemove: () => clear({ source: "" }) });
   if (applied.memberType) chips.push({ key: "mt", label: applied.memberType, onRemove: () => clear({ memberType: "" }) });
   if (applied.zen) chips.push({ key: "zen", label: `Zen: ${applied.zen}`, onRemove: () => clear({ zen: "" }) });
+  if (applied.intake) chips.push({ key: "intake", label: `Intake: ${INTAKE_LABEL[applied.intake as IntakeState] ?? applied.intake}`, onRemove: () => clear({ intake: "" }) });
   if (applied.location.length) chips.push({ key: "loc", label: applied.location.join(", "), onRemove: () => clear({ location: [] }) });
   if (applied.gender.length) chips.push({ key: "g", label: applied.gender.join("/"), onRemove: () => clear({ gender: [] }) });
   if (applied.ageMin || applied.ageMax) chips.push({ key: "age", label: `Age ${applied.ageMin || "0"}–${applied.ageMax || "∞"}`, onRemove: () => clear({ ageMin: "", ageMax: "" }) });
@@ -2236,7 +2253,7 @@ export function Patients() {
         ) : (
           <>
             <DataTable
-              cols={["Guest", "Guest code", "Phone", "Centre", "Source", "Zenoti", "Joined", "Visits", "Spend", "Membership", "Flags"]}
+              cols={["Guest", "Guest code", "Phone", "Centre", "Source", "Intake", "Zenoti", "Joined", "Visits", "Spend", "Membership", "Flags"]}
               onRow={(i) => nav("/patient", { state: { id: users[i]._id } })}
               rows={users.map((p) => {
                 const flags = patientFlags(p);
@@ -2247,6 +2264,7 @@ export function Patients() {
                   p.phone,
                   p.location ?? "—",
                   p.source === "zenoti" ? <Tag key={`${p._id}src`} kind="info">Clinic</Tag> : p.source === "reception" ? <Tag key={`${p._id}src`} kind="gold">Walk-in</Tag> : <Tag key={`${p._id}src`} kind="mute">App</Tag>,
+                  <IntakeTag key={`${p._id}in`} state={p.intake?.state} label={p.intake?.label} />,
                   // Whether Zenoti holds this patient — the external client id is the
                   // integration reference, so a missing one has to be visible here.
                   p.zenotiGuestId
@@ -2281,6 +2299,9 @@ export function Patients() {
         onApply={() => setApplied(draft)} onReset={() => { setDraft({ ...EMPTY_PF, sortBy: draft.sortBy, sortOrder: draft.sortOrder }); }}>
         <FSection title="Source">
           <Chips options={[["", "All"], ["app", "App sign-ups"], ["reception", "Walk-ins"], ["zenoti", "Zennara clinic"]]} value={draft.source} onChange={(v) => set("source", v as string)} />
+        </FSection>
+        <FSection title="Intake form" hint="Where the pre-consult form lives. On paper = filled at the desk, not yet keyed in.">
+          <Chips options={[["", "All"], ["digital", "Digital"], ["paper", "On paper"], ["none", "Not yet"]]} value={draft.intake} onChange={(v) => set("intake", v as string)} />
         </FSection>
         <FSection title="Membership">
           <Chips options={[["", "Any"], ["Zen Member", "Zen members"], ["Regular Member", "Regular"]]} value={draft.memberType} onChange={(v) => set("memberType", v as string)} />
@@ -2412,6 +2433,8 @@ export function PatientDetail() {
   const [payOpen, setPayOpen] = useState(false);
   /** The pre-consult the doctor clicked open in the record table. */
   const [openForm, setOpenForm] = useState<PreConsultForm | null>(null);
+  /** Keying a paper form in; `replace` when a digital one already exists. */
+  const [digitise, setDigitise] = useState<{ replace: boolean } | null>(null);
   const [sp, setSp] = useSearchParams();
   // Opened from the list (router state) or from a notification / link (?id=).
   const routeState = loc.state as { id?: string; returnTo?: string } | null;
@@ -2448,6 +2471,9 @@ export function PatientDetail() {
   // Clinic (Zenoti) history — mirrored locally, refreshed when stale. Loaded
   // separately so a slow CRM never holds up the rest of the record.
   const clinic = useApi(() => (id ? api.zenoti.user(id).catch(() => null) : Promise.resolve(null)), [id]);
+  // Digital / paper / none, with the evidence the desk has seen this guest.
+  // Fails soft: an older backend without the endpoint just hides the card's detail.
+  const intakeQ = useApi(() => (id ? api.preConsult.intake(id).catch(() => null) : Promise.resolve(null)), [id]);
   const [clinicBusy, setClinicBusy] = useState(false);
   const refreshClinic = async () => {
     setClinicBusy(true);
@@ -2520,7 +2546,14 @@ export function PatientDetail() {
                 ]} />,
 
           /* clinical records */
-          recordCount === 0
+          <div key="r">
+            <IntakeCard user={p} detail={intakeQ.data ?? null} forms={forms} canManage={canManagePatient}
+              onRead={(f) => setOpenForm(f)}
+              onDigitise={(replace) => {
+                if (replace && !window.confirm(`${p.fullName} already has a digital pre-consult form. Enter a newer paper form and replace it?`)) return;
+                setDigitise({ replace });
+              }} />
+          {recordCount === 0
             ? <Empty key="r" title="No clinical records" hint="Pre-consult forms, consultation notes and service cards appear here as they are written." />
             : <DataTable key="r" cols={["Date", "Record", "Dermatologist", "Status"]}
                 /* A pre-consult is the first n rows, so a click on one of them
@@ -2569,7 +2602,8 @@ export function PatientDetail() {
                   n.createdBy ?? "—",
                   n.isProfileAlert ? <Tag key={`zns${i}`} kind="warn">Profile alert</Tag> : <Tag key={`zns${i}`} kind="ok">Note</Tag>,
                 ]),
-              ]} />,
+              ]} />}
+          </div>,
 
           /* packages */
           <div key="p">
@@ -2882,10 +2916,77 @@ export function PatientDetail() {
             <EditPatientModal open={editOpen} onClose={() => setEditOpen(false)} user={p} onSaved={q.reload} />
             <BookingDrawer id={selBooking} onClose={() => setSelBooking(null)} onChanged={q.reload} />
             <PreConsultModal form={openForm} open={!!openForm} onClose={() => setOpenForm(null)} />
+            <DigitisePreConsultModal userId={p._id} guestName={p.fullName} open={!!digitise} replace={digitise?.replace}
+              onClose={() => setDigitise(null)} onDone={() => { intakeQ.reload(); q.reload(); }} />
           </Page>
         );
       }}
     </Async>
+  );
+}
+
+/**
+ * The Intake card at the top of a guest's clinical records.
+ *
+ * 6,071 of 7,081 guests filled the pre-consult form on paper at the desk and
+ * had nothing on screen to show for it — staff read "no form" and asked them
+ * to fill it again. This card says which of the three states the guest is in
+ * (digital / on paper / not yet), what makes us believe it (visits, packages,
+ * prescriptions), and gives the desk the one action that fixes the paper
+ * case: keying the sheet in.
+ */
+function IntakeCard({ user, detail, forms, canManage, onRead, onDigitise }: {
+  user: User; detail: IntakeDetail | null; forms: PreConsultForm[]; canManage: boolean;
+  onRead: (f: PreConsultForm) => void; onDigitise: (replace: boolean) => void;
+}) {
+  // Endpoint first, the list row's summary next, and — on a backend that
+  // knows neither — the forms we already loaded. Never a guess of "Not yet".
+  const state: IntakeState | null = detail?.state ?? user.intake?.state ?? (forms.length ? "digital" : null);
+  const label = detail?.label ?? user.intake?.label ?? null;
+  const formId = detail?.formId ?? detail?.form?._id ?? user.intake?.formId ?? null;
+  const form = (formId && forms.find((f) => f._id === formId)) || forms[0] || null;
+  const origin = form?.origin ?? detail?.form?.origin ?? null;
+  const filled = originSummary(origin, form ?? detail?.form ?? null)
+    ?? (form ? `Filled on ${fmtDate(form.dateOfVisit || form.createdAt)}` : null);
+
+  const ev = detail?.evidence ?? null;
+  const parts: string[] = [];
+  const visits = ev?.completedVisits ?? user.totalVisits ?? 0;
+  if (visits) parts.push(`Seen ${visits} time${visits === 1 ? "" : "s"}`);
+  if (ev?.packages) parts.push(`${ev.packages} package${ev.packages === 1 ? "" : "s"}`);
+  if (ev?.prescriptions) parts.push(`${ev.prescriptions} prescription${ev.prescriptions === 1 ? "" : "s"}`);
+  const evidence = parts.join(" · ");
+
+  const canDigitise = canManage && (detail?.canDigitise ?? true);
+
+  return (
+    <Card className="mb-3 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-mono text-[10px] font-bold uppercase tracking-[0.09em] text-ink3">Intake</span>
+            <IntakeTag state={state} label={label} />
+            {!state && <span className="text-[11.5px] text-ink3">Not recorded</span>}
+          </div>
+          <div className="mt-1 text-[12px] text-ink2">
+            {state === "paper" && <span>Filled on paper at the clinic — the sheet is in the file, not in the system yet.</span>}
+            {state === "none" && <span>No pre-consult form yet — ask the guest to fill it in the app or on the tablet before the consultation.</span>}
+            {state === "digital" && filled && <span>{filled}</span>}
+            {!state && <span>This backend does not report where the intake lives yet.</span>}
+          </div>
+          {evidence && <div className="mt-0.5 text-[11.5px] text-ink3">{evidence}</div>}
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          {form && <Btn kind="ghost" onClick={() => onRead(form)}>Read the form</Btn>}
+          {state !== "digital" && canDigitise && <Btn kind="gold" onClick={() => onDigitise(false)}>Digitise paper form</Btn>}
+          {state === "digital" && canDigitise && (
+            <button type="button" onClick={() => onDigitise(true)} className="text-[11.5px] font-semibold text-ink3 underline decoration-ink3/40 underline-offset-2 hover:text-primary">
+              Enter a newer paper form
+            </button>
+          )}
+        </div>
+      </div>
+    </Card>
   );
 }
 

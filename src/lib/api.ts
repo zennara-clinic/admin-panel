@@ -11,7 +11,7 @@ import type {
   Consultation, ConsultationStage, ConsentForm, ConsultationNote, ConsultationReview, Coupon, DermatologistSchedule,
   Doctor, DoctorAvailability, WeeklyBlock,
   DoctorFeeRequest, Formulation, MyFee, ScheduleDay, SlotDay,
-  Id, Inventory, Notification, Package, PackageAssignment, PreConsultForm, Product, ProductOrder,
+  Id, Inventory, Notification, Package, PackageAssignment, PreConsultForm, IntakeDetail, PreConsultSchema, Product, ProductOrder,
   BulkPreview, BulkResult, FormTemplate, FormSubmissionRow, PatientPhoto, ProductAvailability,
   PurchaseOrder, PurchaseOrderStatus, ProductReview, ServiceCard, ServiceReview, ServiceType, SupportMessage, TaxonomyTree, User, Vendor,
   Role, PermissionGroup, PermissionKey,
@@ -86,6 +86,10 @@ export type UserListEnvelope = Envelope<{
 }>;
 
 export const patients = {
+  /**
+   * `q` goes straight to the query string, so every filter the list drawer
+   * knows — including `intake=digital|paper|none` — passes through untouched.
+   */
   list: (q?: Query) =>
     requestRaw<{
       users: User[];
@@ -731,6 +735,19 @@ export const preConsult = {
   list: (q?: Query) => requestRaw<PreConsultForm[]>("/pre-consult-forms/admin/all", { query: q }),
   setStatus: (id: Id, status: string) =>
     request<PreConsultForm>(`/pre-consult-forms/admin/${id}/status`, { method: "PATCH", body: { status } }),
+  /** Digital, on paper, or not yet — plus the evidence the desk saw this guest. */
+  intake: (userId: Id) => request<IntakeDetail>(`/pre-consult-forms/admin/intake/${userId}`),
+  /** The field list the digitise editor renders from; the backend owns the questions. */
+  schema: () => request<PreConsultSchema>("/pre-consult-forms/admin/schema"),
+  /**
+   * Key a paper form into the record. Raw envelope on purpose: a 400 carries
+   * `fieldErrors`, a 409 carries `code: 'INTAKE_ALREADY_DIGITAL'` — both are
+   * thrown as ApiError with the payload, so the caller reads them from there.
+   */
+  digitise: (userId: Id, body: { values: Record<string, unknown>; paperDate: string; notes?: string; replace?: boolean }) =>
+    requestRaw<{ _id: Id; status: string; createdAt?: string; dateOfVisit?: string; origin?: PreConsultForm["origin"] }>(
+      `/pre-consult-forms/admin/digitise/${userId}`, { method: "POST", body },
+    ),
 };
 
 export const consentForms = {

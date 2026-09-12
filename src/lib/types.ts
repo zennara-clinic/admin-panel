@@ -258,6 +258,71 @@ export type User = {
   upcomingAppointments?: number;
   createdAt?: string;
   lastLogin?: string | null;
+  /**
+   * Where this guest's pre-consult intake lives — digital, on paper at the
+   * desk, or nowhere yet. Absent from older backends; treat as unknown.
+   */
+  intake?: IntakeSummary | null;
+};
+
+/* ---------------- pre-consult intake ---------------- */
+/** 'paper' = the guest filled the form at the desk and it was never keyed in. */
+export type IntakeState = "digital" | "paper" | "none";
+
+/** The intake summary carried on every `GET /users` row and `GET /users/:id`. */
+export type IntakeSummary = {
+  state: IntakeState;
+  label: "Digital" | "On paper" | "Not yet" | string;
+  formId?: Id | null;
+  capturedOn?: "digital" | "paper" | null;
+  channel?: "app" | "walkin" | "staff" | null;
+  lastVisitAt?: string | null;
+};
+
+/** How a pre-consult form came to exist — stamped on every PreConsultForm. */
+export type PreConsultOrigin = {
+  channel?: "app" | "walkin" | "staff" | null;
+  capturedOn?: "digital" | "paper" | null;
+  /** The date written on the paper form, when staff keyed it in. */
+  paperDate?: string | null;
+  enteredBy?: { id?: Id | null; name?: string | null; role?: string | null } | null;
+  enteredAt?: string | null;
+  signatureOnPaper?: boolean | null;
+  /** The backend guessed the channel from older data rather than recording it. */
+  inferred?: boolean;
+};
+
+/** `GET /pre-consult-forms/admin/intake/:userId`. */
+export type IntakeDetail = {
+  state: IntakeState;
+  label: string;
+  formId?: Id | null;
+  form?: { _id: Id; status: PreConsultForm["status"]; createdAt?: string; dateOfVisit?: string; origin?: PreConsultOrigin | null } | null;
+  evidence?: { completedVisits?: number; packages?: number; prescriptions?: number } | null;
+  canDigitise?: boolean;
+};
+
+export type PreConsultFieldType = "text" | "textarea" | "date" | "email" | "number" | "select" | "chips" | "multichips" | "yesno" | "boolean";
+
+export type PreConsultSchemaField = {
+  key: string;
+  label: string;
+  type: PreConsultFieldType;
+  options?: { value: string; label: string }[];
+  required?: boolean;
+  hint?: string;
+  maxLength?: number;
+  /** Only shown while the sibling field `key` currently equals `equals`. */
+  showIf?: { key: string; equals: unknown };
+};
+
+export type PreConsultSchemaStep = { key: string; title: string; fields: PreConsultSchemaField[] };
+
+/** `GET /pre-consult-forms/admin/schema` — what the digitise editor renders from. */
+export type PreConsultSchema = {
+  steps: PreConsultSchemaStep[];
+  /** A blank value object with every key present. */
+  empty: Record<string, unknown>;
 };
 
 /* ---------------- bookings ---------------- */
@@ -1277,6 +1342,8 @@ export type PreConsultForm = {
   status: "Draft" | "Submitted" | "Approved" | "Reviewed" | "Rejected";
   dateOfVisit?: string;
   createdAt?: string;
+  /** How the form was captured (app / tablet / keyed in from paper). Absent on older backends. */
+  origin?: PreConsultOrigin | null;
 };
 
 export type ConsentForm = {
