@@ -337,6 +337,8 @@ export type Booking = {
   assignedTherapistName?: string | null;
   _id: Id;
   isPackageIncluded?: boolean;
+  /** Why a consultation was free: it supports an ongoing package. */
+  consultContext?: "package_support" | null;
   /** Every desk decision that moved this appointment, oldest first. */
   statusLog?: StatusLogEntry[];
   /**
@@ -1390,6 +1392,13 @@ export type AppCustomization = {
     /** The Zenoti membership this card sells (invoiced in Zenoti on purchase). */
     zenotiMembershipVersionId?: string;
     zenotiMembershipName?: string;
+    /** Where the charged price comes from: Zenoti's list price for the linked variant, or `priceInr` typed here. */
+    priceSource?: "zenoti" | "manual";
+    /** Zenoti custom payment type used to close the app sale (Zenoti has no API to list these). */
+    zenotiCustomPaymentId?: string;
+    /** Zenoti employee recorded as having closed the sale. */
+    zenotiClosedByEmployeeId?: string;
+    zenotiClosedByEmployeeName?: string;
     name?: string;
     tagline?: string;
     description?: string;
@@ -1633,9 +1642,29 @@ export type Membership = {
   terms?: string;
   source?: "panel" | "zenoti";
   zenotiMembershipId?: string | null;
+  zenotiVersionId?: string | null;
+  /** What Zenoti itself holds for the linked variant (price only — Zenoti publishes no duration/benefits for the Zen family). */
+  zenotiRaw?: { durationMonths?: number; code?: string; variants?: { id: string; name: string; listPrice: number | null }[] } | null;
+  /**
+   * The price the app sells the plan at right now, and where it came from.
+   * Present on the Zen row only; absent when the backend has not resolved it.
+   */
+  live?: {
+    amount?: number | null;
+    currency?: string | null;
+    source?: "zenoti" | "manual" | null;
+    zenotiListPrice?: number | null;
+    zenotiName?: string | null;
+    zenotiCode?: string | null;
+    zenotiVersionId?: string | null;
+    zenotiIsActive?: boolean | null;
+    validityMonths?: number | null;
+    discountPercent?: number | null;
+  } | null;
   membersCount?: number;
   createdAt?: string;
 };
+export type MembershipZenotiSyncStatus = "pending" | "synced" | "invoice_open" | "failed" | "skipped" | "dryrun";
 export type MembershipAssignment = {
   _id: Id;
   userId: Id | Pick<User, "_id" | "fullName" | "phone" | "email" | "patientId">;
@@ -1655,6 +1684,13 @@ export type MembershipAssignment = {
   notes?: string;
   source?: "panel" | "app" | "zenoti";
   soldByName?: string | null;
+  /** Outcome of recording this sale in Zenoti (app/desk sales only; mirrored rows are null). */
+  zenotiSyncStatus?: MembershipZenotiSyncStatus | null;
+  zenotiSyncError?: string | null;
+  zenotiInvoiceId?: string | null;
+  zenotiInvoiceNumber?: string | null;
+  zenotiUserMembershipId?: string | null;
+  zenotiSyncedAt?: string | null;
   createdAt?: string;
 };
 /** The guest's live membership as the bill and the profile see it (plan row or legacy Zen tier). */

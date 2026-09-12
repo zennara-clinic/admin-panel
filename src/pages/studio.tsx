@@ -536,23 +536,49 @@ export function ConsultPage() {
 }
 
 
-/** Pick the Zenoti membership the app's Zen membership is sold as. */
-function ZenotiMembershipPick({ value, onChange }: { value: string; onChange: (versionId: string, name: string) => void }) {
-  const q = useApi(() => api.zenoti.catalogMemberships().catch(() => []), []);
-  const rows = q.data ?? [];
-  const current = rows.find((m) => (m.versionId ?? m.id) === value);
+/** One row of Zenoti's membership catalog, as the picker sees it. */
+type ZenotiPickRow = Awaited<ReturnType<typeof api.zenoti.catalogMemberships>>[number];
+const pickKey = (m: ZenotiPickRow) => m.versionId ?? m.id;
+const pickLabel = (m: ZenotiPickRow) => [m.price != null ? `₹${m.price}` : null, m.code || null, m.isActive == null ? null : m.isActive ? "active" : "inactive"].filter(Boolean).join(" · ");
+
+/**
+ * Pick the Zenoti membership the app's Zen membership is sold as. Only the Zen
+ * family (MVP, MVP Jh, Zen Membership…) shows by default; "show all" lists the
+ * whole catalog. Older backends send no `isZenFamily`, so with no flagged rows
+ * the picker falls back to the full list.
+ */
+function ZenotiMembershipPick({ value, onChange, onRow }: { value: string; onChange: (versionId: string, name: string) => void; onRow?: (row: ZenotiPickRow | null) => void }) {
+  const q = useApi(() => api.zenoti.catalogMemberships().catch(() => [] as ZenotiPickRow[]), []);
+  const [showAll, setShowAll] = useState(false);
+  const all = q.data ?? [];
+  const zenFamily = all.filter((m) => m.isZenFamily);
+  const rows = showAll || zenFamily.length === 0 ? all : zenFamily;
+  const current = all.find((m) => pickKey(m) === value) ?? null;
+  // The picked row may sit outside the Zen family; keep it selectable.
+  const options = current && !rows.some((m) => pickKey(m) === value) ? [current, ...rows] : rows;
+  useEffect(() => { onRow?.(current); }, [current?.id, current?.price, current?.isActive]);
   return (
     <div className="grid gap-1">
-      <select value={value} onChange={(e) => { const m = rows.find((r) => (r.versionId ?? r.id) === e.target.value); onChange(e.target.value, m?.name ?? ""); }}
+      <select value={value} onChange={(e) => { const m = all.find((r) => pickKey(r) === e.target.value); onChange(e.target.value, m?.name ?? ""); }}
         className="rounded-lg border border-border bg-ivory px-2.5 py-2 text-[12.5px] text-ink outline-none focus:border-gold-dark">
         <option value="">— not linked (uses the server's default membership) —</option>
-        {rows.map((m) => (
-          <option key={m.id} value={m.versionId ?? m.id}>{m.name}{m.price != null ? ` · ₹${m.price}` : ""}</option>
+        {options.map((m) => (
+          <option key={m.id} value={pickKey(m)}>{m.name}{pickLabel(m) ? ` · ${pickLabel(m)}` : ""}</option>
         ))}
       </select>
-      <div className="text-[10.5px] text-ink3">
-        {q.loading ? "Loading Zenoti memberships…" : current ? `Zenoti price ₹${current.price ?? "—"}${current.discountedPrice != null ? ` (offer ₹${current.discountedPrice})` : ""} — the app charges the price below regardless.` : `${rows.length} membership(s) in Zenoti`}
+      <div className="flex flex-wrap items-center justify-between gap-2 text-[10.5px] text-ink3">
+        <span>
+          {q.loading ? "Loading Zenoti memberships…" : current
+            ? `Zenoti: ${pickLabel(current) || "no price listed"}${current.discountedPrice != null ? ` (offer ₹${current.discountedPrice})` : ""}${current.durationMonths ? ` · ${current.durationMonths} mo` : ""}`
+            : `${rows.length} of ${all.length} membership(s)${zenFamily.length && !showAll ? " · Zen family only" : ""}`}
+        </span>
+        {zenFamily.length > 0 && zenFamily.length < all.length && (
+          <button type="button" className="underline-offset-2 hover:underline" onClick={() => setShowAll((v) => !v)}>{showAll ? "Zen family only" : "show all"}</button>
+        )}
       </div>
+      {current?.isActive === false && (
+        <Note kind="crit" className="my-0 text-[11.5px]">This membership is inactive in Zenoti; invoices for it may be refused.</Note>
+      )}
     </div>
   );
 }
@@ -567,6 +593,16 @@ export function MembershipCard() {
   // rather than being threaded through homeScreen.
   const setMem = c.section("membership");
   const mem = () => ((c.draft?.membership ?? {}) as Record<string, unknown>);
+  const priceSource = mem().priceSource === "manual" ? "manual" : "zenoti";
+  // The Zenoti variant the picker resolved — its list price is the live price
+  // when the source is Zenoti.
+  const [zenotiRow, setZenotiRow] = useState<ZenotiPickRow | null>(null);
+  const livePrice = priceSource === "zenoti" ? zenotiRow?.price ?? null : Number(mem().priceInr ?? 0) || null;
+  // Zenoti employees who can be recorded as closing the sale.
+  const staff = useApi(() => api.zenoti.practitioners().catch(() => []), []);
+  const staffRows = (staff.data ?? []).filter((p) => p.zenotiEmployeeId);
+  const closedById = String(mem().zenotiClosedByEmployeeId ?? "");
+  const closedByKnown = staffRows.some((p) => p.zenotiEmployeeId === closedById);
 
   // Member counts are a nicety on this editor, and the endpoint belongs to the
   // Analytics page. Ask only when the account may actually read it, so a
@@ -625,14 +661,42 @@ export function MembershipCard() {
                     base/sale are the struck-through and offer figures on the card. */}
                 <SecH t="Zenoti membership" em="· what a purchase is recorded as in Zenoti" />
                 <ZenotiMembershipPick value={String(mem().zenotiMembershipVersionId ?? "")}
-                  onChange={(id, name) => { setMem("zenotiMembershipVersionId")(id); setMem("zenotiMembershipName")(name); }} />
+                  onChange={(id, name) => { setMem("zenotiMembershipVersionId")(id); setMem("zenotiMembershipName")(name); }}
+                  onRow={setZenotiRow} />
                 <div className="mb-3" />
-                <SecH t="Pricing" em="· the member is charged the price below" />
+                <SecH t="Pricing" em={priceSource === "zenoti" ? "· the member is charged Zenoti's live price" : "· the member is charged the price typed below"} />
+                <div className="mb-3 grid gap-1.5">
+                  <div className="text-[11px] font-bold tracking-[0.02em] text-ink2">Price source</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {([["zenoti", "Zenoti live"], ["manual", "Manual"]] as const).map(([v, label]) => (
+                      <button key={v} type="button" onClick={() => setMem("priceSource")(v)}
+                        className={`rounded-full border px-3 py-1 text-[12px] font-semibold transition-colors ${priceSource === v ? "border-primary bg-primary text-white" : "border-border bg-surface text-ink2 hover:bg-ivory"}`}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="text-[10.5px] text-ink3">
+                    {priceSource === "zenoti"
+                      ? zenotiRow
+                        ? zenotiRow.price != null
+                          ? <>Live price <B>{fmtINR(zenotiRow.price)}</B>{zenotiRow.code ? ` · ${zenotiRow.code}` : ""}{zenotiRow.isActive == null ? "" : zenotiRow.isActive ? " · active in Zenoti" : " · inactive in Zenoti"} — read from the picked variant each time the app loads.</>
+                          : "The picked Zenoti variant lists no price — pick another or switch to Manual."
+                        : "Pick a Zenoti membership above to read its price."
+                      : "The app charges the price typed here; Zenoti's list price is ignored."}
+                  </div>
+                  {priceSource === "zenoti" && zenotiRow?.isActive === false && (
+                    <Note kind="crit" className="my-0 text-[11.5px]">This membership is inactive in Zenoti; invoices for it may be refused.</Note>
+                  )}
+                </div>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <In label="Membership name" value={String(mem().name ?? "")} onChange={setMem("name")} />
                   <In label="Tagline" value={String(mem().tagline ?? "")} onChange={setMem("tagline")} />
-                  <In label="Price charged (₹)" type="number" value={String(mem().priceInr ?? "")}
-                    onChange={(v) => setMem("priceInr")(Number(v) || 0)} />
+                  <div className={priceSource === "zenoti" ? "opacity-50" : ""}>
+                    <In label={priceSource === "zenoti" ? "Price charged (₹) · from Zenoti" : "Price charged (₹)"} type="number"
+                      value={priceSource === "zenoti" ? String(zenotiRow?.price ?? mem().priceInr ?? "") : String(mem().priceInr ?? "")}
+                      readOnly={priceSource === "zenoti"}
+                      onChange={(v) => { if (priceSource === "manual") setMem("priceInr")(Number(v) || 0); }} />
+                  </div>
                   <In label="Original price (₹, optional)" type="number" value={String(mem().basePriceInr ?? "")}
                     onChange={(v) => setMem("basePriceInr")(Number(v) || 0)} />
                   <In label="Offer price shown (₹, optional)" type="number" value={String(mem().salePriceInr ?? "")}
@@ -663,10 +727,31 @@ export function MembershipCard() {
                     </label>
                   </div>
                   <Note className="mb-0 text-[11.5px]">
-                    Guests are charged <B>Price charged</B>. The original and offer prices are only what the card
+                    Guests are charged {priceSource === "zenoti" ? <>Zenoti&rsquo;s live price{livePrice != null ? <> (<B>{fmtINR(livePrice)}</B> right now)</> : null}</> : <B>Price charged</B>}. The original and offer prices are only what the card
                     displays — they never change what Razorpay collects. Turning <B>On sale</B> off stops new
                     purchases without affecting existing members.
                   </Note>
+                </div>
+
+                <SecH t="Closing the sale in Zenoti" em="· how an app purchase is invoiced there" />
+                <div className="grid gap-3">
+                  <In label="Custom payment type id" value={String(mem().zenotiCustomPaymentId ?? "")} onChange={setMem("zenotiCustomPaymentId")}
+                    placeholder="e.g. 4f1c…-…" hint="The id of the Razorpay/online custom payment type set up in Zenoti — Zenoti has no API to list these, paste it from Zenoti admin" />
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[11px] font-bold tracking-[0.02em] text-ink2">Closed by (employee)</label>
+                    <select value={closedByKnown ? closedById : ""}
+                      onChange={(e) => { const p = staffRows.find((x) => x.zenotiEmployeeId === e.target.value); setMem("zenotiClosedByEmployeeId")(p?.zenotiEmployeeId ?? ""); setMem("zenotiClosedByEmployeeName")(p?.name ?? ""); }}
+                      className="rounded-lg border border-border bg-ivory px-2.5 py-2 text-[12.5px] text-ink outline-none focus:border-gold-dark">
+                      <option value="">{staff.loading ? "Loading Zenoti staff…" : staffRows.length ? "— pick a Zenoti employee —" : "— no Zenoti staff loaded; type an id below —"}</option>
+                      {staffRows.map((p) => <option key={p.zenotiEmployeeId ?? p.filterValue} value={p.zenotiEmployeeId ?? ""}>{p.name}{p.centers?.length ? ` · ${p.centers.join(", ")}` : ""}</option>)}
+                    </select>
+                    <div className="text-[10.5px] text-ink3">The Zenoti employee the invoice is recorded as closed by. {closedById && !closedByKnown ? "The saved id is not in the staff list — it is kept as typed below." : ""}</div>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <In label="Employee id (any Zenoti employee)" value={closedById} onChange={(v) => { setMem("zenotiClosedByEmployeeId")(v.trim()); const p = staffRows.find((x) => x.zenotiEmployeeId === v.trim()); if (p) setMem("zenotiClosedByEmployeeName")(p.name); }}
+                      placeholder="Paste a Zenoti employee id" hint="Free-text fallback when the person is not in the list" />
+                    <In label="Employee name (shown on the sale)" value={String(mem().zenotiClosedByEmployeeName ?? "")} onChange={setMem("zenotiClosedByEmployeeName")} />
+                  </div>
                 </div>
               </Card>
 

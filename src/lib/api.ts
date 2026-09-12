@@ -998,6 +998,8 @@ export const memberships = {
   cancelMember: (id: Id, body: { reason: string; refundAmount?: number; refundMethod?: string }) =>
     requestRaw<MembershipAssignment>(`/memberships/members/${id}/cancel`, { method: "POST", body }),
   currentForUser: (userId: Id) => request<GuestMembership | null>(`/memberships/current/${userId}`),
+  /** Re-run the Zenoti sale sync for one member (app/desk sales that failed or never reached Zenoti). */
+  zenotiPush: (id: Id) => requestRaw<MembershipAssignment>(`/memberships/members/${id}/zenoti-push`, { method: "POST" }),
 };
 
 /** Held time on a provider's diary (Zenoti block-outs and desk blocks). */
@@ -1178,9 +1180,14 @@ export type ReportingPractitioner = {
   bookings?: number; revenue?: number; lastVisit?: string | null;
 };
 
+/** A membership as Zenoti's catalog lists it. The Zen-family flags/fields arrive with the newer backend; older responses omit them. */
+export type ZenotiCatalogMembership = {
+  id: string; versionId: string | null; name: string; price: number | null; discountedPrice: number | null; description: string | null; imagePaths: string[];
+  code?: string | null; isActive?: boolean | null; durationMonths?: number | null; htmlBenefits?: string | null; terms?: string | null; isZenFamily?: boolean;
+};
 export const zenoti = {
   /** Zenoti's membership products — name, price, images — for the membership card to pick from. */
-  catalogMemberships: () => request<{ id: string; versionId: string | null; name: string; price: number | null; discountedPrice: number | null; description: string | null; imagePaths: string[] }[]>("/admin/zenoti/catalog/memberships"),
+  catalogMemberships: () => request<ZenotiCatalogMembership[]>("/admin/zenoti/catalog/memberships"),
   /** Mirror Zenoti products (attributes only; stock is not in the feed). */
   syncProducts: () => request<Record<string, unknown>>("/admin/zenoti/products/sync", { method: "POST" }),
   /** Mirror the clinics' address, phone, email and map pin from Zenoti. */

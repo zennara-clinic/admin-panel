@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
-import { useEffect, useState } from "react";
-import { Btn, Tag, Modal, Note, In, Sel, Area, B, Page, DataTable, Async, Tabs, Switch, Empty, SecH } from "../ui";
+import { useEffect, useState, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
+import { Btn, Tag, Modal, Note, In, Sel, Area, B, Page, DataTable, Async, Tabs, Switch, Empty, SecH, Card, type TagKind } from "../ui";
 import { useStore } from "../store";
 import api from "../lib/api";
 import { useApi } from "../lib/useApi";
@@ -18,8 +19,45 @@ import type { Membership, MembershipAssignment, Consultation, User } from "../li
 const errMsg = (e: unknown) => (e as Error)?.message || "Something went wrong";
 const nameOf = (v: unknown, fb = "—") => (typeof v === "object" && v ? ((v as { fullName?: string; name?: string }).fullName || (v as { name?: string }).name || fb) : fb);
 
+/* ---------------------------- Zenoti sale sync ---------------------------- */
+
+const ZENOTI_SYNC: Record<NonNullable<MembershipAssignment["zenotiSyncStatus"]>, { label: string; kind: TagKind }> = {
+  synced: { label: "Synced", kind: "ok" },
+  invoice_open: { label: "Invoice open", kind: "warn" },
+  failed: { label: "Failed", kind: "err" },
+  pending: { label: "Pending", kind: "mute" },
+  skipped: { label: "Skipped", kind: "mute" },
+  dryrun: { label: "Dry run", kind: "mute" },
+};
+/** Sales made here or in the app that Zenoti has not fully recorded yet — the ones a re-push can help. */
+const canPushToZenoti = (a: MembershipAssignment) => (a.source === "app" || a.source === "panel") && a.zenotiSyncStatus !== "synced";
+
+function ZenotiSyncTag({ a }: { a: MembershipAssignment }) {
+  const st = a.zenotiSyncStatus ? ZENOTI_SYNC[a.zenotiSyncStatus] : null;
+  if (!st) return <span className="text-ink3">—</span>;
+  return <span title={a.zenotiSyncError || undefined}><Tag kind={st.kind}>{st.label}</Tag></span>;
+}
+
+function PushToZenotiButton({ a, onDone, small }: { a: MembershipAssignment; onDone: () => void; small?: boolean }) {
+  const { toast } = useStore();
+  const [busy, setBusy] = useState(false);
+  return (
+    <button disabled={busy}
+      onClick={async (e) => {
+        e.stopPropagation(); setBusy(true);
+        try { const r = await api.memberships.zenotiPush(a._id); toast(r.message || "Pushed to Zenoti"); onDone(); }
+        catch (err) { toast(errMsg(err)); }
+        finally { setBusy(false); }
+      }}
+      className={`rounded-(--radius-btn) border border-border bg-surface font-semibold text-ink2 hover:bg-ivory disabled:cursor-not-allowed disabled:text-dis ${small ? "px-2 py-0.5 text-[10.5px]" : "px-3 py-1.5 text-[12px]"}`}>
+      {busy ? "Pushing…" : "Push to Zenoti"}
+    </button>
+  );
+}
+
 export function Memberships() {
-  const { can } = useStore();
+  const { can, toast } = useStore();
+  const nav = useNavigate();
   const [tab, setTab] = useState(0);
   const [edit, setEdit] = useState<Membership | null>(null);
   const [creating, setCreating] = useState(false);
@@ -27,31 +65,33 @@ export function Memberships() {
   const [memberSel, setMemberSel] = useState<MembershipAssignment | null>(null);
   const [status, setStatus] = useState("Active");
   const [search, setSearch] = useState("");
-  const plans = useApi(() => api.memberships.list({ includeInactive: "true" }), []);
+  const [retiredOpen, setRetiredOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  // The default list is the one plan on sale (the Zen membership); the retired
+  // Zenoti variants only come back when asked for, and only for reference.
+  const plans = useApi(() => api.memberships.list(), []);
+  const retired = useApi(() => api.memberships.list({ includeInactive: "true" }).catch(() => [] as Membership[]), []);
   const members = useApi(() => (tab === 1 ? api.memberships.members({ status, search: search || undefined, limit: 300 }) : Promise.resolve([] as MembershipAssignment[])), [tab, status, search]);
   const canManage = can("memberships.manage") || can("packages.manage");
   const rows = plans.data ?? [];
+  const zen = rows.find((m) => m.isAppDefault) ?? rows[0] ?? null;
+  const retiredRows = (retired.data ?? []).filter((m) => m._id !== zen?._id);
+  const reloadPlans = () => { plans.reload(); retired.reload(); };
+  const refreshPrice = async () => {
+    setRefreshing(true);
+    try { await api.zenoti.syncCatalog(); toast("Zenoti catalogue refreshed"); reloadPlans(); }
+    catch (e) { toast(errMsg(e)); }
+    finally { setRefreshing(false); }
+  };
   return (
-    <Page title="Memberships" sub="Plans a guest can hold — a % off services and products for a period, some with service credits. Member numbers run prefix + seed."
-      actions={canManage ? <div className="flex gap-2"><Btn kind="ghost" onClick={() => setSellOpen(true)}>Sell / grant a membership</Btn><Btn onClick={() => setCreating(true)}>New plan</Btn></div> : undefined}>
-      <Tabs active={tab} onChange={setTab} items={[["Plans", rows.length], ["Members"]]} />
+    <Page title="Memberships" sub="The Zen membership a guest can hold — a % off services and products for a period, some with service credits. Member numbers run prefix + seed."
+      actions={canManage ? <div className="flex gap-2"><Btn kind="ghost" onClick={() => setSellOpen(true)}>Sell / grant a membership</Btn>{!zen && <Btn onClick={() => setCreating(true)}>New plan</Btn>}</div> : undefined}>
+      <Tabs active={tab} onChange={setTab} items={[["The Zen membership"], ["Members"]]} />
       {tab === 0 ? (
-        <Async q={plans} label="Loading plans…" rows={4}>
-          {() => rows.length === 0 ? <Empty title="No membership plans yet" hint="Create one, or wait for the hourly Zenoti sync to mirror the clinic's plans." /> : (
-            <DataTable cols={["Name", "Code", "Prefix · next no.", "Price", "Validity", "Discounts", "Credits", "Members", "Status", "Source"]}
-              onRow={(i) => canManage && setEdit(rows[i])}
-              rows={rows.map((m) => [
-                <span key="n"><B>{m.name}</B>{m.isAppDefault ? <Tag kind="gold">App card</Tag> : null}</span>,
-                <span key="c" className="font-mono text-[11px]">{m.code}</span>,
-                <span key="p" className="font-mono text-[11px]">{m.prefix || "—"}{m.prefix ? `${m.seed ?? 1}` : ""}</span>,
-                fmtINR(m.price),
-                `${m.validityMonths} mo`,
-                [m.discounts?.servicesPercent ? `${m.discounts.servicesPercent}% svc` : "", m.discounts?.productsPercent ? `${m.discounts.productsPercent}% prod` : "", m.discounts?.packagesPercent ? `${m.discounts.packagesPercent}% pkg` : ""].filter(Boolean).join(" · ") || "—",
-                (m.credits ?? []).length ? (m.credits ?? []).map((c) => `${c.serviceName || c.serviceId} ×${c.qty}`).join(", ") : "—",
-                String(m.membersCount ?? 0),
-                <Tag key="s" kind={m.isActive ? "ok" : "mute"}>{m.isActive ? "Active" : "Inactive"}</Tag>,
-                m.source === "zenoti" ? <Tag key="z" kind="info">Zenoti</Tag> : "Panel",
-              ])} />
+        <Async q={plans} label="Loading the plan…" rows={4}>
+          {() => !zen ? <Empty title="No membership plan yet" hint="Create one, or wait for the hourly Zenoti sync to mirror the clinic's plan." action={canManage ? <Btn onClick={() => setCreating(true)}>New plan</Btn> : undefined} /> : (
+            <ZenPlanCard plan={zen} canManage={canManage} refreshing={refreshing}
+              onEdit={() => setEdit(zen)} onRefresh={refreshPrice} onStudio={() => nav("/studio/membership")} />
           )}
         </Async>
       ) : (
@@ -62,7 +102,7 @@ export function Memberships() {
           </div>
           <Async q={members} label="Loading members…" rows={4}>
             {() => (members.data ?? []).length === 0 ? <Empty title="No members match" /> : (
-              <DataTable cols={["Member no.", "Guest", "Plan", "Valid", "Credits left", "Paid", "Status", "Source"]}
+              <DataTable cols={["Member no.", "Guest", "Plan", "Valid", "Credits left", "Paid", "Status", "Source", "Zenoti"]}
                 onRow={(i) => setMemberSel((members.data ?? [])[i])}
                 rows={(members.data ?? []).map((a) => [
                   <span key="n" className="font-mono text-[11.5px] font-semibold">{a.memberNumber ?? "—"}</span>,
@@ -73,15 +113,104 @@ export function Memberships() {
                   a.payment?.isReceived ? <Tag key="p" kind="ok">{fmtINR(a.price)}</Tag> : <Tag key="p" kind="warn">{fmtINR(a.payment?.balanceDue ?? a.price)} due</Tag>,
                   <Tag key="s" kind={a.status === "Active" ? "ok" : "mute"}>{a.status}</Tag>,
                   a.source === "zenoti" ? "Zenoti" : a.source === "app" ? "App" : "Desk",
+                  <span key="z" className="flex flex-wrap items-center gap-1.5">
+                    <ZenotiSyncTag a={a} />
+                    {a.zenotiInvoiceNumber && <span className="font-mono text-[11px] text-ink3">{a.zenotiInvoiceNumber}</span>}
+                    {canManage && canPushToZenoti(a) && <PushToZenotiButton a={a} small onDone={() => members.reload()} />}
+                  </span>,
                 ])} />
             )}
           </Async>
         </>
       )}
-      <PlanEditor open={creating || !!edit} plan={edit} onClose={() => { setCreating(false); setEdit(null); }} onSaved={() => { setCreating(false); setEdit(null); plans.reload(); }} />
-      <SellMembershipModal open={sellOpen} onClose={() => setSellOpen(false)} onDone={() => { setSellOpen(false); members.reload(); plans.reload(); }} />
+      {tab === 0 && zen && (
+        <div className="mt-4">
+          <button className="text-[12px] font-semibold text-ink2 underline-offset-2 hover:underline" onClick={() => setRetiredOpen((v) => !v)}>
+            {retiredOpen ? "Hide" : "Show"} retired Zenoti variants{retired.data ? ` (${retiredRows.length})` : ""}
+          </button>
+          {retiredOpen && (
+            <div className="mt-2">
+              <Note className="my-0 mb-2 text-[11.5px]">Earlier names Zenoti has used for the same membership (MVP, MVP-2026, Zen Membership…). Kept for reference only — nothing here is sold or edited.</Note>
+              <Async q={retired} label="Loading variants…" rows={2}>
+                {() => retiredRows.length === 0 ? <div className="text-[12.5px] text-ink3">No retired variants.</div> : (
+                  <DataTable dense cols={["Name", "Code", "Price", "Validity", "Members", "Status", "Source"]}
+                    rows={retiredRows.map((m) => [
+                      <B key="n">{m.name}</B>,
+                      <span key="c" className="font-mono text-[11px]">{m.code || m.zenotiRaw?.code || "—"}</span>,
+                      fmtINR(m.price),
+                      `${m.validityMonths} mo`,
+                      String(m.membersCount ?? 0),
+                      <Tag key="s" kind={m.isActive ? "ok" : "mute"}>{m.isActive ? "Active" : "Retired"}</Tag>,
+                      m.source === "zenoti" ? <Tag key="z" kind="info">Zenoti</Tag> : "Panel",
+                    ])} />
+                )}
+              </Async>
+            </div>
+          )}
+        </div>
+      )}
+      <PlanEditor open={creating || !!edit} plan={edit} onClose={() => { setCreating(false); setEdit(null); }} onSaved={() => { setCreating(false); setEdit(null); reloadPlans(); }} />
+      <SellMembershipModal open={sellOpen} onClose={() => setSellOpen(false)} onDone={() => { setSellOpen(false); members.reload(); reloadPlans(); }} />
       <MemberDrawer a={memberSel} onClose={() => setMemberSel(null)} onChanged={() => { members.reload(); }} canEdit={canManage} />
     </Page>
+  );
+}
+
+/* ------------------------------ the Zen card ------------------------------ */
+
+const Row = ({ k, v }: { k: string; v: ReactNode }) => <div className="flex items-start justify-between gap-3 border-b border-border/60 py-1.5 text-[12.5px]"><span className="shrink-0 text-ink3">{k}</span><span className="text-right">{v}</span></div>;
+
+function ZenPlanCard({ plan: m, canManage, refreshing, onEdit, onRefresh, onStudio }: { plan: Membership; canManage: boolean; refreshing: boolean; onEdit: () => void; onRefresh: () => void; onStudio: () => void }) {
+  const live = m.live ?? null;
+  const liveAmount = live?.amount ?? null;
+  const liveSource = live?.source ?? null;
+  const inactiveInZenoti = live?.zenotiIsActive === false;
+  const variant = [live?.zenotiName, live?.zenotiCode].filter(Boolean).join(" · ");
+  const discountPct = live?.discountPercent ?? m.discounts?.servicesPercent ?? 0;
+  const validity = live?.validityMonths ?? m.validityMonths;
+  return (
+    <Card className="p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[16px] font-bold">{m.name}</span>
+            {m.isAppDefault && <Tag kind="gold">App card</Tag>}
+            <Tag kind={m.isActive ? "ok" : "mute"}>{m.isActive ? "On sale" : "Inactive"}</Tag>
+            {m.source === "zenoti" && <Tag kind="info">Linked to Zenoti</Tag>}
+            {inactiveInZenoti && <Tag kind="warn">Inactive in Zenoti</Tag>}
+          </div>
+          <div className="mt-0.5 font-mono text-[11px] text-ink3">{m.code}{m.prefix ? ` · next member no. ${m.prefix}${m.seed ?? 1}` : ""}</div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {canManage && <Btn kind="ghost" onClick={onEdit}>Edit plan</Btn>}
+          {canManage && <Btn kind="ghost" disabled={refreshing} onClick={onRefresh}>{refreshing ? "Refreshing…" : "Refresh price from Zenoti"}</Btn>}
+          <Btn kind="gold" onClick={onStudio}>Configure in App Studio → Membership</Btn>
+        </div>
+      </div>
+      <div className="mt-3 grid gap-x-6 md:grid-cols-2">
+        <div>
+          <Row k="Stored price" v={<B>{fmtINR(m.price)}</B>} />
+          <Row k="Live price (what the app charges)" v={
+            liveAmount == null ? <span className="text-ink3">not resolved yet</span> : (
+              <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                <B>{fmtINR(liveAmount)}</B>
+                {liveSource === "zenoti" ? <Tag kind="info">from Zenoti</Tag> : liveSource === "manual" ? <Tag kind="mute">manual</Tag> : null}
+                {liveSource === "manual" && live?.zenotiListPrice != null && live.zenotiListPrice !== liveAmount && <span className="text-[11px] text-ink3">Zenoti lists {fmtINR(live.zenotiListPrice)}</span>}
+              </span>
+            )} />
+          <Row k="Zenoti variant" v={variant ? <span>{variant}{inactiveInZenoti && <Tag kind="warn">inactive in Zenoti</Tag>}</span> : <span className="text-ink3">{m.zenotiMembershipId || m.zenotiVersionId ? "linked" : "not linked"}</span>} />
+          <Row k="Validity" v={`${validity} months`} />
+        </div>
+        <div>
+          <Row k="Member discount" v={discountPct ? `${discountPct}%` : "—"} />
+          <Row k="Discounts on the bill" v={[m.discounts?.servicesPercent ? `${m.discounts.servicesPercent}% services` : "", m.discounts?.productsPercent ? `${m.discounts.productsPercent}% products` : "", m.discounts?.packagesPercent ? `${m.discounts.packagesPercent}% packages` : ""].filter(Boolean).join(" · ") || "—"} />
+          <Row k="Service credits" v={(m.credits ?? []).length ? (m.credits ?? []).map((c) => `${c.serviceName || c.serviceId} ×${c.qty}`).join(", ") : "—"} />
+          <Row k="Members" v={<B>{m.membersCount ?? 0}</B>} />
+        </div>
+      </div>
+      {inactiveInZenoti && <Note kind="crit" className="mb-0 mt-3 text-[11.5px]">Zenoti marks this variant inactive. Zenoti only holds the price for it — no duration or benefits — and may refuse invoices raised against it. Check the variant in App Studio → Membership.</Note>}
+      {!inactiveInZenoti && <Note className="mb-0 mt-3 text-[11.5px]">Zenoti holds only the price for this membership; validity, discounts and credits are set here and on the app card in App Studio.</Note>}
+    </Card>
   );
 }
 
@@ -252,6 +381,15 @@ function MemberDrawer({ a, onClose, onChanged, canEdit }: { a: MembershipAssignm
         <div className="flex justify-between"><span className="text-ink3">Payment</span><span>{a.payment?.isReceived ? <Tag kind="ok">{fmtINR(a.price)} · {a.payment.paymentMethod}</Tag> : <Tag kind="warn">{fmtINR(a.payment?.balanceDue ?? a.price)} due</Tag>}</span></div>
         <div className="flex justify-between"><span className="text-ink3">Status</span><Tag kind={a.status === "Active" ? "ok" : "mute"}>{a.status}</Tag></div>
         <div className="flex justify-between"><span className="text-ink3">Sold by</span><span>{a.soldByName ?? "—"} · {a.source}</span></div>
+        <div className="flex items-center justify-between gap-2"><span className="text-ink3">Zenoti</span>
+          <span className="flex flex-wrap items-center justify-end gap-1.5">
+            <ZenotiSyncTag a={a} />
+            {a.zenotiInvoiceNumber && <span className="font-mono text-[11px] text-ink3">{a.zenotiInvoiceNumber}</span>}
+            {a.zenotiSyncedAt && <span className="text-[11px] text-ink3">{fmtDate(a.zenotiSyncedAt)}</span>}
+            {canEdit && canPushToZenoti(a) && <PushToZenotiButton a={a} onDone={onChanged} />}
+          </span>
+        </div>
+        {a.zenotiSyncError && <Note kind="crit" className="my-0 text-[11.5px]">{a.zenotiSyncError}</Note>}
       </div>
       {a.credits.length > 0 && (
         <>

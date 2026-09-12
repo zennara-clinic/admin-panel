@@ -391,7 +391,7 @@ function BookingDrawer({ id, onClose, onChanged }: {
         {!bk ? <Loading label="Loading booking…" rows={4} /> : (
           <>
             <Card className="p-4">
-              <div className="text-[15px] font-bold">{bookingServiceName(bk, "Service")}</div>
+              <div className="flex flex-wrap items-center gap-2 text-[15px] font-bold">{bookingServiceName(bk, "Service")}{bk.consultContext === "package_support" && <Tag kind="gold">Ongoing package · free consult</Tag>}</div>
               <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[12.5px] text-ink2">
                 <span>{bk.specialistName || bk.therapistName ? <>Dermatologist <B>{bookingProvider(bk)}</B></> : <span className="text-err">No dermatologist assigned</span>} · {bk.preferredLocation}</span>
                 {!["Cancelled", "Completed", "No Show"].includes(bk.status) && (
@@ -1854,7 +1854,8 @@ export function Bookings() {
     <button key={b._id} onClick={() => setSel(b._id)}
       className={`w-full rounded-md border border-border border-l-[3px] bg-surface px-1.5 py-1 text-left text-[11px] leading-tight hover:shadow-md ${statusTone(b)}`}>
       <div className="flex justify-between gap-1"><span className="font-mono text-[10px] text-ink3">{(b.confirmedTime || b.preferredTimeSlots?.[0] || "").replace(/\s*-\s*.*$/, "")}</span>
-        {b.isPackageIncluded && <span className="text-[9px] font-bold text-gold-dark">PKG</span>}</div>
+        {b.isPackageIncluded && <span className="text-[9px] font-bold text-gold-dark">PKG</span>}
+        {b.consultContext === "package_support" && <span title="Ongoing package · free consult" className="text-[9px] font-bold text-gold-dark">PKG·C</span>}</div>
       <div className="truncate font-semibold">{b.fullName}</div>
       <div className="truncate text-ink3">{bookingServiceName(b, "Service")}{b.specialistName ? ` · ${b.specialistName.split(" ")[0]}` : ""}</div>
     </button>
