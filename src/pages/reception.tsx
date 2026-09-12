@@ -1932,28 +1932,59 @@ export function Bookings() {
             action={<Btn onClick={() => setNewOpen(true)}>+ New booking</Btn>} />
         ) : (
           <DataTable
-            cols={applied.dueOnly === "true"
-              ? ["Reference", "Guest", "Service", "Kind", "Dermatologist", "Centre", "When", "Owes", "Status", "Source"]
-              : ["Reference", "Guest", "Service", "Kind", "Dermatologist", "Centre", "When", "Payment", "Status", "Source"]}
+            dense
+            /*
+             * One line per booking. Ten roomy columns made every cell wrap —
+             * a guest's name over two lines, the date over three. The kind now
+             * rides on the service as a coloured dot, the centre column only
+             * appears when several centres are in view, and anything that used
+             * to stack under the status is in the row's tooltip instead.
+             */
+            cols={[
+              { label: "Ref", width: "92px", nowrap: true },
+              { label: "Guest", width: "18%" },
+              { label: "Service", width: "22%" },
+              { label: "Dermatologist", width: "15%" },
+              ...(location ? [] : [{ label: "Centre", width: "11%" } as const]),
+              { label: "When", width: "140px", nowrap: true },
+              { label: applied.dueOnly === "true" ? "Owes" : "Payment", align: "right", width: "92px", nowrap: true },
+              { label: "Status", width: "132px", nowrap: true },
+              { label: "Source", width: "84px", nowrap: true },
+            ]}
             onRow={(i) => setSel(rows[i]._id)}
-            rows={rows.map((b) => [
-              <span key={b._id} className="font-mono text-[11px] text-ink3">{b.referenceNumber ?? "—"}</span>,
-              <B key={`${b._id}n`}>{b.fullName}</B>,
-              bookingServiceName(b),
-              isConsultationBooking(b) ? <Tag key={`${b._id}k`} kind="gold">Consultation</Tag> : <Tag key={`${b._id}k`} kind="mute">Treatment</Tag>,
-              b.specialistName || b.therapistName ? bookingProvider(b) : <span key={`${b._id}d`} className="text-err">Not assigned</span>,
-              b.preferredLocation,
-              bookingSlotLabel(b),
-              applied.dueOnly === "true"
-                ? <span key={`${b._id}p`} className="tabular-nums font-bold text-err">{fmtINR(b.amountDue ?? b.amount)}</span>
-                : b.paymentStatus === "paid" ? <Tag kind="ok">Paid</Tag> : <Tag kind="warn">{fmtINR(b.amount)}</Tag>,
-              <span key={`${b._id}s`}>
-                {STATUS[statusKey(b)]}
-                {b.source === "zenoti" && <div className="mt-0.5 text-[10.5px] text-ink3">Zenoti: {zenotiDiaryLabel(b.zenotiSource)}</div>}
-                {visitTimes(b) && <div className="text-[10.5px] text-ink3">{visitTimes(b)}</div>}
-              </span>,
-              <Tag kind={b.source === "zenoti" ? "info" : "mute"}>{b.source === "zenoti" ? "Clinic (Zenoti)" : bookingSource(b)}</Tag>,
-            ])}
+            rows={rows.map((b) => {
+              const ref = b.referenceNumber ?? "";
+              const consultation = isConsultationBooking(b);
+              const when = bookingSlotLabel(b);
+              const slot = b.confirmedTime || b.preferredTimeSlots?.[0] || "";
+              const day = slot && when.endsWith(slot) ? when.slice(0, -slot.length).trim() : when;
+              // A slot can be a range ("10:00 - 11:00"); the start is enough here.
+              const time = slot.replace(/\s*-\s*.*$/, "");
+              const visit = visitTimes(b);
+              const zenoti = b.source === "zenoti" ? zenotiDiaryLabel(b.zenotiSource) : "";
+              return [
+                <span key={`${b._id}r`} title={ref || undefined} className="font-mono text-[10.5px] text-ink3">{ref ? ref.slice(-8) : "—"}</span>,
+                <span key={`${b._id}n`} title={b.fullName} className="block truncate font-semibold text-ink">{b.fullName}</span>,
+                <span key={`${b._id}v`} title={`${bookingServiceName(b)} · ${consultation ? "Consultation" : "Treatment"}`} className="flex items-center gap-1.5">
+                  <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${consultation ? "bg-gold-dark" : "bg-ink3/50"}`} />
+                  <span className="truncate">{bookingServiceName(b)}</span>
+                </span>,
+                b.specialistName || b.therapistName
+                  ? <span key={`${b._id}d`} title={bookingProvider(b)} className="block truncate">{bookingProvider(b)}</span>
+                  : <span key={`${b._id}d`} className="text-err">Not assigned</span>,
+                ...(location ? [] : [<span key={`${b._id}c`} title={b.preferredLocation} className="block truncate">{b.preferredLocation}</span>]),
+                <span key={`${b._id}w`} className="whitespace-nowrap">{day}{time ? <span className="ml-1.5 font-mono text-[11px] text-ink3">{time}</span> : null}</span>,
+                applied.dueOnly === "true"
+                  ? <span key={`${b._id}p`} className="font-bold tabular-nums text-err">{fmtINR(b.amountDue ?? b.amount)}</span>
+                  : b.paymentStatus === "paid"
+                    ? <Tag key={`${b._id}p`} kind="ok">Paid</Tag>
+                    : <Tag key={`${b._id}p`} kind="warn">{fmtINR(b.amount)}</Tag>,
+                <span key={`${b._id}s`} title={[zenoti && `Zenoti: ${zenoti}`, visit].filter(Boolean).join(" · ") || undefined}>
+                  {STATUS[statusKey(b)]}
+                </span>,
+                <Tag key={`${b._id}src`} kind={b.source === "zenoti" ? "info" : "mute"}>{b.source === "zenoti" ? "Zenoti" : bookingSource(b)}</Tag>,
+              ];
+            })}
           />
         )) : view === "week" ? (
           q.loading ? <CalendarSkeleton cells={7} minHeight={320} /> : (

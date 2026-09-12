@@ -215,9 +215,28 @@ function usePageSizePref() {
  * else (detail sub-lists, filtered catalogues, drawers) gets the pager free.
  * `onRow` always receives the index into the ORIGINAL rows array.
  */
-export function DataTable({ cols, rows, onRow, pageSize: fixedPageSize }: {
-  cols: string[]; rows: ReactNode[][]; onRow?: (i: number) => void; pageSize?: number;
+/**
+ * One column. A plain string is the label; the object form lets a dense table
+ * (the bookings list) hold a column to one line, fix its width or right-align
+ * its figures, instead of letting ten columns wrap every cell.
+ */
+export type TableCol = string | {
+  label: string;
+  align?: "left" | "right" | "center";
+  /** CSS width for the column, e.g. "120px" or "18%". */
+  width?: string;
+  /** Keep the cell on one line (dates, chips, references). */
+  nowrap?: boolean;
+};
+
+export function DataTable({ cols, rows, onRow, pageSize: fixedPageSize, dense }: {
+  cols: TableCol[]; rows: ReactNode[][]; onRow?: (i: number) => void; pageSize?: number;
+  /** Tighter rows and type — for wide tables with many columns. */
+  dense?: boolean;
 }) {
+  const col = (c: TableCol) => (typeof c === "string" ? { label: c } : c);
+  const pad = dense ? "px-2.5 py-2" : "px-3 py-2.5";
+  const alignOf = (a?: string) => (a === "right" ? "text-right" : a === "center" ? "text-center" : "text-left");
   const pref = usePageSizePref();
   const pageSize = fixedPageSize ?? pref;
   const [page, setPage] = useState(1);
@@ -229,18 +248,25 @@ export function DataTable({ cols, rows, onRow, pageSize: fixedPageSize }: {
   return (
     <div>
     <Card className="overflow-x-auto">
-      <table className="w-full min-w-[640px] border-collapse text-[12.8px]">
+      <table className={`w-full min-w-[640px] border-collapse ${dense ? "text-[12.2px]" : "text-[12.8px]"}`}>
         <thead><tr>
-          {cols.map((c) => (
-            <th key={c} className="whitespace-nowrap border-b border-border bg-ivory px-3 py-2.5 text-left font-mono text-[9.5px] font-bold uppercase tracking-[0.1em] text-ink3">{c}</th>
-          ))}
+          {cols.map((c) => {
+            const { label, align, width } = col(c);
+            return (
+              <th key={label} style={width ? { width } : undefined}
+                className={`whitespace-nowrap border-b border-border bg-ivory ${pad} ${alignOf(align)} font-mono text-[9.5px] font-bold uppercase tracking-[0.1em] text-ink3`}>{label}</th>
+            );
+          })}
         </tr></thead>
         <tbody>
           {shown.map((r, i) => (
             <tr key={offset + i} onClick={onRow ? () => onRow(offset + i) : undefined} className={`group ${onRow ? "cursor-pointer" : ""}`}>
-              {r.map((c, j) => (
-                <td key={j} className="border-b border-border px-3 py-2.5 align-middle text-ink2 tabular-nums group-last:border-0 group-hover:bg-ivory">{c}</td>
-              ))}
+              {r.map((c, j) => {
+                const { align, nowrap } = col(cols[j] ?? "");
+                return (
+                  <td key={j} className={`border-b border-border ${pad} align-middle text-ink2 tabular-nums group-last:border-0 group-hover:bg-ivory ${alignOf(align)} ${nowrap ? "whitespace-nowrap" : ""}`}>{c}</td>
+                );
+              })}
             </tr>
           ))}
           {rows.length === 0 && (
