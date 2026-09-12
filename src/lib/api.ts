@@ -97,7 +97,8 @@ export const patients = {
       statistics: Record<string, number>;
     }>("/admin/users", { query: q }),
   get: (id: Id) => request<User>(`/admin/users/${id}`),
-  create: (body: Partial<User>) => request<User>("/admin/users", { method: "POST", body }),
+  // No `create`: a guest record is made on the walk-in tablet or by signing up
+  // in the app — POST /admin/users answers 409 GUEST_CREATION_VIA_WALKIN.
   update: (id: Id, body: Partial<User> | FormData) =>
     request<User>(`/admin/users/${id}`, { method: "PUT", body }),
   remove: (id: Id) => requestRaw(`/admin/users/${id}`, { method: "DELETE" }),

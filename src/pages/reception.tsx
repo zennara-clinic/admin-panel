@@ -1,6 +1,6 @@
 import {
   ArrowDown, ArrowUp, CalendarDays, CalendarRange, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, IndianRupee, LayoutGrid,
-  List as ListIcon, MapPin, Maximize2, Minimize2, Printer, Sparkles, Stethoscope, UserPlus, X, type LucideIcon,
+  List as ListIcon, MapPin, Maximize2, Minimize2, Printer, Sparkles, Stethoscope, X, type LucideIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -712,8 +712,13 @@ function BookingDrawer({ id, onClose, onChanged }: {
   );
 }
 
-/* ================= new booking / walk-in ================= */
+/* ================= new booking ================= */
 type SlotReason = null | "setup" | "closed" | "over" | "full" | "error";
+
+/** Emails the clinic synthesises for a guest who has not given one yet. */
+const PLACEHOLDER_EMAIL = /@zennara\.local$|@guest\.zennara\.in$/i;
+/** The desk never creates a guest; the walk-in tablet and the app do. */
+const NO_GUEST_MSG = "Pick a guest from the search. New guests check in on the walk-in tablet first, then book for them here.";
 
 const WEEKDAY_KEYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"] as const;
 
@@ -721,7 +726,7 @@ const WEEKDAY_KEYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "f
  * A centre's own open/close on a date, or null when it is shut that day.
  *
  * This is the centre's advertised window, not the app's guest booking window:
- * the desk books walk-ins and phone calls across the whole working day, and
+ * the desk books guests at the desk and on the phone across the whole working day, and
  * clamping reception to what the app offers guests is what made real shift
  * hours unbookable.
  */
@@ -746,11 +751,6 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser, preset }:
   const [guest, setGuest] = useState<User | null>(null);
   const [lookup, setLookup] = useState("");
   const debouncedLookup = useDebounced(lookup, 250);
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
-  const [gender, setGender] = useState("");
-  const [referral, setReferral] = useState("");
   const [location, setLocation] = useState("");
   const [date, setDate] = useState(isoDay());
   const [lines, setLines] = useState<Line[]>([{ key: 1, serviceId: "", doctorId: "", time: "" }]);
@@ -783,15 +783,13 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser, preset }:
   useEffect(() => {
     if (!open) return;
     setGuest(null); setLookup("");
-    setName(presetUser?.fullName ?? "");
-    setPhone(presetUser?.phone ?? "");
-    setEmail(presetUser?.email?.endsWith("@zennara.local") ? "" : presetUser?.email ?? "");
-    setGender(""); setReferral("");
     setLocation(branch && branch !== "All branches" ? branch : branches[0]?.name ?? "");
     setDate(preset?.date ?? isoDay());
     setLines([{ key: 1, serviceId: "", doctorId: "", time: preset?.time ?? "" }]);
     setNotes(""); setErr(null); setWarn(null); setConfirmNow(true); setPkgOpen(null);
-    if (presetUser?._id) api.patients.get(presetUser._id).then((u) => setGuest(u)).catch(() => undefined);
+    // Opened from a guest record: that guest is fixed. Fall back to the record
+    // we were handed if the full read fails, so the desk can still book.
+    if (presetUser?._id) api.patients.get(presetUser._id).then((u) => setGuest(u)).catch(() => setGuest({ ...presetUser } as User));
   }, [open, presetUser?._id, branch, branches.length, preset?.date, preset?.time]);
 
   // Default the first line to the cell's dermatologist and the first service.
@@ -804,10 +802,7 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser, preset }:
     })));
   }, [refs.data?.services.length, refs.data?.doctors.length, preset?.doctorId]);
 
-  const pickGuest = (u: User) => {
-    setGuest(u); setName(u.fullName); setPhone(u.phone || ""); setEmail(/@zennara\.local$|@guest\.zennara\.in$/i.test(u.email || "") ? "" : u.email || "");
-    setLookup("");
-  };
+  const pickGuest = (u: User) => { setGuest(u); setLookup(""); };
 
   /**
    * Free times from Zenoti, and — when there are none — WHY there are none.
@@ -885,24 +880,23 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser, preset }:
 
   const submit = async (force = false) => {
     setErr(null); setWarn(null);
-    if (name.trim().length < 2) return setErr("Enter the guest's full name");
-    if (phone.replace(/\D/g, "").length < 10) return setErr("Enter a valid mobile number");
+    // The desk only books for guests already on file — a guest record is
+    // created on the walk-in tablet or by signing up in the app, never here.
+    if (!guest) return setErr(NO_GUEST_MSG);
     if (!location) return setErr("Pick a centre");
     if (lines.some((l) => !l.serviceId)) return setErr("Pick a service on every line");
     if (lines.some((l) => !l.time)) return setErr("Pick a time on every line");
     const badTime = lines.map((l) => timeProblem(l.time)).find(Boolean);
     if (badTime) return setErr(badTime);
-    if (!guest && !referral) return setErr("Ask the new guest how they heard about us (referral source)");
 
     setBusy(true);
     try {
       const first = lines[0];
       const res = await api.bookings.create({
         consultationId: first.serviceId,
-        fullName: name.trim(),
-        mobileNumber: phone.trim(),
-        email: email.trim() || undefined,
-        gender: gender || undefined,
+        fullName: guest.fullName,
+        mobileNumber: guest.phone || "",
+        email: guest.email && !PLACEHOLDER_EMAIL.test(guest.email) ? guest.email : undefined,
         preferredLocation: location,
         preferredDate: date,
         preferredTimeSlots: [first.time],
@@ -918,18 +912,22 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser, preset }:
         notes: notes.trim() || undefined,
         confirmNow,
         force,
-        referralSource: referral || undefined,
-        userId: guest?._id ?? presetUser?._id,
+        userId: guest._id,
       });
-      audit("BOOKING_CREATED", `${name.trim()} · ${lines.map((l) => svcOf(l.serviceId)?.name).filter(Boolean).join(" + ")} · ${date} ${first.time}`);
-      toast(lines.length > 1 ? `${lines.length} services booked for ${name.trim()}` : `${name.trim()} is booked — confirmation sent`);
+      audit("BOOKING_CREATED", `${guest.fullName} · ${lines.map((l) => svcOf(l.serviceId)?.name).filter(Boolean).join(" + ")} · ${date} ${first.time}`);
+      toast(lines.length > 1 ? `${lines.length} services booked for ${guest.fullName}` : `${guest.fullName} is booked — confirmation sent`);
       void res;
       onBooked();
       onClose();
     } catch (e) {
       const ex = e as Error & { code?: string; body?: { code?: string } };
       const code = ex.code || ex.body?.code;
-      if (code === "PROVIDER_NOT_WORKING" || /Do you want to add the appointment/i.test(ex.message)) setWarn(ex.message);
+      if (code === "GUEST_NOT_FOUND") {
+        // The server will not create a guest from the desk; the picked record
+        // is no longer on file, so send the desk back to the search.
+        setGuest(null);
+        setErr(ex.message || NO_GUEST_MSG);
+      } else if (code === "PROVIDER_NOT_WORKING" || /Do you want to add the appointment/i.test(ex.message)) setWarn(ex.message);
       else setErr(ex.message);
     } finally {
       setBusy(false);
@@ -937,20 +935,21 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser, preset }:
   };
 
   const stats = strip.data?.stats ?? null;
-  const REFERRALS = ["Word of mouth", "Instagram", "Google", "Client referral", "Doctor referral", "Advertisement", "Walk-in", "Corporate", "Events", "Employee", "Internet", "Other"];
   const openSessions = (packages.data ?? []).flatMap((a) => (a.sessions ?? []).filter((s) => s.status === "Scheduled" && !s.bookingId).map((s) => ({ a, s })));
 
   return (
-    <Modal open={open} onClose={onClose} title={presetUser ? `Book for ${presetUser.fullName}` : "New appointment"} xl>
+    <Modal open={open} onClose={onClose} title={presetUser ? `Book for ${presetUser.fullName}` : "New booking"} xl>
       {refs.initial && !refs.data ? <Loading label="Loading services and dermatologists…" /> : (
         <>
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
             {/* ---------------- guest ---------------- */}
             <div className="grid content-start gap-2.5 rounded-xl border border-border bg-ivory/60 p-3">
               <SecH t="Guest" em="· across all centres" />
-              {!guest ? (
+              {!guest && presetUser ? (
+                <div className="text-[12px] text-ink3">Loading {presetUser.fullName}…</div>
+              ) : !guest ? (
                 <div className="relative">
-                  <In label="Find by mobile, name or email" value={lookup} onChange={(v) => { setLookup(v); if (/^\+?\d[\d\s]*$/.test(v)) setPhone(v); else if (v.includes("@")) setEmail(v); else setName(v); }} placeholder="98765 43210" />
+                  <In label="Find by mobile, name or email" value={lookup} onChange={setLookup} placeholder="98765 43210" />
                   {(found.data ?? []).length > 0 && (
                     <div className="absolute z-[5] mt-1 max-h-56 w-full overflow-auto rounded-xl border border-border bg-surface shadow-xl">
                       {(found.data ?? []).map((u) => (
@@ -961,16 +960,16 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser, preset }:
                       ))}
                     </div>
                   )}
-                  {lookup.trim().length >= 3 && !found.loading && (found.data ?? []).length === 0 && <div className="mt-1 text-[10.5px] text-ink3">No guest matches — fill the details below to create one.</div>}
+                  {lookup.trim().length >= 3 && !found.loading && (found.data ?? []).length === 0 && <div className="mt-1 text-[10.5px] text-ink3">No guest on file matches that.</div>}
                 </div>
               ) : (
                 <div className="rounded-xl border border-border bg-surface p-3">
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <div className="text-[13.5px] font-bold">{guest.fullName} {guest.memberType === "Zen Member" && <Tag kind="gold">Zen</Tag>}</div>
-                      <div className="text-[11.5px] text-ink3">{guest.phone}{guest.email && !/@zennara\.local$|@guest\.zennara\.in$/i.test(guest.email) ? ` · ${guest.email}` : ""}{guestCodeOf(guest) ? ` · ${guestCodeOf(guest)}` : ""}</div>
+                      <div className="text-[11.5px] text-ink3">{guest.phone}{guest.email && !PLACEHOLDER_EMAIL.test(guest.email) ? ` · ${guest.email}` : ""}{guestCodeOf(guest) ? ` · ${guestCodeOf(guest)}` : ""}</div>
                     </div>
-                    {!presetUser && <button className="text-[11px] text-ink3 underline-offset-2 hover:underline" onClick={() => { setGuest(null); setName(""); setPhone(""); setEmail(""); }}>change</button>}
+                    {!presetUser && <button className="text-[11px] text-ink3 underline-offset-2 hover:underline" onClick={() => setGuest(null)}>change</button>}
                   </div>
                   <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11.5px]">
                     <div><span className="text-ink3">Total visits</span> <B>{stats?.totalVisits ?? "…"}</B></div>
@@ -985,16 +984,8 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser, preset }:
                   )}
                 </div>
               )}
-              {!guest && (
-                <>
-                  <In label="Guest name" value={name} onChange={setName} placeholder="Full name" />
-                  <div className="grid grid-cols-2 gap-2">
-                    <In label="Mobile" value={phone} onChange={setPhone} placeholder="+91 …" />
-                    <Sel label="Gender" value={gender || "—"} options={["—", "Female", "Male", "Other"]} onChange={(v) => setGender(v === "—" ? "" : v)} />
-                  </div>
-                  <In label="Email (optional)" value={email} onChange={setEmail} placeholder="name@email.com" />
-                  <Sel label="How did they hear about us?" value={referral || "— choose —"} options={["— choose —", ...REFERRALS]} onChange={(v) => setReferral(v === "— choose —" ? "" : v)} />
-                </>
+              {!guest && !presetUser && (
+                <Note>Can't find the guest? New guests check in on the walk-in tablet first, then book for them here.</Note>
               )}
             </div>
 
@@ -1314,12 +1305,12 @@ function ActionTile({ icon: Icon, title, text, onClick, tone, children }: {
 
 /**
  * Everything on the Today page that is not the book itself: what the book
- * shows, a walk-in, the day's takings and the printable list.
+ * shows, the day's takings and the printable list.
  */
-function OthersDrawer({ open, onClose, day, branch, allRows, kind, onKind, canBook, onWalkIn, onSales, onPrint }: {
+function OthersDrawer({ open, onClose, day, branch, allRows, kind, onKind, onSales, onPrint }: {
   open: boolean; onClose: () => void; day: string; branch: string; allRows: Booking[];
-  kind: string; onKind: (kind: string) => void; canBook: boolean;
-  onWalkIn: () => void; onSales: () => void; onPrint: () => void;
+  kind: string; onKind: (kind: string) => void;
+  onSales: () => void; onPrint: () => void;
 }) {
   const { branchId } = useStore();
   const sales = useApi(
@@ -1395,10 +1386,6 @@ function OthersDrawer({ open, onClose, day, branch, allRows, kind, onKind, canBo
           <section>
             <h4 className="mb-2 text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink3">At the desk</h4>
             <div className="grid gap-2.5">
-              {canBook && (
-                <ActionTile icon={UserPlus} tone="gold" title="New walk-in" onClick={onWalkIn}
-                  text="Book a guest who is at the desk. A new mobile number opens a guest record." />
-              )}
               <ActionTile icon={IndianRupee} title="Today's sales" onClick={onSales}
                 text={`Every bill and payment taken on ${fmtDate(dayKeyDate(day))}.`}>
                 {totals ? (
@@ -1426,7 +1413,7 @@ function OthersDrawer({ open, onClose, day, branch, allRows, kind, onKind, canBo
 }
 
 export function Today() {
-  const { branch, branchId, can } = useStore();
+  const { branch, branchId } = useStore();
   const [day, setDay] = useState(isoDay());
   const liveDay = useRef(isoDay());
   // Calendar and list are two views of the same day, never stacked on one page.
@@ -1514,8 +1501,6 @@ export function Today() {
     || srcF !== "All sources" || payF !== "Any payment" || roomF !== "All rooms" || sortF !== "Time";
   const resetToday = () => { setProvF("All dermatologists"); setStF("All statuses"); setTherF("All therapists"); setSrcF("All sources"); setPayF("Any payment"); setRoomF("All rooms"); setSortF("Time"); };
 
-  const canBook = can("bookings.manage");
-
   // Full screen belongs to the calendar alone; leaving the calendar leaves it.
   useEffect(() => { if (view !== "calendar") setFullscreen(false); }, [view]);
   useEffect(() => {
@@ -1569,7 +1554,7 @@ export function Today() {
       <Hint id="today-book" steps={[
         "The live appointment book for the selected centre and date. Calendar shows one row per dermatologist; List shows the same day as a table you can filter.",
         "Click any appointment for its actions. Check in, start, complete, no-show and cancel are one set of buttons, and each reaches Zenoti in the same step.",
-        "Others holds the rest of the desk: consultations or treatments only, a new walk-in, today's sales and the printable list.",
+        "Others holds the rest of the desk: consultations or treatments only, today's sales and the printable list.",
         "Full screen gives the calendar the whole display. Press Escape or Exit full screen to come back.",
       ]} />
       <StaleBanner error={bookingsQ.data ? bookingsQ.error : null} onRetry={bookingsQ.reload} />
@@ -1672,8 +1657,6 @@ export function Today() {
         allRows={allRows}
         kind={kind}
         onKind={(k) => setKind(k)}
-        canBook={canBook}
-        onWalkIn={() => { setOthersOpen(false); setNewPreset(null); setNewOpen(true); }}
         onSales={() => { setOthersOpen(false); setSalesOpen(true); }}
         onPrint={printList}
       />
@@ -2159,10 +2142,9 @@ function IntakeTag({ state, label }: { state?: IntakeState | null; label?: strin
 
 export function Patients() {
   const nav = useNavigate();
-  const { toast, branch, branches, can } = useStore();
+  const { branch, branches } = useStore();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
-  const [newOpen, setNewOpen] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [applied, setApplied] = useState<PatientFilters>(EMPTY_PF);
   const [draft, setDraft] = useState<PatientFilters>(EMPTY_PF);
@@ -2235,7 +2217,6 @@ export function Patients() {
         <Btn kind={chips.length ? "gold" : "ghost"} onClick={() => { setDraft(applied); setDrawer(true); }}>
           Filters{chips.length ? ` (${chips.length})` : ""}
         </Btn>
-        {can("patients.manage") && <Btn onClick={() => setNewOpen(true)}>+ New guest</Btn>}
       </>}>
       <Hint id="patients-live">Click any row to open the full record — visits, packages, forms, orders and consents. Use Filters to slice by centre, age, membership, visits, spend, treatments had, or lapsed guests.</Hint>
 
@@ -2248,8 +2229,8 @@ export function Patients() {
 
       <Async q={q} label="Loading guests…" rows={8}>
         {() => users.length === 0 ? (
-          <Empty title="No guests here" hint={debounced || chips.length ? "Nothing matched the current search/filters." : "Add the first guest to get started."}
-            action={chips.length ? <Btn kind="ghost" onClick={() => clear(EMPTY_PF)}>Clear filters</Btn> : can("patients.manage") ? <Btn onClick={() => setNewOpen(true)}>+ New guest</Btn> : undefined} />
+          <Empty title="No guests here" hint={debounced || chips.length ? "Nothing matched the current search/filters." : "New guests check in on the walk-in tablet first."}
+            action={chips.length ? <Btn kind="ghost" onClick={() => clear(EMPTY_PF)}>Clear filters</Btn> : undefined} />
         ) : (
           <>
             <DataTable
@@ -2353,66 +2334,7 @@ export function Patients() {
           <div className="mt-2"><Chips options={[["desc", "Newest / highest first"], ["asc", "Oldest / lowest first"]]} value={draft.sortOrder} onChange={(v) => set("sortOrder", (v as string) || "desc")} /></div>
         </FSection>
       </FilterDrawer>
-
-      <NewPatientModal open={newOpen} onClose={() => setNewOpen(false)} onCreated={(id) => { q.reload(); nav("/patient", { state: { id } }); }} />
     </Page>
-  );
-}
-
-function NewPatientModal({ open, onClose, onCreated }: {
-  open: boolean; onClose: () => void; onCreated: (id: string) => void;
-}) {
-  const { toast, branch, branches } = useStore();
-  const [f, setF] = useState({ fullName: "", phone: "", email: "", dateOfBirth: "", gender: "Female", location: "" });
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    setF({ fullName: "", phone: "", email: "", dateOfBirth: "", gender: "Female",
-      location: branch && branch !== "All branches" ? branch : branches[0]?.name ?? "" });
-    setErr(null);
-  }, [open, branch, branches.length]);
-
-  const set = (k: keyof typeof f) => (v: string) => setF((s) => ({ ...s, [k]: v }));
-
-  const submit = async () => {
-    setErr(null);
-    if (f.fullName.trim().length < 2) return setErr("Enter the guest's full name");
-    if (f.phone.replace(/\D/g, "").length < 10) return setErr("Enter a valid mobile number");
-    if (!f.email.trim()) return setErr("An email is required — it is the login for the app");
-    if (!f.dateOfBirth) return setErr("Date of birth is required");
-    if (!f.location?.trim()) return setErr("A home centre is required — add a branch first if the list is empty");
-    setBusy(true);
-    try {
-      const user = await api.patients.create({
-        fullName: f.fullName.trim(), phone: f.phone.trim(), email: f.email.trim().toLowerCase(),
-        dateOfBirth: f.dateOfBirth, gender: f.gender, location: f.location,
-      });
-      toast(`${f.fullName.trim()} created`);
-      onCreated(user._id);
-      onClose();
-    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
-  };
-
-  return (
-    <Modal open={open} onClose={onClose} title="New guest" wide>
-      <div className="grid gap-3 md:grid-cols-2">
-        <In label="Full name" value={f.fullName} onChange={set("fullName")} />
-        <In label="Mobile" value={f.phone} onChange={set("phone")} placeholder="+91 …" />
-        <In label="Email" type="email" value={f.email} onChange={set("email")} placeholder="name@email.com"
-          hint="This is the address they sign into the app with." />
-        <In label="Date of birth" type="date" value={f.dateOfBirth} onChange={set("dateOfBirth")} />
-        <Sel label="Gender" value={f.gender} onChange={set("gender")} options={["Male", "Female", "Other"]} />
-        <Sel label="Home centre" value={f.location} onChange={set("location")} options={branches.map((b) => b.name)} />
-      </div>
-      <Note>A guest code is generated automatically. If this email or number is already on file the server will say so rather than creating a duplicate.</Note>
-      {err && <Note kind="crit">{err}</Note>}
-      <div className="mt-3 flex justify-end gap-2">
-        <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn disabled={busy} onClick={submit}>{busy ? "Creating…" : "Create guest"}</Btn>
-      </div>
-    </Modal>
   );
 }
 
