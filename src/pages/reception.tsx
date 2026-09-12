@@ -5,7 +5,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { ActiveFilters, Area, AreaChart, Async, B, Btn, CalendarSkeleton, Card, ChartCard, Chips, DataTable, DateRange, Drawer, Empty, ExportModal, FSection, FilterDrawer, GBars, HBars, Hint, In, Loading, Menu, MenuButton, Modal, MultiSelect, Note, NumRange, Otp, Page, Prog, RatingValue, STATUS, SecH, Sel, Spinner, StaleBanner, Stats, Tabs, Tag, exportCsv } from "../ui";
+import { ActiveFilters, Area, AreaChart, Async, B, Btn, CalendarSkeleton, Card, ChartCard, Chips, DataTable, DateRange, Drawer, Empty, FSection, FilterDrawer, GBars, HBars, Hint, In, Loading, Menu, MenuButton, Modal, MultiSelect, Note, NumRange, Otp, Page, Prog, RatingValue, STATUS, SecH, Sel, Spinner, StaleBanner, Stats, Tabs, Tag, exportCsv } from "../ui";
 import { LifecycleActions, LIFECYCLE_TOAST, StatusHistory, useLifecycle } from "../lifecycle";
 import { useStore } from "../store";
 import { DEFAULT_METRIC_RANGE, customWindow, metricWindow, type MetricRange } from "../lib/ranges";
@@ -1710,8 +1710,6 @@ const EMPTY_BF: BookingFilters = {
   amountMin: "", amountMax: "", dueOnly: "", sortBy: "date", sortOrder: "desc",
 };
 const BOOKING_SORTS: [string, string][] = [["date", "Appointment date"], ["createdAt", "Booked on"], ["amount", "Amount"], ["due", "Amount due"], ["name", "Guest name"], ["status", "Status"], ["checkIn", "Check-in time"]];
-const BOOKING_EXPORT_COLS = ["Reference", "Guest", "Guest code", "Phone", "Email", "Membership", "Service", "Category", "Kind", "Centre", "Date", "Time", "Status", "Dermatologist", "Therapist", "Room",
-  "Source", "Package", "Amount", "Payment Status", "Payment Method", "Paid At", "Checked In", "Checked Out", "Session Minutes", "Rating", "Cancellation Reason", "Booked On", "Notes"];
 
 function bookingQuery(f: BookingFilters): Record<string, string | number> {
   const q: Record<string, string | number> = {};
@@ -1732,7 +1730,6 @@ export function Bookings() {
   const [tab, setTab] = useQueryNumber("tab", 0, { min: 0, max: TABS.length - 1 });
   const [sel, setSel] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
-  const [exportOpen, setExportOpen] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [search, setSearch] = useQueryString("q");
   const [scopeParam, setScope] = useQueryString("scope", "branch");
@@ -1877,7 +1874,6 @@ export function Bookings() {
             { label: applied.sortOrder === "asc" ? "Descending ↓" : "Ascending ↑", onClick: () => clear({ sortOrder: applied.sortOrder === "asc" ? "desc" : "asc" }) },
           ]} />
         <Btn kind={chips.length ? "gold" : "ghost"} onClick={() => { setDraft(applied); setDrawer(true); }}>Filters{chips.length ? ` (${chips.length})` : ""}</Btn>
-        <Btn kind="ghost" disabled={!total} onClick={() => setExportOpen(true)}>Export CSV</Btn>
         <Btn onClick={() => setNewOpen(true)}>+ New booking</Btn>
       </>}>
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -2106,10 +2102,6 @@ export function Bookings() {
         </FSection>
       </FilterDrawer>
 
-      <ExportModal open={exportOpen} onClose={() => setExportOpen(false)} columns={BOOKING_EXPORT_COLS} filename="zennara-bookings"
-        summary={`${total.toLocaleString("en-IN")} booking${total === 1 ? "" : "s"} match the current tab, search and filters.`}
-        fetchRows={(fields) => api.bookings.export({ ...query, page: undefined, limit: 20000, fields: fields.join(",") })} />
-
       <NewBookingModal open={newOpen} onClose={() => setNewOpen(false)} onBooked={() => q.reload()} />
       <BookingDrawer id={sel} onClose={() => setSel(null)} onChanged={() => q.reload()} />
     </Page>
@@ -2136,8 +2128,6 @@ const EMPTY_PF: PatientFilters = {
 const PATIENT_SORTS: [string, string][] = [
   ["createdAt", "Joined"], ["name", "Name"], ["visits", "Visits"], ["spend", "Spend"], ["lastLogin", "Last login"], ["dob", "Age"], ["zenExpiry", "Zen expiry"],
 ];
-const PATIENT_EXPORT_COLS = ["Guest code", "Full Name", "Email", "Phone", "Centre", "Source", "Member Type", "Zen Since", "Zen Expires", "Gender", "Date of Birth", "Age",
-  "Total Visits", "Total Spent", "App Opens", "Drug Allergies", "Medical History", "Smoking", "Drinking", "Active", "Verified", "Registered On", "Last Login"];
 
 /** Turn the filter state into query params; blanks are dropped. */
 function patientQuery(f: PatientFilters): Record<string, string | number> {
@@ -2156,7 +2146,6 @@ export function Patients() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [newOpen, setNewOpen] = useState(false);
-  const [exportOpen, setExportOpen] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [applied, setApplied] = useState<PatientFilters>(EMPTY_PF);
   const [draft, setDraft] = useState<PatientFilters>(EMPTY_PF);
@@ -2228,10 +2217,9 @@ export function Patients() {
         <Btn kind={chips.length ? "gold" : "ghost"} onClick={() => { setDraft(applied); setDrawer(true); }}>
           Filters{chips.length ? ` (${chips.length})` : ""}
         </Btn>
-        <Btn kind="ghost" disabled={!total} onClick={() => setExportOpen(true)}>Export CSV</Btn>
         {can("patients.manage") && <Btn onClick={() => setNewOpen(true)}>+ New guest</Btn>}
       </>}>
-      <Hint id="patients-live">Click any row to open the full record — visits, packages, forms, orders and consents. Use Filters to slice by centre, age, membership, visits, spend, treatments had, or lapsed guests; Export honours the same filters.</Hint>
+      <Hint id="patients-live">Click any row to open the full record — visits, packages, forms, orders and consents. Use Filters to slice by centre, age, membership, visits, spend, treatments had, or lapsed guests.</Hint>
 
       <div className="mb-3">
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name, phone, email or guest code…"
@@ -2343,10 +2331,6 @@ export function Patients() {
           <div className="mt-2"><Chips options={[["desc", "Newest / highest first"], ["asc", "Oldest / lowest first"]]} value={draft.sortOrder} onChange={(v) => set("sortOrder", (v as string) || "desc")} /></div>
         </FSection>
       </FilterDrawer>
-
-      <ExportModal open={exportOpen} onClose={() => setExportOpen(false)} columns={PATIENT_EXPORT_COLS} filename="zennara-patients"
-        summary={`${total.toLocaleString("en-IN")} guest${total === 1 ? "" : "s"} match the current search and filters.`}
-        fetchRows={(fields) => api.patients.exportAll({ ...query, page: undefined as unknown as string, limit: 20000, fields: fields.join(",") })} />
 
       <NewPatientModal open={newOpen} onClose={() => setNewOpen(false)} onCreated={(id) => { q.reload(); nav("/patient", { state: { id } }); }} />
     </Page>
