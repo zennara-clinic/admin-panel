@@ -440,8 +440,9 @@ export const products = {
   toggle: (id: Id) => request<Product>(`/admin/products/${id}/toggle-status`, { method: "PATCH" }),
   setStock: (id: Id, stock: number) =>
     request<Product>(`/admin/products/${id}/stock`, { method: "PATCH", body: { stock } }),
-  bulkUpdate: (productIds: Id[], updates: Partial<Product>) =>
-    requestRaw("/admin/products/bulk-update", { method: "PATCH", body: { productIds, updates } }),
+  /** Plain field sets, or `{ centreListing: { branchId, visible?, price?, pickup? } }` to merge one centre's listing onto every product. */
+  bulkUpdate: (productIds: Id[], updates: Partial<Product> | { centreListing: { branchId: Id; visible?: boolean; price?: number | null; pickup?: boolean } }) =>
+    requestRaw<{ modifiedCount?: number }>("/admin/products/bulk-update", { method: "PATCH", body: { productIds, updates } }),
 };
 
 export const brands = {
@@ -477,9 +478,15 @@ export const orders = {
     totalOrders: number; newOrders: number; confirmedOrders: number; processingOrders: number;
     shippedOrders: number; deliveredOrders: number; cancelledOrders: number; failedDeliveryOrders: number;
     returnRequestedOrders: number; appOrders: number; clinicOrders: number; totalRevenue: number;
+    /** Store pickup: waiting at a desk now / handed over / all pickup orders / still open. */
+    readyForPickupOrders?: number; collectedOrders?: number; pickupOrders?: number; openPickupOrders?: number;
   }>("/admin/product-orders/stats", { query: q }),
-  setStatus: (id: Id, orderStatus: string, note?: string) =>
-    request<ProductOrder>(`/admin/product-orders/${id}/status`, { method: "PUT", body: { status: orderStatus, note } }),
+  /**
+   * `extra` is for the pickup handover: the code the guest read out, or
+   * `skipCode` with the note saying how they were identified instead.
+   */
+  setStatus: (id: Id, orderStatus: string, note?: string, extra?: { pickupCode?: string; skipCode?: boolean }) =>
+    request<ProductOrder>(`/admin/product-orders/${id}/status`, { method: "PUT", body: { status: orderStatus, note, ...(extra ?? {}) } }),
   approveReturn: (id: Id) => request<ProductOrder>(`/admin/product-orders/${id}/approve-return`, { method: "PUT" }),
   completeReturn: (id: Id, note?: string) =>
     request<ProductOrder>(`/admin/product-orders/${id}/complete-return`, { method: "PUT", body: { note } }),
@@ -902,6 +909,8 @@ export type Dashboard = {
     existingPatients?: number; newThisMonth?: number; treatmentsThisWeek?: number;
     upcomingAll?: number; appointmentsAllTime?: number; returningPatients?: number;
     completedConsultations?: number; completedTreatments?: number;
+    /** Store pickup: orders waiting at a desk right now, and pickup orders not yet collected. */
+    readyForPickup?: number; openPickupOrders?: number;
   };
   dermatologists: DashboardDerm[];
   topServices: { name: string; category?: string | null; kind: string; bookings: number; revenue: number }[];

@@ -61,6 +61,7 @@ export function Overview() {
 
   const attention = d ? [
     d.counts.awaitingConfirmation ? [`${d.counts.awaitingConfirmation} booking${d.counts.awaitingConfirmation === 1 ? "" : "s"} awaiting confirmation`, "/bookings?tab=1"] : null,
+    d.counts.readyForPickup ? [`${d.counts.readyForPickup} order${d.counts.readyForPickup === 1 ? "" : "s"} waiting to be collected at the desk`, "/orders?fulfilment=pickup&tab=9"] : null,
     d.counts.openOrders ? [`${d.counts.openOrders} product order${d.counts.openOrders === 1 ? "" : "s"} still open`, "/orders"] : null,
     d.counts.packagesUnpaid ? [`${d.counts.packagesUnpaid} package${d.counts.packagesUnpaid === 1 ? "" : "s"} assigned but unpaid`, "/packages"] : null,
     d.counts.outstanding ? [`${fmtINR(d.counts.outstanding)} outstanding on bookings & packages`, "/bookings"] : null,

@@ -7,7 +7,7 @@ import api from "../lib/api";
 import { useApi, useDebounced } from "../lib/useApi";
 import { useQueryNumber, useQueryPage, useQueryString } from "../lib/useListState";
 import { fmtDate, fmtDateFull, fmtINR, fmtCompactINR, idOf, isoDay, nameOf } from "../lib/format";
-import type { Brand, Coupon, Formulation, OrderStatus, Product, ProductOrder, AppStockImportResult, ProductStockMovement } from "../lib/types";
+import type { Branch, Brand, CentreListing, Coupon, Formulation, OrderStatus, Product, ProductOrder, AppStockImportResult, ProductStockMovement } from "../lib/types";
 import { download } from "../lib/http";
 
 /* ================= PRODUCTS ================= */
@@ -28,7 +28,16 @@ export function Products() {
   // Jubilee Hills Pharmacy carry?".
   const [kind, setKind] = useQueryString("kind", "retail");
   const [centre, setCentre] = useState("");
-  const { branches: allBranches } = useStore();
+  const { branches: allBranches, clinics } = useStore();
+  /*
+   * Where the product is on sale for guests — the panel's own centre-wise
+   * listing (visible / price / pickup per clinic), as opposed to "Carried at",
+   * which is Zenoti's shelf feed. "On sale at X" and "Hidden at X" are the
+   * two questions the desk asks; a modal below answers "hide everything at X".
+   */
+  const [shopFilter, setShopFilter] = useQueryString("shop", "");
+  const shopParams = shopFilter.startsWith("on:") ? { listedAt: shopFilter.slice(3) } : shopFilter.startsWith("off:") ? { hiddenAt: shopFilter.slice(4) } : {};
+  const [centreBulkOpen, setCentreBulkOpen] = useState(false);
   /*
    * Commerce shows the CATALOGUE — the curated OTC list the app sells — not
    * Zenoti's whole product master. "Zenoti master" opens the rest, read-mostly,
@@ -48,7 +57,8 @@ export function Products() {
     kind: scope === "app" || kind === "all" ? undefined : kind, branchId: centre || undefined,
     category: fCat === "All" ? undefined : fCat, subCategory: fSub === "All" ? undefined : fSub, vendor: fVendor === "All" ? undefined : fVendor,
     status: fStatus === "All" ? undefined : fStatus, stockFilter: fStock === "all" ? undefined : fStock, hsn: dHsn || undefined,
-  }), [debounced, kind, centre, scope, fCat, fSub, fVendor, fStatus, fStock, dHsn]);
+    ...shopParams,
+  }), [debounced, kind, centre, scope, fCat, fSub, fVendor, fStatus, fStock, dHsn, shopFilter]);
   const facets = (q.data as { facets?: { categories: string[]; subCategories: string[]; vendors: string[]; statuses: string[] } } | undefined)?.facets;
   const stats = useApi(() => api.products.statistics().catch(() => undefined), []);
 
@@ -100,6 +110,7 @@ export function Products() {
           <button onClick={() => setGrid(false)} className={`px-3 py-2 text-[12.5px] font-bold ${!grid ? "bg-primary text-white" : "bg-surface text-ink2"}`}><span className="inline-flex items-center gap-1.5"><List size={13} /> List</span></button>
           <button onClick={() => setGrid(true)} className={`px-3 py-2 text-[12.5px] font-bold ${grid ? "bg-primary text-white" : "bg-surface text-ink2"}`}>▦ Grid</button>
         </div>
+        {can("products.manage") && scope === "app" && <Btn kind="ghost" onClick={() => setCentreBulkOpen(true)}>Centre visibility…</Btn>}
         {can("products.manage") && <Btn kind="ghost" onClick={() => setImportOpen(true)}>Import template</Btn>}
         <Btn kind="ghost" onClick={() => download(api.products.appStockExportPath({ catalogue: scope === "app" ? "app" : "all" }), `AppStock_Template_${scope === "app" ? "Commerce" : "AllProducts"}.xlsx`).catch((e) => toastMsg((e as Error).message))}>Export template</Btn>
         {can("products.manage") && <Btn onClick={() => setAddOpen(true)}>+ New product</Btn>}
@@ -145,9 +156,16 @@ export function Products() {
               <Sel label="Stock" value={fStock === "all" ? "Any" : fStock === "in" ? "In stock" : fStock === "low" ? "At or below re-order" : "Out of stock"} onChange={(v) => setFStock(v === "Any" ? "all" : v === "In stock" ? "in" : v.startsWith("At") ? "low" : "out")} options={["Any", "In stock", "At or below re-order", "Out of stock"]} />
               <Sel label="Price status" value={fStatus} onChange={setFStatus} options={["All", ...(facets?.statuses ?? [])]} />
               <Sel label="Formulation" value={formulation} onChange={setFormulation} options={["All", ...formulationNames]} />
-              <Sel label="Carried at" value={centre ? allBranches.find((b) => b._id === centre)?.name ?? "All centres" : "All centres"}
+              <Sel label="On sale at" value={shopLabel(shopFilter, clinics)}
+                options={["Any centre", ...clinics.map((c) => `On sale at ${c.name}`), ...clinics.map((c) => `Hidden at ${c.name}`)]}
+                onChange={(v) => {
+                  const on = clinics.find((c) => v === `On sale at ${c.name}`);
+                  const off = clinics.find((c) => v === `Hidden at ${c.name}`);
+                  setShopFilter(on ? `on:${on._id}` : off ? `off:${off._id}` : "");
+                }} />
+              {scope !== "app" && <Sel label="Carried at" value={centre ? allBranches.find((b) => b._id === centre)?.name ?? "All centres" : "All centres"}
                 options={["All centres", ...allBranches.map((b) => b.name)]}
-                onChange={(v) => setCentre(v === "All centres" ? "" : allBranches.find((b) => b.name === v)?._id ?? "")} />
+                onChange={(v) => setCentre(v === "All centres" ? "" : allBranches.find((b) => b.name === v)?._id ?? "")} />}
               {kind === "consumable" && <Note className="my-0 flex-1">Treatment-room stock. These never appear in the app; the clinic consumes them against a visit and counts them under Stock.</Note>}
               {kind === "rx" && <Note className="my-0 flex-1">Prescription medicines. The app shows them with their description but cannot sell them — the pharmacy dispenses them against a prescription.</Note>}
               {kind === "unpriced" && <Note className="my-0 flex-1">Mirrored from Zenoti with no price of ours yet. Set a price (or the MRP) before publishing to the app.</Note>}
@@ -182,7 +200,7 @@ export function Products() {
             ) : (
               <DataTable
                 cols={scope === "app"
-                  ? ["Product", "Code", "Category / sub", "HSN", "Vendor", "Stock", "Buy / sell", "GST", "Status", "In app"]
+                  ? ["Product", "Code", "Category / sub", "HSN", "Vendor", "Stock", "Buy / sell", "GST", "Centres", "In app"]
                   : ["Product", "Code", "Category", "Type", "Price", "MRP", "GST", "Centres", "In app"]}
                 onRow={(i) => setSel(list[i])}
                 rows={list.map((p) => scope === "app" ? [
@@ -198,7 +216,10 @@ export function Products() {
                   </span>,
                   <span key={`${p._id}p`} className="tabular-nums">{p.buyingPrice ? <span className="text-ink3">{fmtINR(p.buyingPrice)} / </span> : null}<B>{p.price ? fmtINR(p.price) : "not priced"}</B></span>,
                   `${p.gstPercentage ?? 0}%`,
-                  <span key={`${p._id}st`} className="text-[11px]">{p.templateStatus ? <Tag kind={/confirmed/i.test(p.templateStatus) ? "ok" : /estimat/i.test(p.templateStatus) ? "warn" : "err"}>{p.templateStatus}</Tag> : <span className="text-ink3">—</span>}</span>,
+                  <CentreChips key={`${p._id}ce`} product={p} clinics={clinics} />,
+                  <span key={`${p._id}a`} onClick={(e) => e.stopPropagation()}>
+                    <Toggle on={p.isActive} onChange={() => quickToggle(p)} />
+                  </span>,
                 ] : [
                   <span key={p._id}><B>{p.name}{p.isPopular ? <Star size={11} className="ml-1 inline fill-current text-gold-dark" /> : null}</B>{p.packSize ? <span className="ml-1 text-[10.5px] text-ink3">{p.packSize}</span> : null}</span>,
                   <span key={`${p._id}c`} className="font-mono text-[11px]">{p.code ?? p.sku ?? "—"}</span>,
@@ -219,7 +240,8 @@ export function Products() {
       </Async>
 
       <AppStockImportModal open={importOpen} onClose={() => setImportOpen(false)} onDone={() => { setImportOpen(false); q.reload(); stats.reload(); }} />
-      <ProductEditor open={!!sel || addOpen} product={sel} formulations={formulationNames}
+      <CentreVisibilityModal open={centreBulkOpen} clinics={clinics} products={list} onClose={() => setCentreBulkOpen(false)} onDone={() => { setCentreBulkOpen(false); q.reload(); }} />
+      <ProductEditor open={!!sel || addOpen} product={sel} formulations={formulationNames} clinics={clinics}
         onClose={() => { setSel(null); setAddOpen(false); }}
         onSaved={() => { q.reload(); stats.reload(); setSel(null); setAddOpen(false); }}
         onDelete={(p) => { setSel(null); setDel(p); }} />
@@ -237,8 +259,89 @@ export function Products() {
   );
 }
 
-function ProductEditor({ open, product, formulations, onClose, onSaved, onDelete }: {
-  open: boolean; product: Product | null; formulations: string[];
+/** The three clinics' initials, coloured by whether the product is on sale there. */
+function CentreChips({ product, clinics }: { product: Product; clinics: Branch[] }) {
+  if (!clinics.length) return <span className="text-ink3">—</span>;
+  return (
+    <span className="inline-flex flex-wrap gap-1">
+      {clinics.map((c) => {
+        const l = listingAt(product, c._id);
+        const initials = c.name.split(/\s+/).map((w) => w[0]).join("").slice(0, 3).toUpperCase();
+        const title = `${c.name}: ${l.visible ? `on sale at ${fmtINR(l.price)}` : "hidden"}${l.visible && !l.pickup ? " · no pickup" : ""}`;
+        return (
+          <span key={c._id} title={title}
+            className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-bold ${l.visible ? "bg-ok-bg text-ok" : "bg-err-bg text-err line-through"}`}>
+            {initials}{l.visible && l.centrePrice !== null ? "₹" : ""}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+/** How a product reads at one centre — the same rule as the server's utils/productCentre. */
+function listingAt(product: Product, branchId: string) {
+  const row = (product.centreListings ?? []).find((r) => String(r.branchId) === String(branchId));
+  const base = Number(product.price) || 0;
+  if (!row) return { visible: true, price: base, centrePrice: null as number | null, pickup: true };
+  const cp = row.price === null || row.price === undefined ? null : Number(row.price);
+  return { visible: row.visible !== false, price: cp === null || !Number.isFinite(cp) ? base : cp, centrePrice: cp !== null && Number.isFinite(cp) ? cp : null, pickup: row.pickup !== false };
+}
+
+function shopLabel(filter: string, clinics: Branch[]) {
+  const on = filter.startsWith("on:") ? clinics.find((c) => c._id === filter.slice(3)) : null;
+  const off = filter.startsWith("off:") ? clinics.find((c) => c._id === filter.slice(4)) : null;
+  return on ? `On sale at ${on.name}` : off ? `Hidden at ${off.name}` : "Any centre";
+}
+
+/**
+ * One centre's listing across every product currently listed: "hide the
+ * whole shop at Kondapur", "show everything at Jubilee Hills". Prices are
+ * left alone here — those are set per product in the editor.
+ */
+function CentreVisibilityModal({ open, clinics, products, onClose, onDone }: {
+  open: boolean; clinics: Branch[]; products: Product[]; onClose: () => void; onDone: () => void;
+}) {
+  const { toast, audit } = useStore();
+  const [centreId, setCentreId] = useState("");
+  const [action, setAction] = useState<"show" | "hide" | "pickup-on" | "pickup-off">("hide");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { if (open) setCentreId(clinics[0]?._id ?? ""); }, [open, clinics]);
+  const centre = clinics.find((c) => c._id === centreId);
+  const ACTIONS: Record<typeof action, string> = {
+    hide: "Hide every listed product at this centre",
+    show: "Show every listed product at this centre",
+    "pickup-off": "Turn store pickup off at this centre",
+    "pickup-on": "Turn store pickup on at this centre",
+  };
+  const apply = async () => {
+    if (!centre || !products.length) return;
+    setBusy(true);
+    try {
+      const listing = action === "hide" ? { visible: false } : action === "show" ? { visible: true } : action === "pickup-off" ? { pickup: false } : { pickup: true };
+      const r = await api.products.bulkUpdate(products.map((p) => p._id), { centreListing: { branchId: centre._id, ...listing } });
+      audit("PRODUCT_UPDATED", `${ACTIONS[action]} — ${centre.name}, ${products.length} products`, { branchId: centre._id });
+      toast(`${r.modifiedCount ?? products.length} products updated`);
+      onDone();
+    } catch (e) { toast((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <Modal open={open} onClose={onClose} title="Centre visibility">
+      <Note>Applies to the <b>{products.length} products in the current list</b> — narrow the list first if you mean fewer. Prices per centre are set on each product.</Note>
+      <div className="grid gap-3">
+        <Sel label="Centre" value={centre?.name ?? ""} onChange={(v) => setCentreId(clinics.find((c) => c.name === v)?._id ?? "")} options={clinics.map((c) => c.name)} />
+        <Sel label="Change" value={ACTIONS[action]} onChange={(v) => setAction((Object.keys(ACTIONS) as (typeof action)[]).find((k) => ACTIONS[k] === v) ?? "hide")} options={Object.values(ACTIONS)} />
+      </div>
+      <div className="mt-4 flex justify-end gap-2">
+        <Btn kind="ghost" onClick={onClose}>Back</Btn>
+        <Btn kind={action === "hide" || action === "pickup-off" ? "danger" : "primary"} disabled={busy || !centre || !products.length} onClick={apply}>{busy ? "Applying…" : "Apply"}</Btn>
+      </div>
+    </Modal>
+  );
+}
+
+function ProductEditor({ open, product, formulations, clinics, onClose, onSaved, onDelete }: {
+  open: boolean; product: Product | null; formulations: string[]; clinics: Branch[];
   onClose: () => void; onSaved: () => void; onDelete: (p: Product) => void;
 }) {
   const { toast, audit, can } = useStore();
@@ -272,6 +375,15 @@ function ProductEditor({ open, product, formulations, onClose, onSaved, onDelete
 
   const set = <K extends keyof Product>(k: K) => (v: Product[K]) => setF((s) => ({ ...s, [k]: v }));
   const uploadImage = (file: File) => api.media.upload([file]).then((r) => r?.[0]?.url ?? "");
+  /*
+   * Centre rows are edited as a complete set — one per clinic — and sent whole,
+   * so the server never has to guess which centre a missing row means.
+   */
+  const listingFor = (c: Branch): CentreListing =>
+    (f.centreListings ?? []).find((r) => String(r.branchId) === String(c._id)) ?? { branchId: c._id, branchName: c.name, visible: true, price: null, pickup: true };
+  const setListing = (c: Branch, patch: Partial<CentreListing>) =>
+    setF((s) => ({ ...s, centreListings: [...(s.centreListings ?? []).filter((r) => String(r.branchId) !== String(c._id)), { ...listingFor(c), ...patch }] }));
+  const hiddenEverywhere = clinics.length > 0 && clinics.every((c) => !listingFor(c).visible);
   const stockChanged = !!product && Number(f.stock) !== Number(product.stock);
 
   const save = async () => {
@@ -295,6 +407,7 @@ function ProductEditor({ open, product, formulations, onClose, onSaved, onDelete
         stock: Number(f.stock) || 0,
         // Empty string clears a code; the server turns it into null.
         code: f.code?.trim() ?? "",
+        centreListings: clinics.map((c) => listingFor(c)),
       };
       if (product) {
         if (stockChanged) {
@@ -354,6 +467,28 @@ function ProductEditor({ open, product, formulations, onClose, onSaved, onDelete
           <Sel label="Price status" value={f.templateStatus ?? "—"} onChange={(v) => set("templateStatus")(v === "—" ? null : v)} options={["—", "VPA confirmed", "estimated", "needs price"]} />
           <Sel label="Prescription (Rx)" value={f.isRx === true ? "Yes — clinic only" : f.isRx === false ? "No — sell directly" : "Undecided"} onChange={(v) => set("isRx")(v.startsWith("Yes") ? true : v.startsWith("No") ? false : null)} options={["No — sell directly", "Yes — clinic only", "Undecided"]} />
         </div>
+        <SecH t="Centres" em="· where it is on sale, and at what price" />
+        <div className="grid gap-2">
+          {clinics.map((c) => {
+            const l = listingFor(c);
+            return (
+              <div key={c._id} className={`rounded-xl border px-3.5 py-2.5 ${l.visible ? "border-border bg-surface" : "border-border bg-ivory opacity-80"}`}>
+                <Switch on={l.visible} onChange={(v) => setListing(c, { visible: v })} label={`Sold at ${c.name}`} sub={l.visible ? `Guests shopping at ${c.name} see it` : `Hidden from guests shopping at ${c.name}`} />
+                {l.visible && (
+                  <div className="mt-2 grid grid-cols-2 items-end gap-3">
+                    <In label={`Price at ${c.name} (₹)`} type="number" value={l.price === null || l.price === undefined ? "" : String(l.price)}
+                      onChange={(v) => setListing(c, { price: v === "" ? null : Number(v) })}
+                      placeholder={`base ${fmtINR(Number(f.price) || 0)}`} hint={l.price === null || l.price === undefined ? "Blank = the base price above" : `Base price is ${fmtINR(Number(f.price) || 0)}`} />
+                    <Switch on={l.pickup} onChange={(v) => setListing(c, { pickup: v })} label="Store pickup here" sub={l.pickup ? "Guests can collect it at this centre" : "Delivery only from this centre"} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {hiddenEverywhere && <Note kind="crit" className="my-0">Hidden at every centre — no guest will see this product. Use "Sold in the app" below if you mean to take it off sale entirely.</Note>}
+          {!clinics.length && <Note className="my-0">No clinic centres loaded yet.</Note>}
+        </div>
+
         {product && <StockHistory productId={product._id} />}
         {product?.zenotiProductId && <Note className="my-0">Linked to a Zenoti product (the id keeps the per-centre stock shelves attached). Zenoti no longer overwrites anything here, and nothing here is written to Zenoti.</Note>}
 
@@ -612,18 +747,31 @@ function CouponEditor({ open, coupon, onClose, onSaved, onDelete }: {
 /* ================= ORDERS ================= */
 const ORDER_STATUSES: OrderStatus[] = [
   "Order Placed", "Confirmed", "Processing", "Packed", "Shipped", "Out for Delivery",
-  "Delivery Failed", "Delivered", "Cancelled", "Return Requested", "Returned",
+  "Delivery Failed", "Delivered", "Ready for Pickup", "Collected", "Cancelled", "Return Requested", "Returned",
 ];
 
-const FULFILMENT_STEPS: OrderStatus[] = [
+/*
+ * Two ladders (mirrors the server's utils/orderFulfilment): a delivery order is
+ * shipped and handed over by a courier; a store-pickup order is put aside at
+ * the centre and the guest collects it against a code. Which one applies is
+ * read off the order, never guessed from its status.
+ */
+const DELIVERY_STEPS: OrderStatus[] = [
   "Order Placed", "Confirmed", "Processing", "Packed", "Shipped", "Out for Delivery", "Delivered",
 ];
+const PICKUP_STEPS: OrderStatus[] = [
+  "Order Placed", "Confirmed", "Processing", "Packed", "Ready for Pickup", "Collected",
+];
+const isPickup = (o: Pick<ProductOrder, "fulfilment"> | null | undefined) => o?.fulfilment?.type === "pickup";
+const stepsFor = (o: Pick<ProductOrder, "fulfilment"> | null | undefined) => (isPickup(o) ? PICKUP_STEPS : DELIVERY_STEPS);
+const FULFILLED: string[] = ["Delivered", "Collected"];
 
 const statusTone = (s: string) =>
-  s === "Delivered" ? "ok" : ["Cancelled", "Returned", "Delivery Failed"].includes(s) ? "err"
+  FULFILLED.includes(s) ? "ok" : s === "Ready for Pickup" ? "gold" : ["Cancelled", "Returned", "Delivery Failed"].includes(s) ? "err"
     : ["Order Placed", "Return Requested"].includes(s) ? "warn" : "info";
 
 const SOURCE_LABEL: Record<string, string> = { app: "App orders", zenoti: "Clinic counter", "": "Both" };
+const FULFILMENT_LABEL: Record<string, string> = { "": "Delivery & pickup", delivery: "Home delivery", pickup: "Store pickup" };
 
 export function Orders() {
   const { toast, audit, can } = useStore();
@@ -637,6 +785,10 @@ export function Orders() {
   // the app's fulfilment queue, so it opens on app orders; the other views are
   // one click away rather than mixed in.
   const [srcFilter, setSrcFilter] = useQueryString("source", "app");
+  // Home delivery vs store pickup. The pickup queue follows the panel's centre
+  // switch, so a desk sees only what is waiting for it.
+  const [fulfilFilter, setFulfilFilter] = useQueryString("fulfilment", "");
+  const { branchId: centreId, clinics } = useStore();
   const debounced = useDebounced(search);
   const PAGE = 15;
 
@@ -644,11 +796,12 @@ export function Orders() {
   // Retail sales rung up at the clinic counter live in Zenoti; the last tab
   // lists them next to app orders so product history is complete in one place.
   const q = useApi(
-    () => api.orders.list({ status: tab === 0 ? undefined : tabs[tab], paymentStatus: payFilter || undefined, source: srcFilter || undefined, search: debounced || undefined, page, limit: PAGE }),
-    [tab, payFilter, srcFilter, debounced, page],
+    () => api.orders.list({ status: tab === 0 ? undefined : tabs[tab], paymentStatus: payFilter || undefined, source: srcFilter || undefined, search: debounced || undefined, page, limit: PAGE,
+      fulfilment: fulfilFilter || undefined, branchId: fulfilFilter === "pickup" && centreId ? centreId : undefined }),
+    [tab, payFilter, srcFilter, debounced, page, fulfilFilter, centreId],
   );
   const stats = useApi(() => api.orders.stats({ source: srcFilter || undefined }).catch(() => undefined), [srcFilter]);
-  useEffect(() => { setPage(1); }, [tab, payFilter, srcFilter, debounced]);
+  useEffect(() => { setPage(1); }, [tab, payFilter, srcFilter, debounced, fulfilFilter, centreId]);
 
   const rows = q.data?.data ?? [];
   const total = (q.data as { total?: number } | undefined)?.total ?? rows.length;
@@ -688,6 +841,11 @@ export function Orders() {
   const [failedOpen, setFailedOpen] = useState(false);
   const [failureReason, setFailureReason] = useState("");
   const [failureNote, setFailureNote] = useState("");
+  // The pickup handover: the code the guest reads out, or a note on how they were identified.
+  const [collectOpen, setCollectOpen] = useState(false);
+  const [collectCode, setCollectCode] = useState("");
+  const [collectSkip, setCollectSkip] = useState(false);
+  const [collectNote, setCollectNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -698,24 +856,29 @@ export function Orders() {
     finally { setBusy(false); }
   };
 
-  const setStatus = (o: ProductOrder, to: string, note?: string) =>
+  const setStatus = (o: ProductOrder, to: string, note?: string, extra?: { pickupCode?: string; skipCode?: boolean }) =>
     act(
-      () => api.orders.setStatus(o._id, to, note).then(() => audit("ORDER_STATUS_UPDATED", `${o.orderNumber} → ${to}${note ? ` · ${note}` : ""}`, { orderId: o._id })),
+      () => api.orders.setStatus(o._id, to, note, extra).then(() => audit("ORDER_STATUS_UPDATED", `${o.orderNumber} → ${to}${note ? ` · ${note}` : ""}`, { orderId: o._id })),
       `${o.orderNumber} → ${to}`,
     );
 
   const itemName = (it: ProductOrder["items"][number]) => it.productName || nameOf(it.productId, "Item");
   const addr = selOrder?.shippingAddress;
   const s = stats.data;
-  const currentStep = selOrder ? FULFILMENT_STEPS.indexOf(selOrder.orderStatus) : -1;
-  const nextStatus = currentStep >= 0 ? FULFILMENT_STEPS[currentStep + 1] : undefined;
+  const steps = stepsFor(selOrder);
+  const currentStep = selOrder ? steps.indexOf(selOrder.orderStatus) : -1;
+  const nextStatus = currentStep >= 0 ? steps[currentStep + 1] : undefined;
+  const pickupCentre = selOrder && isPickup(selOrder) ? clinics.find((c) => c._id === selOrder.fulfilment?.branchId) : undefined;
 
   const invoice = (o: ProductOrder) => {
     const lines = (o.items ?? []).map((it) =>
       `<tr><td>${itemName(it)}</td><td style="text-align:center">${it.quantity}</td><td style="text-align:right">${fmtINR(it.price)}</td><td style="text-align:right">${fmtINR(it.price * it.quantity)}</td></tr>`).join("");
     const pr = o.pricing ?? {};
     const ship = o.shippingAddress;
-    const shipHtml = ship ? [ship.fullName, ship.phone, ship.addressLine1, ship.addressLine2, [ship.city, ship.state, ship.postalCode].filter(Boolean).join(" "), ship.country].filter(Boolean).join("<br>") : "";
+    const pa = o.fulfilment?.pickupAddress;
+    const shipHtml = isPickup(o)
+      ? [nameOf(o.userId, "—"), `Collected at ${o.fulfilment?.branchName ?? "the centre"}`, pa?.addressLine1, [pa?.city, pa?.pincode].filter(Boolean).join(" ")].filter(Boolean).join("<br>")
+      : ship ? [ship.fullName, ship.phone, ship.addressLine1, ship.addressLine2, [ship.city, ship.state, ship.postalCode].filter(Boolean).join(" "), ship.country].filter(Boolean).join("<br>") : "";
     const html = `<html><head><title>Invoice ${o.orderNumber}</title><style>body{font-family:Georgia,serif;max-width:680px;margin:40px auto;color:#111}h1{letter-spacing:3px;margin:0}td,th{padding:6px 4px;font-size:13px}th{text-align:left;border-bottom:1px solid #999}table{width:100%;border-collapse:collapse}hr{border:0;border-top:1px solid #ccc}.tot td{border-top:1px solid #999}.muted{color:#666;font-size:12px}</style></head><body>
 <h1>ZENNARA</h1><div class="muted">Skin · Aesthetics · Wellness</div><hr>
 <table><tr><td><b>Invoice</b> ${o.orderNumber}<br><b>Date</b> ${fmtDateFull(o.createdAt)}<br><b>Payment</b> ${o.paymentMethod} · ${o.paymentStatus}</td><td style="text-align:right;vertical-align:top"><b>Bill to</b><br>${shipHtml || nameOf(o.userId, "—")}</td></tr></table><hr>
@@ -723,7 +886,7 @@ export function Orders() {
 <tr class="tot"><td colspan="3" style="text-align:right">Subtotal</td><td style="text-align:right">${fmtINR(pr.subtotal)}</td></tr>
 ${pr.discount ? `<tr><td colspan="3" style="text-align:right">Discount${o.coupon?.code ? ` (${o.coupon.code})` : ""}</td><td style="text-align:right">−${fmtINR(pr.discount)}</td></tr>` : ""}
 <tr><td colspan="3" style="text-align:right">GST</td><td style="text-align:right">${fmtINR(pr.gst)}</td></tr>
-${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><td style="text-align:right">${fmtINR(pr.deliveryFee)}</td></tr>` : ""}
+${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><td style="text-align:right">${fmtINR(pr.deliveryFee)}</td></tr>` : isPickup(o) ? `<tr><td colspan="3" style="text-align:right">Store pickup</td><td style="text-align:right">no delivery fee</td></tr>` : ""}
 <tr class="tot"><td colspan="3" style="text-align:right"><b>Total</b></td><td style="text-align:right"><b>${fmtINR(pr.total)}</b></td></tr></table>
 <hr><p class="muted">Tax invoice. GST is charged per item at the rate on the product record.</p></body></html>`;
     const a = document.createElement("a");
@@ -740,16 +903,18 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
           ? "Product orders placed in the app — fulfilment, returns and refunds"
           : "App orders and clinic counter sales together"}
       actions={<Btn kind="ghost" disabled={!rows.length} onClick={() => exportCsv("zennara-orders",
-        ["Order", "Guest", "Items", "Total", "Payment", "Method", "Source", "Status", "Placed"],
+        ["Order", "Guest", "Items", "Total", "Payment", "Method", "Source", "Fulfilment", "Centre", "Status", "Placed"],
         rows.map((o) => [o.orderNumber, nameOf(o.userId, "—"), o.items?.length ?? 0,
           o.pricing?.total ?? 0, o.paymentStatus ?? "", o.paymentMethod ?? "",
-          o.source === "zenoti" ? "Clinic" : "App", o.orderStatus, fmtDate(o.createdAt)]))}>Export CSV (this page)</Btn>}>
+          o.source === "zenoti" ? "Clinic" : "App", isPickup(o) ? "Store pickup" : "Delivery", o.fulfilment?.branchName ?? "", o.orderStatus, fmtDate(o.createdAt)]))}>Export CSV (this page)</Btn>}>
       <Stats items={[
         { k: "Total orders", v: (s?.totalOrders ?? total).toLocaleString("en-IN") },
         { k: "Awaiting action", v: (s?.newOrders ?? 0) + (s?.confirmedOrders ?? 0) + (s?.processingOrders ?? 0) + (s?.failedDeliveryOrders ?? 0) + (s?.returnRequestedOrders ?? 0),
           d: `${s?.failedDeliveryOrders ?? 0} failed delivery · ${s?.returnRequestedOrders ?? 0} returns`, hot: ((s?.newOrders ?? 0) + (s?.processingOrders ?? 0) + (s?.failedDeliveryOrders ?? 0)) > 0 },
+        { k: "Ready to collect", v: s?.readyForPickupOrders ?? 0, d: `${s?.openPickupOrders ?? 0} pickup order${(s?.openPickupOrders ?? 0) === 1 ? "" : "s"} open`, hot: (s?.readyForPickupOrders ?? 0) > 0,
+          onClick: () => { setFulfilFilter("pickup"); setTab(tabs.indexOf("Ready for Pickup")); } },
         { k: "Shipped", v: s?.shippedOrders ?? 0 },
-        { k: "Delivered", v: s?.deliveredOrders ?? 0, tone: "up" },
+        { k: "Delivered", v: (s?.deliveredOrders ?? 0) + (s?.collectedOrders ?? 0), d: s?.collectedOrders ? `${s.collectedOrders} collected at a centre` : undefined, tone: "up" },
         { k: "Cancelled", v: s?.cancelledOrders ?? 0, tone: (s?.cancelledOrders ?? 0) > 0 ? "dn" : undefined },
         { k: "Revenue", v: fmtCompactINR(s?.totalRevenue) },
       ]} />
@@ -774,6 +939,13 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
         <Menu button={<MenuButton kind="ghost">{payFilter || "Any payment"}</MenuButton>}
           items={[{ label: "Any payment", onClick: () => setPayFilter("") },
             ...["Pending", "Paid", "Failed", "Refunded"].map((p) => ({ label: p, onClick: () => setPayFilter(p) }))]} />
+        <Menu button={<MenuButton kind="ghost">{FULFILMENT_LABEL[fulfilFilter] ?? FULFILMENT_LABEL[""]}</MenuButton>}
+          items={[
+            { label: "Delivery & pickup", onClick: () => setFulfilFilter("") },
+            { label: "Home delivery", onClick: () => setFulfilFilter("delivery") },
+            { label: `Store pickup${s?.pickupOrders !== undefined ? ` (${s.pickupOrders})` : ""}`, onClick: () => setFulfilFilter("pickup") },
+          ]} />
+        {fulfilFilter === "pickup" && <span className="text-[12px] text-ink3">{centreId ? `Collecting at ${clinics.find((c) => c._id === centreId)?.name ?? "this centre"} — switch centre top-left` : "All centres"}</span>}
       </div>
       <Tabs active={tab} onChange={setTab} items={tabs.map((t) => [t]) as [string][]} />
 
@@ -781,7 +953,7 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
       <Async q={q} label="Loading orders…" rows={8}>
         {() => rows.length === 0 ? <Empty title="No orders in this state" /> : (
           <>
-            <DataTable cols={["Order", "Guest", "Items", "Total", "Payment", "Source", "Status", "Placed"]}
+            <DataTable cols={["Order", "Guest", "Items", "Total", "Payment", "Fulfilment", "Status", "Placed"]}
               onRow={(i) => setSel(rows[i]._id)}
               rows={rows.map((o) => [
                 <B key={o._id}>{o.orderNumber}</B>,
@@ -795,8 +967,10 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
                   {o.paymentStatus} · {o.paymentMethod}
                 </Tag>,
                 o.source === "zenoti"
-                  ? <Tag key={`${o._id}src`} kind="mute">Clinic</Tag>
-                  : <Tag key={`${o._id}src`} kind="info">App</Tag>,
+                  ? <Tag key={`${o._id}src`} kind="mute">Clinic counter</Tag>
+                  : isPickup(o)
+                    ? <span key={`${o._id}src`} className="inline-flex flex-wrap items-center gap-1"><Tag kind="gold">Pickup</Tag><span className="text-[11px] text-ink3">{o.fulfilment?.branchName ?? ""}</span>{o.orderStatus === "Ready for Pickup" && o.fulfilment?.pickupCode ? <span className="font-mono text-[11px] font-bold tracking-widest">{o.fulfilment.pickupCode}</span> : null}</span>
+                    : <Tag key={`${o._id}src`} kind="info">Delivery</Tag>,
                 <Tag key={`${o._id}s`} kind={statusTone(o.orderStatus)}>{o.orderStatus}</Tag>,
                 fmtDate(o.createdAt),
               ])} />
@@ -825,7 +999,7 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
               <div className="mt-2 grid gap-1 border-t border-border pt-2 text-[12px]">
                 {selOrder.pricing?.subtotal !== undefined && <div className="flex justify-between"><span className="text-ink3">Subtotal</span><span>{fmtINR(selOrder.pricing.subtotal)}</span></div>}
                 {!!selOrder.pricing?.gst && <div className="flex justify-between"><span className="text-ink3">GST</span><span>{fmtINR(selOrder.pricing.gst)}</span></div>}
-                <div className="flex justify-between"><span className="text-ink3">Delivery</span><span>{selOrder.pricing?.deliveryFee ? fmtINR(selOrder.pricing.deliveryFee) : "Free"}</span></div>
+                <div className="flex justify-between"><span className="text-ink3">{isPickup(selOrder) ? "Store pickup" : "Delivery"}</span><span>{selOrder.pricing?.deliveryFee ? fmtINR(selOrder.pricing.deliveryFee) : isPickup(selOrder) ? "no delivery fee" : "Free"}</span></div>
                 {!!selOrder.pricing?.discount && (
                   <div className="flex justify-between text-ok">
                     <span>Discount{selOrder.coupon?.code ? ` (${selOrder.coupon.code})` : ""}</span>
@@ -843,7 +1017,29 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
               </div>
             </Card>
 
-            {addr && (
+            {isPickup(selOrder) && (
+              <Card className="p-3.5">
+                <SecH t="Collect at" em={selOrder.fulfilment?.branchName ? `· ${selOrder.fulfilment.branchName}` : undefined} />
+                <div className="text-[12px] leading-relaxed text-ink2">
+                  <B>{nameOf(selOrder.userId, "Guest")}</B><br />
+                  {selOrder.fulfilment?.pickupAddress?.addressLine1 ? <>{selOrder.fulfilment.pickupAddress.addressLine1}<br /></> : null}
+                  {[selOrder.fulfilment?.pickupAddress?.city, selOrder.fulfilment?.pickupAddress?.pincode].filter(Boolean).join(" ")}
+                </div>
+                {selOrder.fulfilment?.pickupCode && !["Collected", "Cancelled", "Returned"].includes(selOrder.orderStatus) && (
+                  <div className="mt-2 rounded-lg bg-primary px-3 py-2 text-white">
+                    <div className="text-[10px] uppercase tracking-wider opacity-80">Pickup code — the guest shows this</div>
+                    <div className="font-mono text-[22px] font-bold tracking-[0.3em]">{selOrder.fulfilment.pickupCode}</div>
+                  </div>
+                )}
+                <div className="mt-2 grid gap-0.5 text-[11.5px] text-ink3">
+                  {selOrder.fulfilment?.readyAt && <div>Ready since {fmtDateFull(selOrder.fulfilment.readyAt)}</div>}
+                  {selOrder.fulfilment?.collectedAt && <div>Collected {fmtDateFull(selOrder.fulfilment.collectedAt)}{selOrder.fulfilment.collectedNote ? ` · ${selOrder.fulfilment.collectedNote}` : ""}</div>}
+                  {pickupCentre?.contact?.phone?.[0] && <div>Centre phone {pickupCentre.contact.phone[0]}</div>}
+                </div>
+              </Card>
+            )}
+
+            {addr && !isPickup(selOrder) && (
               <Card className="p-3.5">
                 <SecH t="Ship to" />
                 <div className="text-[12px] leading-relaxed text-ink2">
@@ -894,8 +1090,13 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
 
             {can("orders.manage") && (
               <>
-                {nextStatus && nextStatus !== "Out for Delivery" && (
-                  <Btn className="w-full" disabled={busy} onClick={() => setStatus(selOrder, nextStatus)}>Mark {nextStatus}</Btn>
+                {nextStatus && nextStatus !== "Out for Delivery" && nextStatus !== "Collected" && (
+                  <Btn className="w-full" disabled={busy} onClick={() => setStatus(selOrder, nextStatus)}>
+                    {nextStatus === "Ready for Pickup" ? "Mark ready to collect — messages the guest their code" : `Mark ${nextStatus}`}
+                  </Btn>
+                )}
+                {nextStatus === "Collected" && (
+                  <Btn className="w-full" disabled={busy} onClick={() => { setCollectCode(""); setCollectSkip(false); setCollectNote(""); setCollectOpen(true); }}>Hand over — mark collected…</Btn>
                 )}
                 {selOrder.orderStatus === "Shipped" && (
                   <Btn disabled={busy} onClick={() => {
@@ -912,7 +1113,7 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
                     setDeliveryOpen(true);
                   }}>Reassign delivery…</Btn>
                 )}
-                {!["Cancelled", "Returned", "Delivered", "Return Requested"].includes(selOrder.orderStatus) && (
+                {!["Cancelled", "Returned", "Delivered", "Collected", "Return Requested"].includes(selOrder.orderStatus) && (
                   <Btn kind="danger" disabled={busy} onClick={() => { setCancelReason(""); setCancelOpen(true); }}>Cancel order…</Btn>
                 )}
                 {["Return Requested", "Returned"].includes(selOrder.orderStatus) && selOrder.returnReason && !selOrder.returnApproved && !selOrder.returnRejected && (
@@ -968,6 +1169,26 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
           </div>
         )}
       </Drawer>
+
+      <Modal open={collectOpen} onClose={() => setCollectOpen(false)} title="Hand over the order">
+        <Note>Ask the guest for the pickup code from their app or message and type it here. It has to match this order. The order is already paid — nothing to collect.</Note>
+        {!collectSkip ? (
+          <In label="Pickup code" value={collectCode} onChange={(v) => setCollectCode(v.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6))} placeholder="6 characters" />
+        ) : (
+          <Area label="How was the guest identified? (kept on the order)" value={collectNote} onChange={setCollectNote} rows={2} placeholder="e.g. phone number matched, showed the order in the app" />
+        )}
+        <button type="button" onClick={() => setCollectSkip(!collectSkip)} className="mt-2 text-[12px] font-bold text-ink3 underline">
+          {collectSkip ? "Enter the code instead" : "Guest cannot show the code…"}
+        </button>
+        <div className="mt-4 flex justify-end gap-2">
+          <Btn kind="ghost" onClick={() => setCollectOpen(false)}>Back</Btn>
+          <Btn disabled={busy || (collectSkip ? collectNote.trim().length < 4 : collectCode.length < 6)} onClick={async () => {
+            if (!selOrder) return;
+            const ok = await setStatus(selOrder, "Collected", collectSkip ? collectNote.trim() : undefined, collectSkip ? { skipCode: true } : { pickupCode: collectCode });
+            if (ok) setCollectOpen(false);
+          }}>Mark collected</Btn>
+        </div>
+      </Modal>
 
       <Modal open={cancelOpen} onClose={() => setCancelOpen(false)} title="Cancel this order">
         <Note kind="crit">Cancelling restores stock and messages the guest. {selOrder?.paymentStatus === "Paid" && selOrder.paymentMethod !== "COD" ? "The Razorpay refund starts automatically and returns to the original payment method." : selOrder?.paymentStatus === "Paid" ? "This COD payment needs a manual payout method." : "No captured payment will be refunded."}</Note>

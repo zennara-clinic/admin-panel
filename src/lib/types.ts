@@ -803,6 +803,8 @@ export type SupportMessage = {
 };
 
 /* ---------------- commerce ---------------- */
+export type CentreListing = { branchId: Id; branchName?: string; visible: boolean; price: number | null; pickup: boolean };
+
 export type Product = {
   _id: Id;
   name: string;
@@ -828,6 +830,13 @@ export type Product = {
   isKit?: boolean;
   /** Centres that list this product, from Zenoti's per-centre feed. */
   centres?: { branchId: Id | null; zenotiCenterId?: string | null; branchName?: string }[];
+  /**
+   * Centre-wise shop listing, set here in the panel: per clinic centre, whether
+   * guests shopping there see the product, what it costs there (null = base
+   * price) and whether it can be collected there. No row = visible, base
+   * price, collectable.
+   */
+  centreListings?: CentreListing[];
   zenotiProductId?: string | null;
   /** Commerce catalogue: the curated list the app sells (the pharmacy's OTC sheet). */
   isAppProduct?: boolean;
@@ -1074,15 +1083,35 @@ export type OrderStatus =
   | "Out for Delivery"
   | "Delivery Failed"
   | "Delivered"
+  | "Ready for Pickup"
+  | "Collected"
   | "Cancelled"
   | "Return Requested"
   | "Returned";
+
+export type FulfilmentType = "delivery" | "pickup";
 
 export type ProductOrder = {
   _id: Id;
   orderNumber: string;
   userId: Id | User;
   items: { productId?: Id | Product; productName?: string; productImage?: string; quantity: number; price: number; subtotal?: number }[];
+  /**
+   * Home delivery or store pickup. `branchId` is the centre the order belongs
+   * to in either flow; pickup orders also carry the code the guest shows at
+   * the desk and the centre's address as it stood when they ordered.
+   * Orders placed before this existed have no block and are deliveries.
+   */
+  fulfilment?: {
+    type?: FulfilmentType;
+    branchId?: Id | null;
+    branchName?: string | null;
+    pickupCode?: string | null;
+    pickupAddress?: { addressLine1?: string | null; city?: string | null; state?: string | null; pincode?: string | null; phone?: string | null };
+    readyAt?: string | null;
+    collectedAt?: string | null;
+    collectedNote?: string | null;
+  };
   shippingAddress?: {
     addressId?: Id; fullName?: string; phone?: string; addressLine1?: string; addressLine2?: string;
     city?: string; state?: string; postalCode?: string; country?: string; landmark?: string;
