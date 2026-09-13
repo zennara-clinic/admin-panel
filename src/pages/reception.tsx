@@ -40,7 +40,11 @@ export function Overview() {
 
   const q = useApi(() => api.analytics.dashboard({ ...window, branchId: branchId || undefined }), [window.startDate, window.endDate, branchId]);
   usePoll(q.reload, 120000, true);
-  const d = q.data;
+  // A new range or centre shows the skeleton, never last period's figures under
+  // this period's heading — "All time" used to read as the previous 90 days
+  // until its own (slow) answer arrived.
+  const d = q.stale ? undefined : q.data;
+  const view = { ...q, data: d, initial: q.initial || q.stale };
 
   const streamRows = (d?.revenue.streams ?? []).map((s) => [s.label, s.revenue, `${s.count} · app ${fmtCompactINR(s.app)}${s.clinic ? ` · clinic ${fmtCompactINR(s.clinic)}` : ""}`] as [string, number, string]);
   const dailyPts = d?.daily.map((x) => x.total) ?? [];
@@ -84,8 +88,8 @@ export function Overview() {
           ])}>Export CSV</Btn>
       </>}>
       <Hint id="overview-live">Everything the clinic did in the period — revenue per stream (app and clinic/Zenoti together), counts, and how each dermatologist is performing. Change the centre from the top-left switch; tiles open the detailed page.</Hint>
-      <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
-      <Async q={q} label="Building the dashboard…" rows={8}>
+      <StaleBanner error={d ? q.error : null} onRetry={q.reload} />
+      <Async q={view} label={q.stale ? `Building ${custom ? "the custom period" : range === "All time" ? "all time" : range.toLowerCase()}…` : "Building the dashboard…"} rows={8}>
         {() => d && (
           <>
             <Stats items={[

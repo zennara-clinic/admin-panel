@@ -8,6 +8,13 @@ export type Query<T> = {
   loading: boolean;
   /** True only on the very first load — lets pages show a skeleton once. */
   initial: boolean;
+  /**
+   * True while `data` belongs to a PREVIOUS dependency set — the range or
+   * centre changed and the new answer has not landed. A page that must never
+   * show last period's figures under this period's heading hides `data`
+   * while this is set; a plain `reload()` never makes data stale.
+   */
+  stale: boolean;
   reload: () => void;
   setData: (updater: T | ((prev: T | undefined) => T)) => void;
 };
@@ -24,6 +31,9 @@ export function useApi<T>(fetcher: () => Promise<T>, deps: unknown[] = []): Quer
   const [loading, setLoading] = useState(true);
   const [initial, setInitial] = useState(true);
   const [nonce, setNonce] = useState(0);
+  // Which dependency set the data on screen was fetched for.
+  const depsSig = deps.map((d) => (d === undefined ? "" : String(d))).join("\u0000");
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
 
   const run = useRef(0);
   const fetcherRef = useRef(fetcher);
@@ -39,6 +49,7 @@ export function useApi<T>(fetcher: () => Promise<T>, deps: unknown[] = []): Quer
         if (!live || id !== run.current) return;
         setDataState(res);
         setError(null);
+        setLoadedFor(depsSig);
       })
       .catch((err: unknown) => {
         if (!live || id !== run.current) return;
@@ -61,7 +72,9 @@ export function useApi<T>(fetcher: () => Promise<T>, deps: unknown[] = []): Quer
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
 
-  return { data, error, loading, initial, reload, setData };
+  const stale = data !== undefined && loadedFor !== null && loadedFor !== depsSig;
+
+  return { data, error, loading, initial, stale, reload, setData };
 }
 
 /**
