@@ -22,6 +22,7 @@ import type {
   AssignmentLedger, Membership, MembershipAssignment, GuestMembership,
   CurrentStockRow, StockSummary, StockCount, StockTransfer, StockValuation, StockImportResult,
   MessageTemplate, StaffSalesRow, InvoiceSummary, AppStockImportResult, ProductStockMovement,
+  AnalyticsSeries, MonthlyRevenueRow, PatientAcquisitionRow, GuestWindow, GuestDemographics, GuestSourceRow, GuestSources,
   LifecycleAction, LifecycleState,
 } from "./types";
 
@@ -1037,25 +1038,52 @@ export const analytics = {
     request<TodaysSales>("/admin/analytics/sales/today", { query: (q || {}) as Query }),
   /** Zenoti's "Employee sales": sale-by per invoice line over a range. */
   salesByStaff: (q?: Query) => requestRaw<StaffSalesRow[]>("/admin/analytics/sales/by-staff", { query: q }) as Promise<Envelope<StaffSalesRow[]> & { totals?: { total: number; staff: number; invoices: number } }>,
+  /*
+   * Every window-aware endpoint below takes the same `startDate` / `endDate`
+   * clinic day keys (and `branchId`). A missing `startDate` is an OPEN start —
+   * all time — on every one of them; nothing here sends a synthetic floor.
+   */
   /** One-call clinic dashboard: revenue per stream, counts, dermatologist board. */
   dashboard: (q?: Query) => request<Dashboard>("/admin/analytics/dashboard", { query: q }),
   financial: (q?: Query) => request<FinancialAnalytics>("/admin/analytics/financial", { query: q }),
-  monthlyRevenue: (q?: Query) => request<{ month: string; revenue: number }[]>("/admin/analytics/revenue/monthly", { query: q }),
+  /**
+   * Revenue over the window. The current backend answers `{ granularity, points }`
+   * when a window is sent; an older one answers the last 12 months as
+   * `[{ month, revenue }]`. Callers read both (see `seriesOf` on the page).
+   */
+  monthlyRevenue: (q?: Query) => request<AnalyticsSeries | MonthlyRevenueRow[]>("/admin/analytics/revenue/monthly", { query: q }),
   dailyTarget: () =>
     request<{ dailyTarget: number; todayCollection: number; progressPercentage: number; difference: number; achieved: boolean }>(
       "/admin/analytics/target/daily",
     ),
+  /** Guest base and retention over the window (`startDate` / `endDate`; the old `days` count is gone). */
   patients: (q?: Query) => request<PatientAnalytics>("/admin/analytics/patients", { query: q }),
-  patientAcquisition: () => request<{ month: string; count: number }[]>("/admin/analytics/patients/acquisition"),
+  /** New guests over the window — `{ granularity, points }`, or the older `[{ month, count }]`. */
+  patientAcquisition: (q?: Query) => request<AnalyticsSeries | PatientAcquisitionRow[]>("/admin/analytics/patients/acquisition", { query: q }),
   topPatients: (limit = 5, q?: Query) =>
     request<{ _id: Id; fullName: string; totalSpent: number; visits?: number }[]>("/admin/analytics/patients/top", {
       query: { limit, ...(q ?? {}) },
     }),
-  demographics: () =>
-    request<{ ageGroups: { group: string; count: number }[]; gender: Record<string, number> }>(
-      "/admin/analytics/patients/demographics",
-    ),
-  sources: () => request<{ source: string; count: number; percentage: number }[]>("/admin/analytics/patients/sources"),
+  /**
+   * Age and gender of the guest base. With a window the backend also says which
+   * guests it counted (`window`: "all-time" or the joined-in keys); an older
+   * backend sends no `window`, and the page words the card accordingly.
+   */
+  demographics: (q?: Query) =>
+    requestRaw<GuestDemographics>("/admin/analytics/patients/demographics", { query: q }).then((env): GuestDemographics => ({
+      ...(env.data ?? {}),
+      window: env.data?.window ?? (env.window as GuestWindow | undefined),
+    })),
+  /** Guests by home centre, normalised to `{ rows, window }` whichever shape the backend answers. */
+  sources: (q?: Query) =>
+    requestRaw<GuestSourceRow[] | { sources?: GuestSourceRow[]; rows?: GuestSourceRow[]; data?: GuestSourceRow[]; window?: GuestWindow }>(
+      "/admin/analytics/patients/sources", { query: q },
+    ).then((env): GuestSources => {
+      const d = env.data;
+      const rows = Array.isArray(d) ? d : (d?.sources ?? d?.rows ?? d?.data ?? []);
+      const window = (Array.isArray(d) ? undefined : d?.window) ?? (env.window as GuestWindow | undefined);
+      return { rows, window };
+    }),
   sendBirthdayWish: (userId: Id) =>
     requestRaw(`/admin/analytics/patients/${userId}/birthday-wish`, { method: "POST" }),
   appointments: (q?: Query) => request<AppointmentAnalytics>("/admin/analytics/appointments", { query: q }),

@@ -1793,6 +1793,29 @@ export type MessageTemplate = {
 };
 export type StaffSalesRow = { staff: string; services: number; products: number; packages: number; memberships: number; other: number; total: number; items: number; bills: number };
 
+/* ---------------- analytics ---------------- */
+/** One point on a dated series. `key` is a clinic day ("2026-09-03") or a month ("2026-09"). */
+export type AnalyticsPoint = { key: string; value: number };
+/**
+ * A dated series over the requested window — by day for short windows, by
+ * month for long ones. Returned by /analytics/revenue/monthly and
+ * /analytics/patients/acquisition when a window is sent.
+ */
+export type AnalyticsSeries = { granularity: "day" | "month"; points: AnalyticsPoint[] };
+/** The older shape of /analytics/revenue/monthly (last 12 months, no window). */
+export type MonthlyRevenueRow = { month: string; revenue?: number; totalRevenue?: number };
+/** The older shape of /analytics/patients/acquisition (last 12 months, no window). */
+export type PatientAcquisitionRow = { month: string; count: number };
+/** Which guests a demographics / sources breakdown covers: everyone, or those who joined in the window. */
+export type GuestWindow = "all-time" | { startKey: string; endKey: string };
+export type GuestDemographics = {
+  ageGroups?: { group?: string; range?: string; count: number }[];
+  gender?: Record<string, number>;
+  window?: GuestWindow;
+};
+export type GuestSourceRow = { source: string; count: number; percentage: number };
+export type GuestSources = { rows: GuestSourceRow[]; window?: GuestWindow };
+
 /** Headline numbers for the invoice register. */
 export type InvoiceSummary = {
   total: { count: number; amount: number; paid: number; due: number };

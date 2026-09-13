@@ -1,21 +1,22 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Star } from "lucide-react";
-import { AreaChart, Async, B, DeleteModal, GBars, HBars, Modal, RatingValue, Stars, Toggle, exportCsv } from "../ui";
+import { AreaChart, Async, B, Btn, Card, ChartCard, DataTable, DateRange, DeleteModal, Empty, ErrorState, GBars, HBars, Loading, Menu, MenuButton, Modal, Page, RatingValue, SecH, StaleBanner, Stars, Stats, Tabs, Tag, Toggle, exportCsv } from "../ui";
 import {
-  CellStack, ChartPanel, ChoicePills, DateInput, DetailList, Field, FilterBar, ImageInput, Input, KeyValue, Note, NumberInput, RemoveButton, Row,
+  CellStack, ChoicePills, DateInput, DetailList, Field, FilterBar, ImageInput, Input, Note, NumberInput, RemoveButton, Row,
   SearchInput, Section, Segmented, Select, StatGrid, StatusTag, StudioBtn, StudioEmpty, StudioHint, StudioPage, StudioSheet, StudioStale,
   StudioTable, SubHeading, Textarea, ToggleRow, useStudioSection, type StudioSection,
 } from "../studio-ui";
 import { useStore, ROLE_LABEL } from "../store";
-import { DEFAULT_METRIC_RANGE, METRIC_RANGES, customWindow, isMetricRange, metricWindow, type MetricRange } from "../lib/ranges";
-import api from "../lib/api";
+import { DEFAULT_METRIC_RANGE, customWindow, isMetricRange, metricWindow, type MetricRange } from "../lib/ranges";
+import { RangeSwitch } from "../rangeSwitch";
+import api, { type AppointmentAnalytics, type Dashboard, type FinancialAnalytics, type InventoryAnalytics, type PatientAnalytics, type ServiceAnalytics } from "../lib/api";
 import { useApi, useDebounced } from "../lib/useApi";
 import { useQueryNumber, useQueryPage, useQueryString } from "../lib/useListState";
 import {
   clinicWeekday, fmtCompactINR, fmtDate, fmtDateFull, fmtDayKey, fmtINR, fmtWhen,
   initials, isoDay, nameOf, pct,
 } from "../lib/format";
-import type { Admin, AdminRole, AuditEntry, Branch, ConsultationReview, PermissionGroup, PermissionKey, ProductReview, Role, ServiceReview, StaffAssignment } from "../lib/types";
+import type { Admin, AdminRole, AnalyticsSeries, AuditEntry, Branch, ConsultationReview, GuestDemographics, GuestSources, GuestWindow, MonthlyRevenueRow, PatientAcquisitionRow, PermissionGroup, PermissionKey, ProductReview, Role, ServiceReview, StaffAssignment } from "../lib/types";
 import { SESSION_SLOT_MINUTES } from "../lib/scheduling";
 import { RolesManager, SignInSecurityTab, StaffAccessFields, RoleChip, useCatalog, CentreRolesEditor, SignInControls } from "./access";
 
@@ -710,22 +711,19 @@ export function Reviews() {
  * The period follows every metrics page (lib/ranges.ts): This month by
  * default — the 1st to today — then Last 90 days, All time, or custom dates.
  *
- * "All time" is not a number of days. The dashboard is sent no start and finds
- * the oldest record itself. Financial, appointments and services fall back to
- * their OWN last 30 days when no start is given — which is how "All time" used
- * to show a month on those tabs — so they are sent the all-time floor instead.
+ * One convention for every endpoint: `startDate` / `endDate` are clinic day
+ * keys, and "All time" sends NO start at all — an open window the backend
+ * reads as "everything the clinic holds". (Some routes used to fall back to
+ * their own last 30 days on a missing start, which is why a 2015 floor was
+ * once sent to them; nothing here sends that floor any more.)
+ *
+ * Loading is per tab. TAB_NEEDS lists the responses each tab draws, and only
+ * those are requested — in parallel — when the tab, the period or the centre
+ * changes. Every response is kept per (endpoint, period, centre) for the life
+ * of the page, so returning to a tab or a period already seen renders at once
+ * with no request. Refresh forgets everything and re-reads the open tab.
  */
-const ANALYTICS_SECTIONS: StudioSection[] = [
-  { id: "revenue", title: "Revenue", blurb: "Every stream, as paid, over the period." },
-  { id: "appointments", title: "Appointments", blurb: "Bookings, outcomes and when the centres are busiest." },
-  { id: "dermatologists", title: "Dermatologists", blurb: "Bookings, completion and revenue per dermatologist." },
-  { id: "services", title: "Services", blurb: "What gets booked, what earns, and what does not move." },
-  { id: "guests", title: "Guests", blurb: "The guest base, new joins and retention." },
-  { id: "products", title: "Products & orders", blurb: "App orders, clinic counter sales and stock value." },
-  { id: "packages", title: "Packages & memberships", blurb: "Packages sold and assigned, and the Zen membership base." },
-  { id: "stock", title: "Stock", blurb: "Items tracked, value on hand and what needs re-ordering." },
-  { id: "staffSales", title: "Staff sales", blurb: "Who sold what, from closed bills — the Sale-by on each line." },
-];
+const ANALYTICS_TABS: [string, (number | string)?][] = [["Revenue"], ["Appointments"], ["Dermatologists"], ["Services"], ["Guests"], ["Products & orders"], ["Packages & memberships"], ["Stock"], ["Staff sales"]];
 
 /** Group a daily series into ≤ n buckets (sum) for bar charts. */
 function bucketSeries<T>(rows: T[], n: number, pick: (r: T) => number): number[] {
@@ -741,8 +739,106 @@ function bucketLabels(rows: { date: string }[], n: number): string[] {
   return out;
 }
 
-const CHART_GRID = "grid gap-6 @2xl/pane:grid-cols-2";
-const ANALYTICS_STATS = "@4xl/pane:grid-cols-6";
+/** The fourteen responses the page can draw, by the name each is read as in the JSX. */
+type AnalyticsKey = "dash" | "financial" | "appointments" | "patients" | "services" | "inventory" | "monthly" | "acquisition" | "demographics" | "sources" | "top" | "orders" | "products" | "pkgStats";
+
+type AnalyticsData = {
+  dash: Dashboard;
+  financial: FinancialAnalytics | undefined;
+  appointments: AppointmentAnalytics;
+  patients: PatientAnalytics | undefined;
+  services: ServiceAnalytics | undefined;
+  inventory: InventoryAnalytics | undefined;
+  monthly: AnalyticsSeries | MonthlyRevenueRow[];
+  acquisition: AnalyticsSeries | PatientAcquisitionRow[];
+  demographics: GuestDemographics | undefined;
+  sources: GuestSources;
+  top: Awaited<ReturnType<typeof api.analytics.topPatients>>;
+  orders: Awaited<ReturnType<typeof api.orders.stats>> | undefined;
+  products: Awaited<ReturnType<typeof api.products.statistics>> | undefined;
+  pkgStats: Awaited<ReturnType<typeof api.packageAssignments.stats>> | undefined;
+};
+
+/** What is sent to every window-aware endpoint. `startDate` undefined = all time. */
+type AnalyticsScope = { startDate?: string; endDate: string; branchId?: string; floorStart?: string; days?: number };
+
+/*
+ * What each endpoint is actually sent.
+ *
+ * "All time" is an OPEN start (no startDate). The API is being moved to read
+ * that as all time everywhere, but financial / appointments / services used
+ * to fall back to their own last-30-days when no start came — and the API is
+ * deployed by hand, so the panel can be live before it. Those three get the
+ * 2015 floor instead, which both versions read as "everything"; /patients
+ * keeps its legacy `days` for the same reason. Everything else gets the clean
+ * pair, with the helpers stripped off so the query strings stay honest.
+ */
+const plainScope = ({ floorStart: _f, days: _d, ...s }: AnalyticsScope) => s;
+const flooredScope = ({ floorStart, days: _d, ...s }: AnalyticsScope) => ({ ...s, startDate: s.startDate ?? floorStart });
+const legacyDaysScope = ({ floorStart: _f, ...s }: AnalyticsScope) => s;
+
+/**
+ * What each tab draws, worked out from the JSX below. `dash` carries the
+ * revenue streams, counts, dermatologist board and the daily series, so most
+ * tabs need it; Stock reads only the inventory summary and Staff sales fetches
+ * for itself.
+ */
+const TAB_NEEDS: Record<number, AnalyticsKey[]> = {
+  0: ["dash", "financial", "monthly"],                                            // Revenue
+  1: ["dash", "appointments"],                                                    // Appointments
+  2: ["dash"],                                                                    // Dermatologists
+  3: ["dash", "services"],                                                        // Services
+  4: ["dash", "patients", "acquisition", "demographics", "sources", "top"],       // Guests
+  5: ["dash", "orders", "products"],                                              // Products & orders
+  6: ["dash", "services", "patients", "pkgStats"],                                // Packages & memberships
+  7: ["inventory"],                                                               // Stock
+  8: [],                                                                          // Staff sales (StaffSalesPanel loads its own)
+};
+
+/** All-time counters that take no period or centre; kept once, not once per window. */
+const UNSCOPED: ReadonlySet<AnalyticsKey> = new Set<AnalyticsKey>(["orders", "products", "pkgStats"]);
+
+/**
+ * One fetcher per response. `dash` and `appointments` are required by the
+ * tabs that read them and surface their error; the rest degrade to "absent"
+ * so one slow or broken report never blanks a whole tab.
+ */
+const ANALYTICS_FETCH: { [K in AnalyticsKey]: (scope: AnalyticsScope) => Promise<AnalyticsData[K]> } = {
+  dash: (s) => api.analytics.dashboard(plainScope(s)).catch((e) => { throw new Error(`Dashboard: ${(e as Error).message}`); }),
+  financial: (s) => api.analytics.financial(flooredScope(s)).catch(() => undefined),
+  appointments: (s) => api.analytics.appointments(flooredScope(s)).catch((e) => { throw new Error(`Appointments: ${(e as Error).message}`); }),
+  patients: (s) => api.analytics.patients(legacyDaysScope(s)).catch(() => undefined),
+  services: (s) => api.analytics.services(flooredScope(s)).catch(() => undefined),
+  inventory: ({ startDate, endDate }) => api.analytics.inventory({ startDate, endDate }).catch(() => undefined),
+  monthly: (s) => api.analytics.monthlyRevenue(plainScope(s)).catch(() => []),
+  acquisition: (s) => api.analytics.patientAcquisition(plainScope(s)).catch(() => []),
+  demographics: (s) => api.analytics.demographics(plainScope(s)).catch(() => undefined),
+  sources: (s) => api.analytics.sources(plainScope(s)).catch(() => ({ rows: [] })),
+  top: (s) => api.analytics.topPatients(10, plainScope(s)).catch(() => []),
+  orders: () => api.orders.stats().catch(() => undefined),
+  products: () => api.products.statistics().catch(() => undefined),
+  pkgStats: () => api.packageAssignments.stats().catch(() => undefined),
+};
+
+/** A dated series in one shape, whichever the backend answered. */
+type DatedSeries = { granularity: "day" | "month"; points: { key: string; value: number }[]; windowed: boolean };
+function seriesOf(input: AnalyticsSeries | { month: string; revenue?: number; totalRevenue?: number; count?: number }[] | undefined): DatedSeries {
+  if (!input) return { granularity: "month", points: [], windowed: false };
+  if (Array.isArray(input)) {
+    return { granularity: "month", windowed: false, points: input.map((m) => ({ key: String(m.month), value: Number(m.totalRevenue ?? m.revenue ?? m.count) || 0 })) };
+  }
+  return {
+    granularity: input.granularity === "day" ? "day" : "month",
+    windowed: true,
+    points: (input.points ?? []).map((p) => ({ key: String(p.key), value: Number(p.value) || 0 })),
+  };
+}
+function seriesLabel(s: DatedSeries, key: string): string {
+  if (s.granularity === "day") return fmtDayKey(key.slice(0, 10), { day: "numeric", month: "short", year: "2-digit" });
+  return /^\d{4}-\d{2}$/.test(key) ? fmtDayKey(`${key}-01`, { month: "short", year: "numeric" }) : key;
+}
+/** Card subtitle for a guest-base breakdown: which guests the backend counted. */
+const guestScope = (w: GuestWindow | undefined) => (w === undefined ? "Registered guests" : w === "all-time" ? "All guests" : "Guests joined in this period");
 
 export function Analytics() {
   // Trade happens at the three clinics; a pharmacy filter would always be empty.
@@ -752,409 +848,477 @@ export function Analytics() {
   const range: MetricRange = isMetricRange(rangeParam) ? rangeParam : DEFAULT_METRIC_RANGE;
   const [custom, setCustom] = useState<{ startDate: string; endDate: string } | null>(null);
   const [branchId, setBranchId] = useQueryString("branch", "");
-  const [tab, setTab] = useQueryNumber("tab", 0, { min: 0, max: ANALYTICS_SECTIONS.length - 1 });
+  const [tab, setTab] = useQueryNumber("tab", 0, { min: 0, max: ANALYTICS_TABS.length - 1 });
 
   const win = useMemo(() => (custom ? customWindow(custom.startDate, custom.endDate) : metricWindow(range)), [range, custom]);
-  const window = useMemo(() => ({ startDate: win.startDate, endDate: win.endDate }), [win]);
-  const scope = { ...window, branchId: branchId || undefined };
-  /** For the endpoints that cannot take an open start (see above). */
-  const bounded = { ...scope, startDate: win.floorStart };
-  // The guests endpoint wants a day count.
-  const rangeDays = win.days;
+  // The same window to every endpoint; All time is an open start, not a floor.
+  const scope = useMemo<AnalyticsScope>(() => ({ startDate: win.startDate, endDate: win.endDate, branchId: branchId || undefined, floorStart: win.floorStart, days: win.days }), [win, branchId]);
+  const sig = `${scope.startDate ?? ""}|${scope.endDate}|${scope.branchId ?? ""}`;
 
-  const q = useApi(async () => {
-    const [dash, financial, appointments, patients, services, inventory, monthly, acquisition, demographics, sources, top, orders, products, pkgStats] =
-      await Promise.all([
-        api.analytics.dashboard(scope).catch((e) => { throw new Error(`Dashboard: ${(e as Error).message}`); }),
-        api.analytics.financial(bounded).catch(() => undefined),
-        api.analytics.appointments(bounded).catch((e) => { throw new Error(`Appointments: ${(e as Error).message}`); }),
-        api.analytics.patients({ ...scope, days: rangeDays }).catch(() => undefined),
-        api.analytics.services(bounded).catch(() => undefined),
-        api.analytics.inventory(window).catch(() => undefined),
-        api.analytics.monthlyRevenue({ branchId: branchId || undefined }).catch(() => []),
-        api.analytics.patientAcquisition().catch(() => []),
-        api.analytics.demographics().catch(() => undefined),
-        api.analytics.sources().catch(() => []),
-        api.analytics.topPatients(10, scope).catch(() => []),
-        api.orders.stats().catch(() => undefined),
-        api.products.statistics().catch(() => undefined),
-        api.packageAssignments.stats().catch(() => undefined),
-      ]);
-    return { dash, financial, appointments, patients, services, inventory, monthly, acquisition, demographics, sources, top, orders, products, pkgStats };
-  }, [window.startDate, window.endDate, branchId, range]);
+  // Everything fetched so far, by (response, period, centre). Lives as long as the page.
+  const store = useRef({ values: new Map<string, unknown>(), inflight: new Map<string, Promise<unknown>>(), gen: 0 }).current;
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+
+  const cacheKey = useCallback((k: AnalyticsKey) => (UNSCOPED.has(k) ? k : `${k}|${sig}`), [sig]);
+  const fetchKey = useCallback(<K extends AnalyticsKey>(k: K): Promise<AnalyticsData[K]> => {
+    const ck = cacheKey(k);
+    if (store.values.has(ck)) return Promise.resolve(store.values.get(ck) as AnalyticsData[K]);
+    let p = store.inflight.get(ck) as Promise<AnalyticsData[K]> | undefined;
+    if (!p) {
+      const gen = store.gen;
+      p = (ANALYTICS_FETCH[k] as (s: AnalyticsScope) => Promise<AnalyticsData[K]>)(scope).then(
+        (v) => { if (gen === store.gen) store.values.set(ck, v); store.inflight.delete(ck); return v; },
+        (e: unknown) => { store.inflight.delete(ck); throw e; },
+      );
+      store.inflight.set(ck, p);
+    }
+    return p;
+  }, [cacheKey, scope, store]);
+
+  const needs = TAB_NEEDS[tab] ?? [];
+  useEffect(() => {
+    const missing = needs.filter((k) => !store.values.has(cacheKey(k)));
+    setError(null);
+    if (!missing.length) { setLoading(false); return; }
+    let live = true;
+    setLoading(true);
+    Promise.all(missing.map((k) => fetchKey(k)))
+      .catch((e: unknown) => { if (live) setError((e as Error)?.message ?? "Something went wrong"); })
+      .finally(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, sig, attempt]);
+
+  /** Forget everything and re-read the open tab. */
+  const refresh = () => { store.gen += 1; store.values.clear(); store.inflight.clear(); setAttempt((n) => n + 1); };
+  const retry = () => setAttempt((n) => n + 1);
+
+  // What the open tab can draw right now: its own fresh set, or — while a new
+  // period is on its way — what it showed last, dimmed, so nothing blinks out.
+  const have = needs.every((k) => store.values.has(cacheKey(k)));
+  const fresh = have ? (Object.fromEntries(needs.map((k) => [k, store.values.get(cacheKey(k))])) as Partial<AnalyticsData>) : null;
+  const last = useRef<{ tab: number; data: Partial<AnalyticsData> } | null>(null);
+  if (fresh) last.current = { tab, data: fresh };
+  const data = fresh ?? (last.current?.tab === tab ? last.current.data : null);
+  const stale = !fresh && !!data;
 
   const branchName = branches.find((b) => b._id === branchId)?.name ?? "All centres";
   const label = custom ? `Custom · ${win.label}` : range === "All time" ? "All time" : `${range} · ${win.label}`;
-  const seed = { startDate: win.startDate ?? metricWindow(DEFAULT_METRIC_RANGE).startDate!, endDate: win.endDate };
 
-  const sec = ANALYTICS_SECTIONS[tab] ?? ANALYTICS_SECTIONS[0];
-  const active = sec.id;
-  const onSection = (id: string) => setTab(Math.max(0, ANALYTICS_SECTIONS.findIndex((s) => s.id === id)));
+  const exportAll = async () => {
+    setExporting(true);
+    try {
+      const [d, appts] = await Promise.all([fetchKey("dash"), fetchKey("appointments")]);
+      const a = appts.overview;
+      exportCsv("zennara-analytics", ["Metric", "Value"], [
+        ["Range", label], ["Centre", branchName], ["Total revenue", d.revenue.total], ["Previous period", d.revenue.previous],
+        ...d.revenue.streams.map((s) => [`${s.label} revenue`, s.revenue] as [string, number]),
+        ...d.revenue.streams.map((s) => [`${s.label} count`, s.count] as [string, number]),
+        ["Bookings", a.totalBookings], ["Completed", a.completedBookings], ["Cancellation rate %", a.cancellationRate], ["No-show rate %", a.noShowRate],
+        ["New guests", d.counts.newPatients], ["Active Zen members", d.counts.activeZen], ["Orders", d.counts.orders], ["Packages assigned", d.counts.packagesAssigned],
+        ...d.dermatologists.map((x) => [`${x.name}`, `${x.bookings} bookings · ${x.completed} completed · ₹${x.revenue}`] as [string, string]),
+        ...d.topServices.map((x) => [`Service: ${x.name}`, `${x.bookings} · ₹${x.revenue}`] as [string, string]),
+      ]);
+    } catch (e) {
+      setError((e as Error)?.message ?? "Something went wrong");
+    } finally {
+      setExporting(false);
+    }
+  };
 
-  const exportAll = () => {
-    if (!q.data) return;
-    const d = q.data.dash, a = q.data.appointments.overview;
-    exportCsv("zennara-analytics", ["Metric", "Value"], [
-      ["Range", label], ["Centre", branchName], ["Total revenue", d.revenue.total], ["Previous period", d.revenue.previous],
-      ...d.revenue.streams.map((s) => [`${s.label} revenue`, s.revenue] as [string, number]),
-      ...d.revenue.streams.map((s) => [`${s.label} count`, s.count] as [string, number]),
-      ["Bookings", a.totalBookings], ["Completed", a.completedBookings], ["Cancellation rate %", a.cancellationRate], ["No-show rate %", a.noShowRate],
-      ["New guests", d.counts.newPatients], ["Active Zen members", d.counts.activeZen], ["Orders", d.counts.orders], ["Packages assigned", d.counts.packagesAssigned],
-      ...d.dermatologists.map((x) => [`${x.name}`, `${x.bookings} bookings · ${x.completed} completed · ₹${x.revenue}`] as [string, string]),
-      ...d.topServices.map((x) => [`Service: ${x.name}`, `${x.bookings} · ₹${x.revenue}`] as [string, string]),
-    ]);
+  const body = ({ financial, patients, services, inventory, demographics, orders, products, pkgStats, ...rest }: Partial<AnalyticsData>) => {
+    // `dash` is on every tab that reads it (TAB_NEEDS); `appointments` on the Appointments tab.
+    const d = rest.dash as Dashboard;
+    const appointments = rest.appointments as AppointmentAnalytics;
+    const monthly = seriesOf(rest.monthly);
+    const acquisition = seriesOf(rest.acquisition);
+    const sources = rest.sources?.rows ?? [];
+    const top = rest.top ?? [];
+    const daily = rest.dash?.daily ?? [];
+    const streams = rest.dash?.revenue.streams ?? [];
+    const growth = rest.dash?.revenue.growthPercent ?? null;
+    const dailyLabels = daily.map((x) => fmtDayKey(x.date.slice(0, 10), { day: "numeric", month: "short", year: "2-digit" }));
+    const consultTrend = bucketSeries(daily, 10, (x) => x.consultations);
+    const treatTrend = bucketSeries(daily, 10, (x) => x.treatments);
+    const bl = bucketLabels(daily, 10);
+    return (
+      <>
+        {tab === 0 && (
+          <>
+            <Stats items={[
+              { k: "Total revenue", v: fmtCompactINR(d.revenue.total), hot: true, d: growth === null ? (d.revenue.previousHasData === false ? "no comparable earlier period" : `prev ${fmtCompactINR(d.revenue.previous)}`) : `${growth >= 0 ? "▲" : "▼"} ${Math.abs(growth)}% vs previous ${d.period.days}d`, tone: growth === null ? undefined : growth >= 0 ? "up" : "dn" },
+              ...streams.map((s) => ({
+                k: s.label,
+                v: s.key === "memberships" && s.revenue === 0 && s.count > 0 ? `${s.count} sold` : fmtCompactINR(s.revenue),
+                d: s.unpriced
+                  ? `${s.count} sold · ${s.unpriced} without a recorded price`
+                  : `${s.count} · app ${fmtCompactINR(s.app)}${s.clinic ? ` · clinic ${fmtCompactINR(s.clinic)}` : ""}`,
+              })),
+            ]} />
+
+            {/*
+              Fixed reference points, deliberately separate from the
+              revenue row above. These do not move with the date picker —
+              "how many guests do we have" is always all of them, and a
+              window-relative answer to that is just wrong.
+            */}
+            <Stats items={[
+              { k: "Guests on file", v: d.counts.totalPatients.toLocaleString("en-IN"), hot: true,
+                d: `${d.counts.newThisMonth ?? 0} joined this month` },
+              { k: "New in this period", v: (d.counts.newPatients ?? 0).toLocaleString("en-IN"),
+                d: d.period.isAllTime ? "all time" : `${d.period.days} days` },
+              { k: "Returning guests", v: (d.counts.returningPatients ?? 0).toLocaleString("en-IN"),
+                d: "seen more than once", tone: "up" },
+              { k: "Appointments to date", v: (d.counts.appointmentsAllTime ?? 0).toLocaleString("en-IN"),
+                d: `${d.counts.completed.toLocaleString("en-IN")} completed in period` },
+              { k: "Treatments this week", v: (d.counts.treatmentsThisWeek ?? 0).toLocaleString("en-IN"),
+                d: "completed, last 7 days" },
+              { k: "Still to come", v: (d.counts.upcomingAll ?? 0).toLocaleString("en-IN"),
+                d: "confirmed and awaiting, from now", hot: (d.counts.upcomingAll ?? 0) > 0 },
+            ]} />
+
+            <div className="grid gap-3 xl:grid-cols-2">
+              <ChartCard title="Revenue by day" sub="All streams, as paid" hero={fmtINR(d.revenue.total)}>
+                {d.daily.length > 1 ? <AreaChart pts={d.daily.map((x) => x.total)} labels={dailyLabels} label="Revenue" format={fmtCompactINR} /> : <Empty title="Pick a longer range" />}
+              </ChartCard>
+              <ChartCard title="Streams over time" sub="Consultations · treatments · products · packages · memberships">
+                {bl.length > 1 ? <GBars cats={bl} series={[
+                  { n: "Consultations", v: bucketSeries(d.daily, 10, (x) => x.consultations) }, { n: "Treatments", v: bucketSeries(d.daily, 10, (x) => x.treatments) },
+                  { n: "Products", v: bucketSeries(d.daily, 10, (x) => x.products) }, { n: "Packages", v: bucketSeries(d.daily, 10, (x) => x.packages) }, { n: "Memberships", v: bucketSeries(d.daily, 10, (x) => x.memberships) },
+                ]} /> : <Empty title="Pick a longer range" />}
+              </ChartCard>
+              <ChartCard title="Revenue mix" sub="Share by stream">
+                <HBars rows={streams.map((s) => [s.label, s.revenue, `${d.revenue.total ? Math.round((s.revenue / d.revenue.total) * 100) : 0}% · ${fmtCompactINR(s.revenue)}`] as [string, number, string])} />
+              </ChartCard>
+              <ChartCard title={monthly.windowed ? "Revenue trend" : "Monthly revenue"}
+                sub={monthly.windowed ? `${monthly.granularity === "day" ? "By day" : "By month"} · ${label}` : "Last 12 months, all centres in scope"}>
+                {monthly.points.length > 1 ? <AreaChart pts={monthly.points.map((p) => p.value)} labels={monthly.points.map((p) => seriesLabel(monthly, p.key))} label={monthly.granularity === "day" ? "Day" : "Month"} format={fmtCompactINR} /> : <Empty title="Not enough history yet" />}
+              </ChartCard>
+              <ChartCard title="Revenue by centre" sub="Visits, packages and clinic sales — app orders have no centre">
+                {d.revenueByCentre.length ? <HBars color="var(--color-c2)" rows={d.revenueByCentre.map((r) => [r.centre, r.revenue, `${r.bookings} bookings · ${fmtCompactINR(r.revenue)}`] as [string, number, string])} /> : <Empty title="No bookings" />}
+              </ChartCard>
+              <ChartCard title="Payment mix" sub="How the money came in">
+                {d.paymentMix.length ? <HBars color="var(--color-c3)" rows={d.paymentMix.map((p) => [p.method, p.amount, fmtCompactINR(p.amount)] as [string, number, string])} /> : <Empty title="No payments" />}
+                <div className="mt-3 grid gap-1.5 text-[12px]">
+                  <KVRow k="Outstanding (bookings + packages)" v={fmtINR(d.counts.outstanding)} />
+                  <KVRow k="Average ticket" v={fmtINR(d.counts.averageTicket)} />
+                  {financial && <KVRow k="Cancelled (catalogue value)" v={fmtINR(financial.overview.refundsLost)} />}
+                </div>
+              </ChartCard>
+            </div>
+          </>
+        )}
+
+        {tab === 1 && (() => {
+          const a = appointments.overview;
+          return (
+            <>
+              <Stats items={[
+                { k: "Bookings", v: d.counts.bookings, d: `${d.counts.upcoming} upcoming`, hot: true },
+                { k: "Consultations", v: d.counts.consultations, d: `${Math.round((d.counts.consultations / Math.max(1, d.counts.bookings)) * 100)}% of bookings` },
+                { k: "Treatments", v: d.counts.treatments, d: `${Math.round((d.counts.treatments / Math.max(1, d.counts.bookings)) * 100)}% of bookings` },
+                { k: "Completed", v: d.counts.completed, d: `${pct(a.conversionRate)} conversion`, tone: "up" },
+                { k: "No-show", v: `${d.counts.noShowRate}%`, d: `${d.counts.noShow} missed`, tone: d.counts.noShowRate > 8 ? "dn" : "up" },
+                { k: "Cancelled", v: `${d.counts.cancellationRate}%`, d: `${d.counts.cancelled} cancelled`, tone: d.counts.cancellationRate > 10 ? "dn" : undefined },
+              ]} />
+              <div className="grid gap-3 xl:grid-cols-2">
+                <ChartCard title="Consultations vs treatments" sub="Bookings over the period">
+                  {bl.length > 1 ? <GBars cats={bl} series={[{ n: "Consultations", v: consultTrend }, { n: "Treatments", v: treatTrend }]} /> : <Empty title="Pick a longer range" />}
+                </ChartCard>
+                <ChartCard title="Bookings per day" hero={String(d.counts.bookings)}>
+                  {d.daily.length > 1 ? <AreaChart pts={d.daily.map((x) => x.bookings)} labels={dailyLabels} label="Bookings" /> : <Empty title="Pick a longer range" />}
+                </ChartCard>
+                <ChartCard title="Outcome mix" sub={label}>
+                  <GBars cats={["Completed", "Upcoming", "Cancelled", "No-show"]} series={[{ n: "Bookings", v: [d.counts.completed, d.counts.upcoming, d.counts.cancelled, d.counts.noShow] }]} />
+                </ChartCard>
+                <ChartCard title="Where bookings come from" sub="App · reception · package · Zennara clinic">
+                  <HBars color="var(--color-c4)" rows={Object.entries(d.counts.bookingsBySource).map(([k, v]) => [k, v] as [string, number])} />
+                </ChartCard>
+                <ChartCard title="Busiest days" sub="Bookings by weekday">
+                  <HBars color="var(--color-c2)" rows={(appointments.peakDays ?? []).map((x) => [x.day, x.count] as [string, number])} />
+                </ChartCard>
+                <ChartCard title="Busiest hours" sub="Bookings by hour of day">
+                  <HBars color="var(--color-c3)" rows={(appointments.peakHours ?? []).filter((h) => h.count > 0).map((h) => [h.hour, h.count] as [string, number])} />
+                </ChartCard>
+                <Card className="p-4">
+                  <SecH t="Load & flow" />
+                  <div className="grid gap-2 text-[12.5px]">
+                    <KVRow k="Per day" v={String(appointments.averages?.perDay ?? 0)} />
+                    <KVRow k="Per week" v={String(appointments.averages?.perWeek ?? 0)} />
+                    <KVRow k="Per month" v={String(appointments.averages?.perMonth ?? 0)} />
+                    <KVRow k="Upcoming this week" v={String(appointments.upcomingThisWeek ?? 0)} />
+                    <KVRow k="Awaiting confirmation" v={String(d.counts.awaitingConfirmation)} />
+                    <KVRow k="Avg days between visits" v={String(appointments.avgTimeBetweenBookings ?? 0)} />
+                  </div>
+                </Card>
+                {!!(appointments as { noShowByService?: { service: string; count: number }[] }).noShowByService?.length && (
+                  <ChartCard title="No-shows by service">
+                    <HBars color="var(--color-err)" rows={((appointments as { noShowByService?: { service: string; count: number }[] }).noShowByService ?? []).slice(0, 8).map((x) => [x.service, x.count] as [string, number])} />
+                  </ChartCard>
+                )}
+              </div>
+            </>
+          );
+        })()}
+
+        {tab === 2 && (
+          <>
+            <Stats items={[
+              { k: "Dermatologists", v: d.dermatologists.filter((x) => x.bookings > 0).length, d: `${d.dermatologists.length} on the roster`, hot: true },
+              { k: "Top earner", v: d.dermatologists[0]?.revenue ? d.dermatologists[0].name.split(" ")[0] : "—", d: d.dermatologists[0] ? fmtCompactINR(d.dermatologists[0].revenue) : "" },
+              { k: "Busiest", v: [...d.dermatologists].sort((x, y) => y.bookings - x.bookings)[0]?.name.split(" ")[0] ?? "—", d: `${[...d.dermatologists].sort((x, y) => y.bookings - x.bookings)[0]?.bookings ?? 0} bookings` },
+              { k: "Best completion", v: `${Math.max(0, ...d.dermatologists.filter((x) => x.bookings >= 3).map((x) => x.completionRate))}%`, d: "min 3 bookings" },
+              { k: "Avg rating", v: (() => { const r = d.dermatologists.filter((x) => x.avgRating); return r.length ? <RatingValue value={Number((r.reduce((n, x) => n + (x.avgRating ?? 0), 0) / r.length).toFixed(1))} /> : "—"; })(), d: "across rated visits" },
+            ]} />
+            <div className="grid gap-3 xl:grid-cols-2">
+              <ChartCard title="Revenue by dermatologist" sub={label}>
+                <HBars rows={d.dermatologists.filter((x) => x.revenue > 0).map((x) => [x.name, x.revenue, fmtCompactINR(x.revenue)] as [string, number, string])} />
+              </ChartCard>
+              <ChartCard title="Consultations vs treatments" sub="Per dermatologist">
+                <GBars cats={d.dermatologists.filter((x) => x.bookings > 0).map((x) => x.name.split(" ")[0])} series={[{ n: "Consultations", v: d.dermatologists.filter((x) => x.bookings > 0).map((x) => x.consultations) }, { n: "Treatments", v: d.dermatologists.filter((x) => x.bookings > 0).map((x) => x.treatments) }]} />
+              </ChartCard>
+            </div>
+            <div className="mt-3">
+              <DataTable cols={["Dermatologist", "Level", "Bookings", "Consults", "Treatments", "Completed", "No-show", "Guests", "Rating", "Revenue", "Per booking"]}
+                rows={d.dermatologists.map((x, i) => [
+                  <span key={x.doctorId} className="flex items-center gap-2"><span className={`grid h-6 w-6 place-items-center rounded-full text-[10px] font-bold ${i === 0 && x.revenue > 0 ? "bg-gold text-primary" : "bg-sage text-ink2"}`}>{i + 1}</span><B>{x.name}</B>{!x.onboarded && <Tag kind="info">Zenoti</Tag>}</span>,
+                  <Tag key={`${x.doctorId}l`} kind={!x.onboarded ? "info" : x.level === "Senior Dermatologist" ? "gold" : "mute"}>{x.level}</Tag>,
+                  x.bookings, x.consultations, x.treatments, `${x.completed} (${x.completionRate}%)`, x.noShow, x.patients, x.avgRating ? <RatingValue value={x.avgRating} /> : "—", <B key={`${x.doctorId}r`}>{fmtINR(x.revenue)}</B>, fmtINR(x.bookings ? Math.round(x.revenue / x.bookings) : 0),
+                ])} />
+            </div>
+          </>
+        )}
+
+        {tab === 3 && (
+          <>
+            <Stats items={[
+              { k: "Services booked", v: d.topServices.length, d: `${services?.summary?.totalServices ?? "—"} in catalogue`, hot: true },
+              { k: "Top service", v: d.topServices[0]?.name ?? "—", d: d.topServices[0] ? `${d.topServices[0].bookings} bookings · ${fmtCompactINR(d.topServices[0].revenue)}` : "" },
+              { k: "Revenue / service", v: fmtINR(services?.summary?.avgRevenuePerService), d: "average" },
+              { k: "Categories", v: services?.categoryPerformance?.length ?? 0, d: "with bookings" },
+            ]} />
+            <div className="grid gap-3 xl:grid-cols-2">
+              <ChartCard title="Top services by revenue" sub={label}>
+                {d.topServices.length ? <HBars rows={d.topServices.slice(0, 10).map((x) => [x.name, x.revenue, `${x.bookings} · ${fmtCompactINR(x.revenue)}`] as [string, number, string])} /> : <Empty title="No services booked" />}
+              </ChartCard>
+              <ChartCard title="Top services by volume">
+                {d.topServices.length ? <HBars color="var(--color-c2)" rows={[...d.topServices].sort((x, y) => y.bookings - x.bookings).slice(0, 10).map((x) => [x.name, x.bookings, x.kind] as [string, number, string])} /> : <Empty title="No services booked" />}
+              </ChartCard>
+              <ChartCard title="Category performance" sub={label}>
+                {services?.categoryPerformance?.length ? <HBars color="var(--color-c3)" rows={services.categoryPerformance.slice(0, 10).map((c) => [c.category, c.revenue, fmtCompactINR(c.revenue)] as [string, number, string])} /> : <Empty title="No category data" />}
+              </ChartCard>
+              {!!services?.leastPerformingServices?.length && (
+                <ChartCard title="Needs attention" sub="Least booked services in the catalogue">
+                  <HBars color="var(--color-err)" rows={(services.leastPerformingServices as { name: string; bookings?: number }[]).slice(0, 8).map((x) => [x.name, x.bookings ?? 0] as [string, number])} />
+                </ChartCard>
+              )}
+              {!!services?.packageUtilization?.length && (
+                <ChartCard title="Package utilisation" sub="Sessions used of sessions sold">
+                  <HBars color="var(--color-c4)" rows={services.packageUtilization.slice(0, 8).map((p2) => [p2.name, p2.used, `${p2.used}/${p2.total}`] as [string, number, string])} />
+                </ChartCard>
+              )}
+            </div>
+          </>
+        )}
+
+        {tab === 4 && (
+          <>
+            <Stats items={[
+              { k: "Guests on file", v: d.counts.totalPatients.toLocaleString("en-IN"), hot: true, d: `${d.counts.newPatients} new in period` },
+              { k: "New guests", v: d.counts.newPatients, d: patients ? `${pct(patients.overview.newPatientRatio)} of bookers` : "" },
+              { k: "Retention", v: patients ? pct(patients.overview.retentionRate) : "—", d: patients ? `${patients.overview.returningPatients} returning` : "" },
+              { k: "Zen members", v: d.counts.activeZen, d: `${d.counts.zenExpiring} expiring in 30d`, tone: d.counts.zenExpiring ? "dn" : undefined },
+              { k: "Birthdays today", v: patients?.birthdaysToday?.length ?? 0, d: "send a wish from the guest page" },
+              { k: "Inactive", v: patients?.inactivePatients?.count ?? 0, d: `no visit in ${patients?.inactivePatients?.threshold ?? 90}d` },
+            ]} />
+            <div className="grid gap-3 xl:grid-cols-2">
+              <ChartCard title={acquisition.windowed ? "New guests" : "New guests per month"}
+                sub={acquisition.windowed ? `${acquisition.granularity === "day" ? "By day" : "By month"} · ${label}` : undefined}
+                hero={String(d.counts.newPatients)}>
+                {acquisition.points.length > 1 ? <AreaChart pts={acquisition.points.map((p) => p.value)} labels={acquisition.points.map((p) => seriesLabel(acquisition, p.key))} label="New guests" /> : <Empty title="Not enough history yet" />}
+              </ChartCard>
+              <ChartCard title="By home centre" sub={guestScope(rest.sources?.window)}>
+                {sources.length ? <HBars color="var(--color-c2)" rows={sources.map((x) => [x.source || "Unknown", x.count, `${x.count} · ${pct(x.percentage)}`] as [string, number, string])} /> : <Empty title="No data" />}
+              </ChartCard>
+              {demographics && (
+                <>
+                  <ChartCard title="Age groups" sub={guestScope(demographics.window)}><HBars rows={(demographics.ageGroups ?? []).map((g) => [g.range ?? g.group ?? "—", g.count] as [string, number])} /></ChartCard>
+                  <ChartCard title="Gender" sub={guestScope(demographics.window)}><HBars color="var(--color-c3)" rows={Object.entries(demographics.gender ?? {}).filter(([k]) => k !== "total").map(([k, v]) => [k, Number(v)] as [string, number])} /></ChartCard>
+                </>
+              )}
+              <Card className="p-4 xl:col-span-2">
+                <SecH t="Top guests by spend" em={`· ${label}`} />
+                {top.length === 0 ? <Empty title="No spend recorded" /> : <DataTable cols={["Guest", "Spend", "Visits"]} rows={top.map((t) => [<B key={t._id}>{t.fullName}</B>, fmtINR(t.totalSpent), t.visits ?? "—"])} />}
+              </Card>
+            </div>
+          </>
+        )}
+
+        {tab === 5 && (
+          <>
+            <Stats items={[
+              { k: "Product revenue", v: fmtCompactINR(streams.find((s) => s.key === "products")?.revenue ?? 0), hot: true, d: `app ${fmtCompactINR(streams.find((s) => s.key === "products")?.app ?? 0)} · clinic ${fmtCompactINR(streams.find((s) => s.key === "products")?.clinic ?? 0)}` },
+              { k: "Orders", v: d.counts.orders, d: `${d.counts.paidOrders} paid · ${d.counts.openOrders} open` },
+              { k: "Delivered", v: d.counts.ordersByStatus["Delivered"] ?? 0, d: `${d.counts.ordersByStatus["Cancelled"] ?? 0} cancelled · ${d.counts.ordersByStatus["Returned"] ?? 0} returned` },
+              { k: "All-time orders", v: orders?.totalOrders ?? "—", d: orders ? fmtCompactINR(orders.totalRevenue) : "" },
+              { k: "Products", v: products?.total ?? "—", d: products ? `${products.active} live · ${products.lowStock} low stock` : "" },
+              { k: "Stock value", v: products ? fmtCompactINR(products.totalValue) : "—", d: products ? `${products.totalStock} units` : "" },
+            ]} />
+            <div className="grid gap-3 xl:grid-cols-2">
+              <ChartCard title="Product revenue by day" hero={fmtINR(streams.find((s) => s.key === "products")?.app ?? 0)}>
+                {d.daily.length > 1 ? <AreaChart pts={d.daily.map((x) => x.products)} labels={dailyLabels} label="Products" format={fmtCompactINR} /> : <Empty title="Pick a longer range" />}
+              </ChartCard>
+              <ChartCard title="Orders by status" sub={label}>
+                {Object.keys(d.counts.ordersByStatus).length ? <HBars color="var(--color-c2)" rows={Object.entries(d.counts.ordersByStatus).map(([k, v]) => [k, v] as [string, number])} /> : <Empty title="No orders in this period" />}
+              </ChartCard>
+              {products?.byFormulation && Object.keys(products.byFormulation).length > 0 && (
+                <ChartCard title="Stock value by formulation">
+                  <HBars color="var(--color-c3)" rows={Object.entries(products.byFormulation).map(([k, v]) => [k, v.value, `${v.count} products · ${v.stock} units`] as [string, number, string])} />
+                </ChartCard>
+              )}
+              {orders && (
+                <Card className="p-4"><SecH t="Order pipeline (all time)" />
+                  <div className="grid gap-2 text-[12.5px]">
+                    <KVRow k="New" v={String(orders.newOrders)} /><KVRow k="Confirmed" v={String(orders.confirmedOrders)} /><KVRow k="Processing" v={String(orders.processingOrders)} /><KVRow k="Shipped" v={String(orders.shippedOrders)} /><KVRow k="Delivered" v={String(orders.deliveredOrders)} /><KVRow k="Cancelled" v={String(orders.cancelledOrders)} />
+                  </div>
+                </Card>
+              )}
+            </div>
+          </>
+        )}
+
+        {tab === 6 && (
+          <>
+            <Stats items={[
+              { k: "Package revenue", v: fmtCompactINR(streams.find((s) => s.key === "packages")?.revenue ?? 0), hot: true, d: `app ${fmtCompactINR(streams.find((s) => s.key === "packages")?.app ?? 0)} · clinic ${fmtCompactINR(streams.find((s) => s.key === "packages")?.clinic ?? 0)}` },
+              { k: "Packages assigned", v: d.counts.packagesAssigned, d: `${d.counts.packagesPaid} paid · ${d.counts.packagesUnpaid} due` },
+              { k: "Membership revenue", v: fmtCompactINR(streams.find((s) => s.key === "memberships")?.revenue ?? 0), d: d.counts.membershipsUnpriced ? `${d.counts.membershipsSold} sold · ${d.counts.membershipsUnpriced} unpriced` : `${d.counts.membershipsSold} sold` },
+              { k: "Active Zen members", v: d.counts.activeZen, d: `${d.counts.zenExpiring} expiring in 30d`, tone: d.counts.zenExpiring ? "dn" : undefined },
+              { k: "Active assignments", v: pkgStats?.statusCounts?.find((s) => s._id === "Active")?.count ?? "—", d: `${pkgStats?.statusCounts?.find((s) => s._id === "Completed")?.count ?? 0} completed` },
+            ]} />
+            <div className="grid gap-3 xl:grid-cols-2">
+              <ChartCard title="Packages & memberships by day">
+                {bl.length > 1 ? <GBars cats={bl} series={[{ n: "Packages", v: bucketSeries(d.daily, 10, (x) => x.packages) }, { n: "Memberships", v: bucketSeries(d.daily, 10, (x) => x.memberships) }]} /> : <Empty title="Pick a longer range" />}
+              </ChartCard>
+              {pkgStats?.statusCounts && (
+                <ChartCard title="Assignments by status" sub="All time">
+                  <HBars color="var(--color-c2)" rows={pkgStats.statusCounts.map((s) => [s._id, s.count] as [string, number])} />
+                </ChartCard>
+              )}
+              {pkgStats?.paymentStats && (
+                <ChartCard title="Package payments" sub="Received vs due (all time)">
+                  <HBars color="var(--color-c3)" rows={pkgStats.paymentStats.map((s) => [s._id ? "Received" : "Due", s.totalAmount, `${s.count} · ${fmtCompactINR(s.totalAmount)}`] as [string, number, string])} />
+                </ChartCard>
+              )}
+              {!!services?.packageUtilization?.length && (
+                <ChartCard title="Package utilisation" sub="Sessions used of sessions sold">
+                  <HBars color="var(--color-c4)" rows={services.packageUtilization.slice(0, 10).map((p2) => [p2.name, p2.used, `${p2.used}/${p2.total} · ${pct(p2.utilizationRate)}`] as [string, number, string])} />
+                </ChartCard>
+              )}
+              {!!d.counts.membershipsUnpriced && (
+                <Card className="p-4"><SecH t="Memberships without a recorded price" />
+                  <div className="text-[12.5px] text-ink2">
+                    <B>{d.counts.membershipsUnpriced}</B> of {d.counts.membershipsSold} memberships in this period have no amount on record — Zennara clinic (Zenoti) memberships carry no price in the CRM feed, and desk grants made before amounts were captured have none either.
+                    They are counted here but contribute <B>₹0</B> to revenue rather than an invented figure. Open the guest and use <B>Record payment details</B> on their membership card to add what was charged.
+                  </div>
+                </Card>
+              )}
+              {patients?.membershipStatus && (
+                <Card className="p-4"><SecH t="Membership base" />
+                  <div className="grid gap-2 text-[12.5px]">
+                    <KVRow k="Active" v={String(patients.membershipStatus.active)} /><KVRow k="Expired" v={String(patients.membershipStatus.expired)} /><KVRow k="Pending" v={String(patients.membershipStatus.pending)} />
+                  </div>
+                </Card>
+              )}
+            </div>
+          </>
+        )}
+
+        {tab === 8 && <StaffSalesPanel />}
+        {tab === 7 && (
+          inventory ? (
+            <>
+              <Stats items={[
+                { k: "Items tracked", v: inventory.summary?.totalItems ?? 0, hot: true },
+                { k: "Stock value", v: fmtCompactINR(inventory.summary?.totalValue), d: `cost ${fmtCompactINR(inventory.summary?.totalCost)}` },
+                { k: "Below re-order", v: inventory.summary?.lowStockCount ?? 0, tone: (inventory.summary?.lowStockCount ?? 0) ? "dn" : undefined },
+                { k: "Out of stock", v: inventory.summary?.outOfStockCount ?? 0, tone: (inventory.summary?.outOfStockCount ?? 0) ? "dn" : undefined },
+                { k: "Expiring in 30d", v: inventory.summary?.expiringIn30Days ?? 0, d: `${inventory.summary?.expired ?? 0} expired` },
+              ]} />
+              <div className="grid gap-3 xl:grid-cols-2">
+                <Card className="p-4">
+                  <SecH t="Low-stock alerts" />
+                  {(inventory.lowStockAlerts ?? []).length === 0 ? <Empty title="Nothing below re-order level" /> : (
+                    <DataTable cols={["Item", "On hand", "Re-order"]} rows={(inventory.lowStockAlerts ?? []).slice(0, 15).map((i) => [<B key={i._id}>{i.inventoryName}</B>, i.qohAllBatches ?? 0, i.reOrderLevel ?? 0])} />)}
+                </Card>
+                {!!(inventory as { fastMovingProducts?: { name?: string; inventoryName?: string; consumed?: number; quantity?: number }[] }).fastMovingProducts?.length && (
+                  <ChartCard title="Fast-moving stock">
+                    <HBars color="var(--color-c2)" rows={((inventory as { fastMovingProducts?: { name?: string; inventoryName?: string; consumed?: number; quantity?: number }[] }).fastMovingProducts ?? []).slice(0, 10).map((x) => [x.name ?? x.inventoryName ?? "—", x.consumed ?? x.quantity ?? 0] as [string, number])} />
+                  </ChartCard>
+                )}
+              </div>
+            </>
+          ) : <Empty title="Stock analytics unavailable" hint="The inventory analytics endpoint did not respond." />
+        )}
+      </>
+    );
   };
 
   return (
-    <StudioPage title="Analytics" wide intro={`Showing ${branchName}, ${label}. Every figure follows the period and centre chosen below.`}
-      sections={ANALYTICS_SECTIONS} active={active} onSection={onSection}
-      actions={
-        <div className="grid w-full gap-2">
-          <Segmented value={custom ? "custom" : range}
-            onChange={(v) => { if (v === "custom") { setCustom(custom ?? seed); } else { setCustom(null); setRange(v); } }}
-            options={[...METRIC_RANGES.map((r) => ({ value: r, label: r })), { value: "custom", label: "Custom" }]} />
-          {custom && (
-            <div className="grid grid-cols-2 gap-2">
-              <DateInput ariaLabel="From" value={custom.startDate} max={custom.endDate} onChange={(v) => v && setCustom({ ...custom, startDate: v })} />
-              <DateInput ariaLabel="To" value={custom.endDate} min={custom.startDate} onChange={(v) => v && setCustom({ ...custom, endDate: v })} />
-            </div>
-          )}
-          <Select value={branchId} onChange={setBranchId}
-            options={[{ value: "", label: "All centres" }, ...branches.map((b) => ({ value: b._id, label: b.name }))]} />
-          <StudioBtn kind="ghost" disabled={!q.data} onClick={exportAll}>Export CSV</StudioBtn>
+    <Page title="Analytics" sub={`${branchName} · ${label}`}
+      actions={<>
+        <RangeSwitch value={range} onChange={setRange} custom={custom} onCustom={setCustom}
+          seed={{ startDate: win.startDate ?? metricWindow(DEFAULT_METRIC_RANGE).startDate!, endDate: win.endDate }} />
+        <Menu button={<MenuButton kind="ghost">{branchName}</MenuButton>}
+          items={[{ label: "All centres", onClick: () => setBranchId("") }, ...branches.map((b) => ({ label: b.name, onClick: () => setBranchId(b._id) }))]} />
+        <Btn kind="ghost" disabled={loading} onClick={refresh}>Refresh</Btn>
+        <Btn kind="ghost" disabled={exporting} onClick={() => { void exportAll(); }}>{exporting ? "Exporting…" : "Export CSV"}</Btn>
+      </>}>
+      <Tabs active={tab} onChange={setTab} items={ANALYTICS_TABS} />
+      <StaleBanner error={data ? error : null} onRetry={retry} />
+      {!data ? (
+        error && !loading ? <ErrorState message={error} onRetry={retry} /> : <Loading label="Crunching the numbers…" rows={8} />
+      ) : (
+        <div className={stale && loading ? "opacity-60 transition-opacity" : "transition-opacity"} aria-busy={stale && loading ? "true" : undefined}>
+          {body(data)}
         </div>
-      }>
-      <StudioStale error={q.data ? q.error : null} onRetry={q.reload} />
-      <Section title={sec.title} blurb={sec.blurb}>
-        <div className="col-span-full grid gap-6">
-          {active === "staffSales" ? <StaffSalesPanel /> : (
-            <Async q={q} label="Crunching the numbers…" rows={8}>
-              {({ dash: d, financial, appointments, patients, services, inventory, monthly, acquisition, demographics, sources, top, orders, products, pkgStats }) => {
-                const a = appointments.overview;
-                const growth = d.revenue.growthPercent;
-                const dailyLabels = d.daily.map((x) => fmtDayKey(x.date.slice(0, 10), { day: "numeric", month: "short", year: "2-digit" }));
-                const streams = d.revenue.streams;
-                const consultTrend = bucketSeries(d.daily, 10, (x) => x.consultations);
-                const treatTrend = bucketSeries(d.daily, 10, (x) => x.treatments);
-                const bookingsTrend = bucketSeries(d.daily, 10, (x) => x.bookings);
-                void bookingsTrend;
-                const bl = bucketLabels(d.daily, 10);
-                const longer = <StudioEmpty title="Pick a longer range" />;
-                return (
-                  <>
-                    {active === "revenue" && (
-                      <>
-                        <StatGrid className={ANALYTICS_STATS} items={[
-                          { k: "Total revenue", v: fmtCompactINR(d.revenue.total), hot: true, d: growth === null ? (d.revenue.previousHasData === false ? "no comparable earlier period" : `prev ${fmtCompactINR(d.revenue.previous)}`) : `${growth >= 0 ? "▲" : "▼"} ${Math.abs(growth)}% vs previous ${d.period.days}d`, tone: growth === null ? undefined : growth >= 0 ? "up" : "dn" },
-                          ...streams.map((s) => ({
-                            k: s.label,
-                            v: s.key === "memberships" && s.revenue === 0 && s.count > 0 ? `${s.count} sold` : fmtCompactINR(s.revenue),
-                            d: s.unpriced
-                              ? `${s.count} sold · ${s.unpriced} without a recorded price`
-                              : `${s.count} · app ${fmtCompactINR(s.app)}${s.clinic ? ` · clinic ${fmtCompactINR(s.clinic)}` : ""}`,
-                          })),
-                        ]} />
+      )}
+    </Page>
+  );
+}
 
-                        {/*
-                          Fixed reference points, deliberately separate from the
-                          revenue row above. These do not move with the date picker —
-                          "how many guests do we have" is always all of them, and a
-                          window-relative answer to that is just wrong.
-                        */}
-                        <StatGrid className={ANALYTICS_STATS} items={[
-                          { k: "Guests on file", v: d.counts.totalPatients.toLocaleString("en-IN"), hot: true,
-                            d: `${d.counts.newThisMonth ?? 0} joined this month` },
-                          { k: "New in this period", v: (d.counts.newPatients ?? 0).toLocaleString("en-IN"),
-                            d: d.period.isAllTime ? "all time" : `${d.period.days} days` },
-                          { k: "Returning guests", v: (d.counts.returningPatients ?? 0).toLocaleString("en-IN"),
-                            d: "seen more than once", tone: "up" },
-                          { k: "Appointments to date", v: (d.counts.appointmentsAllTime ?? 0).toLocaleString("en-IN"),
-                            d: `${d.counts.completed.toLocaleString("en-IN")} completed in period` },
-                          { k: "Treatments this week", v: (d.counts.treatmentsThisWeek ?? 0).toLocaleString("en-IN"),
-                            d: "completed, last 7 days" },
-                          { k: "Still to come", v: (d.counts.upcomingAll ?? 0).toLocaleString("en-IN"),
-                            d: "confirmed and awaiting, from now", hot: (d.counts.upcomingAll ?? 0) > 0 },
-                        ]} />
+/** A labelled figure on an analytics card. (`Row` from studio-ui is the Branches table row.) */
+const KVRow = ({ k, v }: { k: string; v: string }) => (
+  <div className="flex items-center justify-between border-b border-border pb-1.5 last:border-0">
+    <span className="text-ink3">{k}</span><b className="font-semibold tabular-nums">{v}</b>
+  </div>
+);
 
-                        <div className={CHART_GRID}>
-                          <ChartPanel full title="Revenue by day" sub="All streams, as paid" hero={fmtINR(d.revenue.total)}>
-                            {d.daily.length > 1 ? <AreaChart pts={d.daily.map((x) => x.total)} labels={dailyLabels} label="Revenue" format={fmtCompactINR} /> : longer}
-                          </ChartPanel>
-                          <ChartPanel full title="Streams over time" sub="Consultations · treatments · products · packages · memberships">
-                            {bl.length > 1 ? <GBars cats={bl} series={[
-                              { n: "Consultations", v: bucketSeries(d.daily, 10, (x) => x.consultations) }, { n: "Treatments", v: bucketSeries(d.daily, 10, (x) => x.treatments) },
-                              { n: "Products", v: bucketSeries(d.daily, 10, (x) => x.products) }, { n: "Packages", v: bucketSeries(d.daily, 10, (x) => x.packages) }, { n: "Memberships", v: bucketSeries(d.daily, 10, (x) => x.memberships) },
-                            ]} /> : longer}
-                          </ChartPanel>
-                          <ChartPanel title="Revenue mix" sub="Share by stream">
-                            <HBars rows={streams.map((s) => [s.label, s.revenue, `${d.revenue.total ? Math.round((s.revenue / d.revenue.total) * 100) : 0}% · ${fmtCompactINR(s.revenue)}`] as [string, number, string])} />
-                          </ChartPanel>
-                          <ChartPanel title="Revenue by centre" sub="Visits, packages and clinic sales — app orders have no centre">
-                            {d.revenueByCentre.length ? <HBars color="var(--color-c2)" rows={d.revenueByCentre.map((r) => [r.centre, r.revenue, `${r.bookings} bookings · ${fmtCompactINR(r.revenue)}`] as [string, number, string])} /> : <StudioEmpty title="No bookings" />}
-                          </ChartPanel>
-                          <ChartPanel full title="Monthly revenue" sub="Last 12 months, all centres in scope">
-                            {monthly.length > 1 ? <AreaChart pts={monthly.map((m) => Number((m as { totalRevenue?: number; revenue?: number }).totalRevenue ?? m.revenue) || 0)} labels={monthly.map((m) => String(m.month))} label="Monthly" format={fmtCompactINR} /> : <StudioEmpty title="Not enough history yet" />}
-                          </ChartPanel>
-                          <ChartPanel title="Payment mix" sub="How the money came in">
-                            {d.paymentMix.length ? <HBars color="var(--color-c3)" rows={d.paymentMix.map((p) => [p.method, p.amount, fmtCompactINR(p.amount)] as [string, number, string])} /> : <StudioEmpty title="No payments" />}
-                          </ChartPanel>
-                          <ChartPanel title="Money owed and averages" sub="Across the period">
-                            <KeyValue k="Outstanding (bookings + packages)" v={fmtINR(d.counts.outstanding)} />
-                            <KeyValue k="Average ticket" v={fmtINR(d.counts.averageTicket)} />
-                            {financial && <KeyValue k="Cancelled (catalogue value)" v={fmtINR(financial.overview.refundsLost)} />}
-                          </ChartPanel>
-                        </div>
-                      </>
-                    )}
-
-                    {active === "appointments" && (
-                      <>
-                        <StatGrid className={ANALYTICS_STATS} items={[
-                          { k: "Bookings", v: d.counts.bookings, d: `${d.counts.upcoming} upcoming`, hot: true },
-                          { k: "Consultations", v: d.counts.consultations, d: `${Math.round((d.counts.consultations / Math.max(1, d.counts.bookings)) * 100)}% of bookings` },
-                          { k: "Treatments", v: d.counts.treatments, d: `${Math.round((d.counts.treatments / Math.max(1, d.counts.bookings)) * 100)}% of bookings` },
-                          { k: "Completed", v: d.counts.completed, d: `${pct(a.conversionRate)} conversion`, tone: "up" },
-                          { k: "No-show", v: `${d.counts.noShowRate}%`, d: `${d.counts.noShow} missed`, tone: d.counts.noShowRate > 8 ? "dn" : "up" },
-                          { k: "Cancelled", v: `${d.counts.cancellationRate}%`, d: `${d.counts.cancelled} cancelled`, tone: d.counts.cancellationRate > 10 ? "dn" : undefined },
-                        ]} />
-                        <div className={CHART_GRID}>
-                          <ChartPanel full title="Consultations vs treatments" sub="Bookings over the period">
-                            {bl.length > 1 ? <GBars cats={bl} series={[{ n: "Consultations", v: consultTrend }, { n: "Treatments", v: treatTrend }]} /> : longer}
-                          </ChartPanel>
-                          <ChartPanel full title="Bookings per day" hero={String(d.counts.bookings)}>
-                            {d.daily.length > 1 ? <AreaChart pts={d.daily.map((x) => x.bookings)} labels={dailyLabels} label="Bookings" /> : longer}
-                          </ChartPanel>
-                          <ChartPanel title="Outcome mix" sub={label}>
-                            <GBars cats={["Completed", "Upcoming", "Cancelled", "No-show"]} series={[{ n: "Bookings", v: [d.counts.completed, d.counts.upcoming, d.counts.cancelled, d.counts.noShow] }]} />
-                          </ChartPanel>
-                          <ChartPanel title="Where bookings come from" sub="App · reception · package · Zennara clinic">
-                            <HBars color="var(--color-c4)" rows={Object.entries(d.counts.bookingsBySource).map(([k, v]) => [k, v] as [string, number])} />
-                          </ChartPanel>
-                          <ChartPanel title="Busiest days" sub="Bookings by weekday">
-                            <HBars color="var(--color-c2)" rows={(appointments.peakDays ?? []).map((x) => [x.day, x.count] as [string, number])} />
-                          </ChartPanel>
-                          <ChartPanel title="Busiest hours" sub="Bookings by hour of day">
-                            <HBars color="var(--color-c3)" rows={(appointments.peakHours ?? []).filter((h) => h.count > 0).map((h) => [h.hour, h.count] as [string, number])} />
-                          </ChartPanel>
-                          <ChartPanel title="Load & flow" sub="Averages over the period">
-                            <KeyValue k="Per day" v={String(appointments.averages?.perDay ?? 0)} />
-                            <KeyValue k="Per week" v={String(appointments.averages?.perWeek ?? 0)} />
-                            <KeyValue k="Per month" v={String(appointments.averages?.perMonth ?? 0)} />
-                            <KeyValue k="Upcoming this week" v={String(appointments.upcomingThisWeek ?? 0)} />
-                            <KeyValue k="Awaiting confirmation" v={String(d.counts.awaitingConfirmation)} />
-                            <KeyValue k="Avg days between visits" v={String(appointments.avgTimeBetweenBookings ?? 0)} />
-                          </ChartPanel>
-                          {!!(appointments as { noShowByService?: { service: string; count: number }[] }).noShowByService?.length && (
-                            <ChartPanel title="No-shows by service">
-                              <HBars color="var(--color-err)" rows={((appointments as { noShowByService?: { service: string; count: number }[] }).noShowByService ?? []).slice(0, 8).map((x) => [x.service, x.count] as [string, number])} />
-                            </ChartPanel>
-                          )}
-                        </div>
-                      </>
-                    )}
-
-                    {active === "dermatologists" && (
-                      <>
-                        <StatGrid className={ANALYTICS_STATS} items={[
-                          { k: "Dermatologists", v: d.dermatologists.filter((x) => x.bookings > 0).length, d: `${d.dermatologists.length} on the roster`, hot: true },
-                          { k: "Top earner", v: d.dermatologists[0]?.revenue ? d.dermatologists[0].name.split(" ")[0] : "—", d: d.dermatologists[0] ? fmtCompactINR(d.dermatologists[0].revenue) : "" },
-                          { k: "Busiest", v: [...d.dermatologists].sort((x, y) => y.bookings - x.bookings)[0]?.name.split(" ")[0] ?? "—", d: `${[...d.dermatologists].sort((x, y) => y.bookings - x.bookings)[0]?.bookings ?? 0} bookings` },
-                          { k: "Best completion", v: `${Math.max(0, ...d.dermatologists.filter((x) => x.bookings >= 3).map((x) => x.completionRate))}%`, d: "min 3 bookings" },
-                          { k: "Avg rating", v: (() => { const r = d.dermatologists.filter((x) => x.avgRating); return r.length ? <RatingValue value={Number((r.reduce((n, x) => n + (x.avgRating ?? 0), 0) / r.length).toFixed(1))} /> : "—"; })(), d: "across rated visits" },
-                        ]} />
-                        <div className={CHART_GRID}>
-                          <ChartPanel title="Revenue by dermatologist" sub={label}>
-                            <HBars rows={d.dermatologists.filter((x) => x.revenue > 0).map((x) => [x.name, x.revenue, fmtCompactINR(x.revenue)] as [string, number, string])} />
-                          </ChartPanel>
-                          <ChartPanel title="Consultations vs treatments" sub="Per dermatologist">
-                            <GBars cats={d.dermatologists.filter((x) => x.bookings > 0).map((x) => x.name.split(" ")[0])} series={[{ n: "Consultations", v: d.dermatologists.filter((x) => x.bookings > 0).map((x) => x.consultations) }, { n: "Treatments", v: d.dermatologists.filter((x) => x.bookings > 0).map((x) => x.treatments) }]} />
-                          </ChartPanel>
-                        </div>
-                        <StudioTable stickyFirst minWidth={1100}
-                          cols={["Dermatologist", "Level", { label: "Bookings", align: "right" }, { label: "Consults", align: "right" }, { label: "Treatments", align: "right" }, { label: "Completed", align: "right", nowrap: true }, { label: "No-show", align: "right" }, { label: "Guests", align: "right" }, "Rating", { label: "Revenue", align: "right", nowrap: true }, { label: "Per booking", align: "right", nowrap: true }]}
-                          rows={d.dermatologists.map((x, i) => [
-                            <span key={x.doctorId} className="flex items-center gap-2 whitespace-nowrap">
-                              <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-[12.5px] font-bold ${i === 0 && x.revenue > 0 ? "bg-primary text-white" : "bg-sage text-ink2"}`}>{i + 1}</span>
-                              <B>{x.name}</B>{!x.onboarded && <StatusTag kind="info">Zenoti</StatusTag>}
-                            </span>,
-                            <StatusTag key={`${x.doctorId}l`} kind={!x.onboarded ? "info" : x.level === "Senior Dermatologist" ? "primary" : "mute"}>{x.level}</StatusTag>,
-                            x.bookings, x.consultations, x.treatments, `${x.completed} (${x.completionRate}%)`, x.noShow, x.patients, x.avgRating ? <RatingValue value={x.avgRating} /> : "—", <B key={`${x.doctorId}r`}>{fmtINR(x.revenue)}</B>, fmtINR(x.bookings ? Math.round(x.revenue / x.bookings) : 0),
-                          ])} />
-                      </>
-                    )}
-
-                    {active === "services" && (
-                      <>
-                        <StatGrid className={ANALYTICS_STATS} items={[
-                          { k: "Services booked", v: d.topServices.length, d: `${services?.summary?.totalServices ?? "—"} in catalogue`, hot: true },
-                          { k: "Top service", v: d.topServices[0]?.name ?? "—", d: d.topServices[0] ? `${d.topServices[0].bookings} bookings · ${fmtCompactINR(d.topServices[0].revenue)}` : "" },
-                          { k: "Revenue / service", v: fmtINR(services?.summary?.avgRevenuePerService), d: "average" },
-                          { k: "Categories", v: services?.categoryPerformance?.length ?? 0, d: "with bookings" },
-                        ]} />
-                        <div className={CHART_GRID}>
-                          <ChartPanel title="Top services by revenue" sub={label}>
-                            {d.topServices.length ? <HBars rows={d.topServices.slice(0, 10).map((x) => [x.name, x.revenue, `${x.bookings} · ${fmtCompactINR(x.revenue)}`] as [string, number, string])} /> : <StudioEmpty title="No services booked" />}
-                          </ChartPanel>
-                          <ChartPanel title="Top services by volume">
-                            {d.topServices.length ? <HBars color="var(--color-c2)" rows={[...d.topServices].sort((x, y) => y.bookings - x.bookings).slice(0, 10).map((x) => [x.name, x.bookings, x.kind] as [string, number, string])} /> : <StudioEmpty title="No services booked" />}
-                          </ChartPanel>
-                          <ChartPanel title="Category performance" sub={label}>
-                            {services?.categoryPerformance?.length ? <HBars color="var(--color-c3)" rows={services.categoryPerformance.slice(0, 10).map((c) => [c.category, c.revenue, fmtCompactINR(c.revenue)] as [string, number, string])} /> : <StudioEmpty title="No category data" />}
-                          </ChartPanel>
-                          {!!services?.leastPerformingServices?.length && (
-                            <ChartPanel title="Needs attention" sub="Least booked services in the catalogue">
-                              <HBars color="var(--color-err)" rows={(services.leastPerformingServices as { name: string; bookings?: number }[]).slice(0, 8).map((x) => [x.name, x.bookings ?? 0] as [string, number])} />
-                            </ChartPanel>
-                          )}
-                          {!!services?.packageUtilization?.length && (
-                            <ChartPanel title="Package utilisation" sub="Sessions used of sessions sold">
-                              <HBars color="var(--color-c4)" rows={services.packageUtilization.slice(0, 8).map((p2) => [p2.name, p2.used, `${p2.used}/${p2.total}`] as [string, number, string])} />
-                            </ChartPanel>
-                          )}
-                        </div>
-                      </>
-                    )}
-
-                    {active === "guests" && (
-                      <>
-                        <StatGrid className={ANALYTICS_STATS} items={[
-                          { k: "Guests on file", v: d.counts.totalPatients.toLocaleString("en-IN"), hot: true, d: `${d.counts.newPatients} new in period` },
-                          { k: "New guests", v: d.counts.newPatients, d: patients ? `${pct(patients.overview.newPatientRatio)} of bookers` : "" },
-                          { k: "Retention", v: patients ? pct(patients.overview.retentionRate) : "—", d: patients ? `${patients.overview.returningPatients} returning` : "" },
-                          { k: "Zen members", v: d.counts.activeZen, d: `${d.counts.zenExpiring} expiring in 30d`, tone: d.counts.zenExpiring ? "dn" : undefined },
-                          { k: "Birthdays today", v: patients?.birthdaysToday?.length ?? 0, d: "send a wish from the guest page" },
-                          { k: "Inactive", v: patients?.inactivePatients?.count ?? 0, d: `no visit in ${patients?.inactivePatients?.threshold ?? 90}d` },
-                        ]} />
-                        <div className={CHART_GRID}>
-                          <ChartPanel full title="New guests per month" hero={String(d.counts.newPatients)}>
-                            {acquisition.length > 1 ? <AreaChart pts={acquisition.map((m) => Number(m.count) || 0)} labels={acquisition.map((m) => String(m.month))} label="New guests" /> : <StudioEmpty title="Not enough history yet" />}
-                          </ChartPanel>
-                          <ChartPanel title="By home centre" sub="Registered guests">
-                            {sources.length ? <HBars color="var(--color-c2)" rows={sources.map((x) => [x.source || "Unknown", x.count, `${x.count} · ${pct(x.percentage)}`] as [string, number, string])} /> : <StudioEmpty title="No data" />}
-                          </ChartPanel>
-                          {demographics && (
-                            <>
-                              <ChartPanel title="Age groups" sub="Registered guests"><HBars rows={(demographics.ageGroups ?? []).map((g) => [(g as { range?: string; group?: string }).range ?? (g as { group?: string }).group ?? "—", g.count] as [string, number])} /></ChartPanel>
-                              <ChartPanel title="Gender" sub="Registered guests"><HBars color="var(--color-c3)" rows={Object.entries(demographics.gender ?? {}).filter(([k]) => k !== "total").map(([k, v]) => [k, Number(v)] as [string, number])} /></ChartPanel>
-                            </>
-                          )}
-                          <ChartPanel full title="Top guests by spend" sub={label}>
-                            {top.length === 0 ? <StudioEmpty title="No spend recorded" /> : (
-                              <StudioTable minWidth={420} cols={["Guest", { label: "Spend", align: "right", nowrap: true }, { label: "Visits", align: "right" }]}
-                                rows={top.map((t) => [<B key={t._id}>{t.fullName}</B>, fmtINR(t.totalSpent), t.visits ?? "—"])} />
-                            )}
-                          </ChartPanel>
-                        </div>
-                      </>
-                    )}
-
-                    {active === "products" && (
-                      <>
-                        <StatGrid className={ANALYTICS_STATS} items={[
-                          { k: "Product revenue", v: fmtCompactINR(streams.find((s) => s.key === "products")?.revenue ?? 0), hot: true, d: `app ${fmtCompactINR(streams.find((s) => s.key === "products")?.app ?? 0)} · clinic ${fmtCompactINR(streams.find((s) => s.key === "products")?.clinic ?? 0)}` },
-                          { k: "Orders", v: d.counts.orders, d: `${d.counts.paidOrders} paid · ${d.counts.openOrders} open` },
-                          { k: "Delivered", v: d.counts.ordersByStatus["Delivered"] ?? 0, d: `${d.counts.ordersByStatus["Cancelled"] ?? 0} cancelled · ${d.counts.ordersByStatus["Returned"] ?? 0} returned` },
-                          { k: "All-time orders", v: orders?.totalOrders ?? "—", d: orders ? fmtCompactINR(orders.totalRevenue) : "" },
-                          { k: "Products", v: products?.total ?? "—", d: products ? `${products.active} live · ${products.lowStock} low stock` : "" },
-                          { k: "Stock value", v: products ? fmtCompactINR(products.totalValue) : "—", d: products ? `${products.totalStock} units` : "" },
-                        ]} />
-                        <div className={CHART_GRID}>
-                          <ChartPanel full title="Product revenue by day" hero={fmtINR(streams.find((s) => s.key === "products")?.app ?? 0)}>
-                            {d.daily.length > 1 ? <AreaChart pts={d.daily.map((x) => x.products)} labels={dailyLabels} label="Products" format={fmtCompactINR} /> : longer}
-                          </ChartPanel>
-                          <ChartPanel title="Orders by status" sub={label}>
-                            {Object.keys(d.counts.ordersByStatus).length ? <HBars color="var(--color-c2)" rows={Object.entries(d.counts.ordersByStatus).map(([k, v]) => [k, v] as [string, number])} /> : <StudioEmpty title="No orders in this period" />}
-                          </ChartPanel>
-                          {products?.byFormulation && Object.keys(products.byFormulation).length > 0 && (
-                            <ChartPanel title="Stock value by formulation">
-                              <HBars color="var(--color-c3)" rows={Object.entries(products.byFormulation).map(([k, v]) => [k, v.value, `${v.count} products · ${v.stock} units`] as [string, number, string])} />
-                            </ChartPanel>
-                          )}
-                          {orders && (
-                            <ChartPanel title="Order pipeline" sub="All time">
-                              <KeyValue k="New" v={String(orders.newOrders)} /><KeyValue k="Confirmed" v={String(orders.confirmedOrders)} /><KeyValue k="Processing" v={String(orders.processingOrders)} /><KeyValue k="Shipped" v={String(orders.shippedOrders)} /><KeyValue k="Delivered" v={String(orders.deliveredOrders)} /><KeyValue k="Cancelled" v={String(orders.cancelledOrders)} />
-                            </ChartPanel>
-                          )}
-                        </div>
-                      </>
-                    )}
-
-                    {active === "packages" && (
-                      <>
-                        <StatGrid className={ANALYTICS_STATS} items={[
-                          { k: "Package revenue", v: fmtCompactINR(streams.find((s) => s.key === "packages")?.revenue ?? 0), hot: true, d: `app ${fmtCompactINR(streams.find((s) => s.key === "packages")?.app ?? 0)} · clinic ${fmtCompactINR(streams.find((s) => s.key === "packages")?.clinic ?? 0)}` },
-                          { k: "Packages assigned", v: d.counts.packagesAssigned, d: `${d.counts.packagesPaid} paid · ${d.counts.packagesUnpaid} due` },
-                          { k: "Membership revenue", v: fmtCompactINR(streams.find((s) => s.key === "memberships")?.revenue ?? 0), d: d.counts.membershipsUnpriced ? `${d.counts.membershipsSold} sold · ${d.counts.membershipsUnpriced} unpriced` : `${d.counts.membershipsSold} sold` },
-                          { k: "Active Zen members", v: d.counts.activeZen, d: `${d.counts.zenExpiring} expiring in 30d`, tone: d.counts.zenExpiring ? "dn" : undefined },
-                          { k: "Active assignments", v: pkgStats?.statusCounts?.find((s) => s._id === "Active")?.count ?? "—", d: `${pkgStats?.statusCounts?.find((s) => s._id === "Completed")?.count ?? 0} completed` },
-                        ]} />
-                        {!!d.counts.membershipsUnpriced && (
-                          <Note kind="warn">
-                            <B>{d.counts.membershipsUnpriced}</B> of {d.counts.membershipsSold} memberships in this period have no amount on record — Zennara clinic (Zenoti) memberships carry no price in the CRM feed, and desk grants made before amounts were captured have none either.
-                            They are counted here but contribute <B>₹0</B> to revenue rather than an invented figure. Open the guest and use <B>Record payment details</B> on their membership card to add what was charged.
-                          </Note>
-                        )}
-                        <div className={CHART_GRID}>
-                          <ChartPanel full title="Packages & memberships by day">
-                            {bl.length > 1 ? <GBars cats={bl} series={[{ n: "Packages", v: bucketSeries(d.daily, 10, (x) => x.packages) }, { n: "Memberships", v: bucketSeries(d.daily, 10, (x) => x.memberships) }]} /> : longer}
-                          </ChartPanel>
-                          {pkgStats?.statusCounts && (
-                            <ChartPanel title="Assignments by status" sub="All time">
-                              <HBars color="var(--color-c2)" rows={pkgStats.statusCounts.map((s) => [s._id, s.count] as [string, number])} />
-                            </ChartPanel>
-                          )}
-                          {pkgStats?.paymentStats && (
-                            <ChartPanel title="Package payments" sub="Received vs due (all time)">
-                              <HBars color="var(--color-c3)" rows={pkgStats.paymentStats.map((s) => [s._id ? "Received" : "Due", s.totalAmount, `${s.count} · ${fmtCompactINR(s.totalAmount)}`] as [string, number, string])} />
-                            </ChartPanel>
-                          )}
-                          {!!services?.packageUtilization?.length && (
-                            <ChartPanel title="Package utilisation" sub="Sessions used of sessions sold">
-                              <HBars color="var(--color-c4)" rows={services.packageUtilization.slice(0, 10).map((p2) => [p2.name, p2.used, `${p2.used}/${p2.total} · ${pct(p2.utilizationRate)}`] as [string, number, string])} />
-                            </ChartPanel>
-                          )}
-                          {patients?.membershipStatus && (
-                            <ChartPanel title="Membership base" sub="Every Zen membership on record">
-                              <KeyValue k="Active" v={String(patients.membershipStatus.active)} /><KeyValue k="Expired" v={String(patients.membershipStatus.expired)} /><KeyValue k="Pending" v={String(patients.membershipStatus.pending)} />
-                            </ChartPanel>
-                          )}
-                        </div>
-                      </>
-                    )}
-
-                    {active === "stock" && (
-                      inventory ? (
-                        <>
-                          <StatGrid className={ANALYTICS_STATS} items={[
-                            { k: "Items tracked", v: inventory.summary?.totalItems ?? 0, hot: true },
-                            { k: "Stock value", v: fmtCompactINR(inventory.summary?.totalValue), d: `cost ${fmtCompactINR(inventory.summary?.totalCost)}` },
-                            { k: "Below re-order", v: inventory.summary?.lowStockCount ?? 0, tone: (inventory.summary?.lowStockCount ?? 0) ? "dn" : undefined },
-                            { k: "Out of stock", v: inventory.summary?.outOfStockCount ?? 0, tone: (inventory.summary?.outOfStockCount ?? 0) ? "dn" : undefined },
-                            { k: "Expiring in 30d", v: inventory.summary?.expiringIn30Days ?? 0, d: `${inventory.summary?.expired ?? 0} expired` },
-                          ]} />
-                          <div className={CHART_GRID}>
-                            <ChartPanel title="Low-stock alerts" sub="Below the re-order level">
-                              {(inventory.lowStockAlerts ?? []).length === 0 ? <StudioEmpty title="Nothing below re-order level" /> : (
-                                <StudioTable minWidth={360} cols={["Item", { label: "On hand", align: "right" }, { label: "Re-order", align: "right" }]}
-                                  rows={(inventory.lowStockAlerts ?? []).slice(0, 15).map((i) => [<B key={i._id}>{i.inventoryName}</B>, i.qohAllBatches ?? 0, i.reOrderLevel ?? 0])} />)}
-                            </ChartPanel>
-                            {!!(inventory as { fastMovingProducts?: { name?: string; inventoryName?: string; consumed?: number; quantity?: number }[] }).fastMovingProducts?.length && (
-                              <ChartPanel title="Fast-moving stock">
-                                <HBars color="var(--color-c2)" rows={((inventory as { fastMovingProducts?: { name?: string; inventoryName?: string; consumed?: number; quantity?: number }[] }).fastMovingProducts ?? []).slice(0, 10).map((x) => [x.name ?? x.inventoryName ?? "—", x.consumed ?? x.quantity ?? 0] as [string, number])} />
-                              </ChartPanel>
-                            )}
-                          </div>
-                        </>
-                      ) : <StudioEmpty title="Stock analytics unavailable" hint="The inventory analytics endpoint did not respond." />
-                    )}
-                  </>
-                );
-              }}
-            </Async>
-          )}
-        </div>
-      </Section>
-    </StudioPage>
+/** Zenoti's "Employee sales" report: who sold what, from closed bills (sale-by per line). */
+function StaffSalesPanel() {
+  const { branchId } = useStore();
+  const [from, setFrom] = useState(isoDay(new Date(Date.now() - 29 * 86400000)));
+  const [to, setTo] = useState(isoDay());
+  const q = useApi(() => api.analytics.salesByStaff({ from, to, branchId: branchId || undefined }), [from, to, branchId]);
+  const rows = (q.data?.data ?? []) as import("../lib/types").StaffSalesRow[];
+  const totals = q.data?.totals;
+  return (
+    <div className="mt-3">
+      <div className="mb-3 flex flex-wrap items-end gap-3">
+        <DateRange from={from} to={to} onChange={(a, b) => { setFrom(a); setTo(b); }} />
+        <Btn kind="ghost" disabled={!rows.length} onClick={() => exportCsv(`staff-sales-${from}-${to}`, ["Staff", "Services", "Products", "Packages", "Memberships", "Other", "Total", "Items", "Bills"], rows.map((r) => [r.staff, r.services, r.products, r.packages, r.memberships, r.other, r.total, r.items, r.bills]))}>Export CSV</Btn>
+        {totals && <span className="text-[12px] text-ink3">{totals.staff} staff · {totals.invoices} bills · <B>{fmtINR(totals.total)}</B></span>}
+      </div>
+      <Async q={q} label="Adding up sales…" rows={4}>
+        {() => rows.length === 0 ? <Empty title="No sales in this range" hint="Sales are attributed by the Sale-by on each bill line; visits paid without a bill go to their dermatologist." /> : (
+          <DataTable cols={["Staff", "Services", "Products", "Packages", "Memberships", "Other", "Total", "Items", "Bills"]}
+            rows={rows.map((r) => [<B key="s">{r.staff}</B>, fmtINR(r.services), fmtINR(r.products), fmtINR(r.packages), fmtINR(r.memberships), fmtINR(r.other), <B key="t">{fmtINR(r.total)}</B>, String(r.items), String(r.bills)])} />
+        )}
+      </Async>
+    </div>
   );
 }
 
@@ -1760,31 +1924,3 @@ export function AuditLog() {
   );
 }
 
-
-/* ------------------------------ staff sales ------------------------------ */
-/** Zenoti's "Employee sales" report: who sold what, from closed bills (sale-by per line). */
-function StaffSalesPanel() {
-  const { branchId } = useStore();
-  const [from, setFrom] = useState(isoDay(new Date(Date.now() - 29 * 86400000)));
-  const [to, setTo] = useState(isoDay());
-  const q = useApi(() => api.analytics.salesByStaff({ from, to, branchId: branchId || undefined }), [from, to, branchId]);
-  const rows = (q.data?.data ?? []) as import("../lib/types").StaffSalesRow[];
-  const totals = q.data?.totals;
-  return (
-    <>
-      <FilterBar>
-        <Field label="From" className="w-[170px]"><DateInput value={from} onChange={setFrom} max={to || undefined} /></Field>
-        <Field label="To" className="w-[170px]"><DateInput value={to} onChange={setTo} min={from || undefined} /></Field>
-        <StudioBtn kind="ghost" disabled={!rows.length} onClick={() => exportCsv(`staff-sales-${from}-${to}`, ["Staff", "Services", "Products", "Packages", "Memberships", "Other", "Total", "Items", "Bills"], rows.map((r) => [r.staff, r.services, r.products, r.packages, r.memberships, r.other, r.total, r.items, r.bills]))}>Export CSV</StudioBtn>
-        {totals && <span className="self-center text-[14px] leading-5 text-ink2">{totals.staff} staff · {totals.invoices} bills · <B>{fmtINR(totals.total)}</B></span>}
-      </FilterBar>
-      <Async q={q} label="Adding up sales…" rows={4}>
-        {() => rows.length === 0 ? <StudioEmpty title="No sales in this range" hint="Sales are attributed by the Sale-by on each bill line; visits paid without a bill go to their dermatologist." /> : (
-          <StudioTable stickyFirst minWidth={980}
-            cols={["Staff", { label: "Services", align: "right", nowrap: true }, { label: "Products", align: "right", nowrap: true }, { label: "Packages", align: "right", nowrap: true }, { label: "Memberships", align: "right", nowrap: true }, { label: "Other", align: "right", nowrap: true }, { label: "Total", align: "right", nowrap: true }, { label: "Items", align: "right" }, { label: "Bills", align: "right" }]}
-            rows={rows.map((r) => [<B key="s">{r.staff}</B>, fmtINR(r.services), fmtINR(r.products), fmtINR(r.packages), fmtINR(r.memberships), fmtINR(r.other), <B key="t">{fmtINR(r.total)}</B>, String(r.items), String(r.bills)])} />
-        )}
-      </Async>
-    </>
-  );
-}
