@@ -1,3 +1,4 @@
+import { CodeInput } from "./CodeInput";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -615,11 +616,9 @@ function LoginPage({ onSignedIn }: { onSignedIn: (token: string, admin: Admin, e
               </>
             ) : (
               <>
-                <input id="login-otp" autoFocus value={otp} inputMode="numeric" maxLength={6} autoComplete="one-time-code" aria-label="6-digit code"
-                  onChange={(e) => { setOtp(e.target.value.replace(/\D/g, "")); setError(null); }}
-                  onKeyDown={(e) => e.key === "Enter" && !busy && verify()}
-                  placeholder="······"
-                  className={`${field} text-center font-mono text-[24px] font-bold tracking-[0.45em]`} />
+                <CodeInput length={6} value={otp} autoFocus disabled={busy}
+                  onChange={(v) => { setOtp(v); setError(null); }}
+                  onEnter={() => !busy && verify()} />
                 <button onClick={verify} disabled={busy || otp.length !== 6} className={primary}>
                   {busy && <Loader2 className="h-4 w-4 animate-spin" />} Sign in
                 </button>
