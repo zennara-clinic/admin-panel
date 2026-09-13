@@ -1,19 +1,31 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
-import { Area, AreaChart, Async, B, Btn, Card, ChartCard, DataTable, DateRange, DeleteModal, Drawer, Empty, GBars, HBars, Hint, In, Menu, MenuButton, Modal, Note, Page, RatingValue, SecH, Sel, StaleBanner, Stars, Stats, Switch, Tabs, Tag, exportCsv } from "../ui";
+import { useEffect, useMemo, useState } from "react";
+import { Star } from "lucide-react";
+import { AreaChart, Async, B, DeleteModal, GBars, HBars, Modal, RatingValue, Stars, Toggle, exportCsv } from "../ui";
+import {
+  CellStack, ChartPanel, ChoicePills, DateInput, DetailList, Field, FilterBar, ImageInput, Input, KeyValue, Note, NumberInput, RemoveButton, Row,
+  SearchInput, Section, Segmented, Select, StatGrid, StatusTag, StudioBtn, StudioEmpty, StudioHint, StudioPage, StudioSheet, StudioStale,
+  StudioTable, SubHeading, Textarea, ToggleRow, useStudioSection, type StudioSection,
+} from "../studio-ui";
 import { useStore, ROLE_LABEL } from "../store";
-import { DEFAULT_METRIC_RANGE, customWindow, isMetricRange, metricWindow, type MetricRange } from "../lib/ranges";
-import { RangeSwitch } from "../rangeSwitch";
+import { DEFAULT_METRIC_RANGE, METRIC_RANGES, customWindow, isMetricRange, metricWindow, type MetricRange } from "../lib/ranges";
 import api from "../lib/api";
 import { useApi, useDebounced } from "../lib/useApi";
 import { useQueryNumber, useQueryPage, useQueryString } from "../lib/useListState";
 import {
-  addClinicDays, clinicWeekday, fmtCompactINR, fmtDate, fmtDateFull, fmtDayKey, fmtINR, fmtWhen,
-  initials, isoDay, mapToRows, nameOf, pct,
+  clinicWeekday, fmtCompactINR, fmtDate, fmtDateFull, fmtDayKey, fmtINR, fmtWhen,
+  initials, isoDay, nameOf, pct,
 } from "../lib/format";
 import type { Admin, AdminRole, AuditEntry, Branch, ConsultationReview, PermissionGroup, PermissionKey, ProductReview, Role, ServiceReview, StaffAssignment } from "../lib/types";
 import { SESSION_SLOT_MINUTES } from "../lib/scheduling";
 import { RolesManager, SignInSecurityTab, StaffAccessFields, RoleChip, useCatalog, CentreRolesEditor, SignInControls } from "./access";
+
+/*
+ * The Organisation pages — Branches, Reviews, Analytics, Staff & roles and
+ * the Audit log — share App Studio's layout (src/studio-ui.tsx): a 24px title
+ * and intro on the left, one section on screen at a time, everything at 14px
+ * or above. The data hooks, API calls, permissions and state are unchanged
+ * from the dense version; only the presentation moved.
+ */
 
 /* ================= BRANCHES ================= */
 const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
@@ -31,6 +43,8 @@ function branchToday(b: Branch, iso = isoDay()) {
   return { open: true, label: `Open ${h.openTime ?? h.open ?? "10:00"}–${h.closeTime ?? h.close ?? "19:00"}`, reason: "" };
 }
 
+const CENTRE_TYPE_LABEL: Record<string, string> = { clinic: "Clinic", pharmacy: "Pharmacy", training: "Training centre" };
+
 export function Branches() {
   const { toast, audit, reloadBranches, can } = useStore();
   const [sel, setSel] = useState<Branch | null>(null);
@@ -42,6 +56,7 @@ export function Branches() {
   const [closeDate, setCloseDate] = useState(isoDay());
   const [closeTo, setCloseTo] = useState("");
   const [closeReason, setCloseReason] = useState("");
+  const [closureCentre, setClosureCentre] = useState("");
 
   // The one place that shows every Zenoti centre, stock locations included.
   const q = useApi(() => api.branches.list({ activeOnly: "false" }), []);
@@ -64,132 +79,243 @@ export function Branches() {
     } catch (e) { toast((e as Error).message); }
   };
 
-  return (
-    <Page title="Branches" sub={`${list.length} centre${list.length === 1 ? "" : "s"} · dermatologists, bookings, chat and the app's centre picker all follow this list`}
-      actions={<>
-        <Btn kind="ghost" disabled={!list.length} onClick={() => exportCsv("zennara-branches",
-          ["Name", "Address", "Phone", "Email", "Today", "Active"],
-          list.map((b) => [b.name, addressLine(b), (b.contact?.phone ?? []).join(" / "), b.contact?.email ?? "", branchToday(b).label, b.isActive ? "yes" : "no"]))}>Export CSV</Btn>
-        <Btn onClick={() => setAddOpen(true)}>+ Branch</Btn>
-      </>}>
-      <Hint id="branches-live">Each centre's weekly hours and closures decide when dermatologists can be booked there — slots outside the centre's hours never appear in the app. Use “Close today” for a holiday or an unexpected shutdown.</Hint>
-      <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
-      <Async q={q} label="Loading centres…" rows={4}>
-        {() => list.length === 0 ? (
-          <Empty title="No centres yet"
-            hint="A branch is the unit everything routes by — dermatologists, bookings, chat and stock. Add the first one."
-            action={<Btn onClick={() => setAddOpen(true)}>+ Branch</Btn>} />
-        ) : (
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {list.map((b) => {
-              const today = branchToday(b);
-              const upcoming = (b.closures ?? []).filter((c) => (c.to ?? c.date) >= isoDay()).sort((x, y) => x.date.localeCompare(y.date));
-              return (
-                <Card key={b._id} className={`overflow-hidden ${b.isActive ? "" : "opacity-60"}`}>
-                  {b.images?.[0] ? <img src={b.images[0]} alt="" className="h-28 w-full object-cover" /> : <div className="h-3 bg-gradient-to-r from-primary to-gold" />}
-                  <div className="p-4">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <b className="block text-[15px] font-extrabold leading-tight">{b.name}</b>
-                        <div className="mt-0.5 text-[11.5px] text-ink3">{addressLine(b)}</div>
-                      </div>
-                      <Tag kind={!b.isActive ? "mute" : today.open ? "ok" : "err"}>{today.label}</Tag>
-                    </div>
-                    {!today.open && today.reason && <div className="mt-1 text-[11.5px] text-err">{today.reason}</div>}
-                    <div className="mt-3 grid grid-cols-7 gap-1">
-                      {DAYS.map((d) => {
-                        const h = (b.operatingHours ?? {})[d] ?? {};
-                        const off = h.isOpen === false;
-                        return (
-                          <div key={d} className={`rounded-md px-1 py-1 text-center ${off ? "bg-ivory text-ink3" : "bg-sage text-primary"}`} title={off ? "Closed" : `${h.openTime ?? h.open ?? "10:00"}–${h.closeTime ?? h.close ?? "19:00"}`}>
-                            <div className="text-[9.5px] font-bold uppercase">{DAY_LABEL[d]}</div>
-                            <div className="text-[9px]">{off ? "—" : (h.openTime ?? h.open ?? "10:00").slice(0, 5)}</div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11.5px] text-ink3">
-                      <span>{doctorCount(b)} dermatologist{doctorCount(b) === 1 ? "" : "s"}</span>
-                      <span>{(b.contact?.phone ?? []).join(" / ") || "no phone"}</span>
-                      {upcoming.length > 0 && <span className="text-warn">{upcoming.length} closure{upcoming.length === 1 ? "" : "s"} ahead</span>}
-                    </div>
-                    <div className="mt-3 flex flex-wrap gap-1.5 border-t border-border pt-2.5">
-                      <Btn kind="ghost" className="!px-2.5 !py-1 !text-[11.5px]" onClick={() => setView(b)}>View details</Btn>
-                      <Btn kind="ghost" className="!px-2.5 !py-1 !text-[11.5px]" onClick={() => setSel(b)}>Edit</Btn>
-                      {b.isActive && (today.open || today.reason === "Weekly off"
-                        ? <Btn kind="ghost" className="!px-2.5 !py-1 !text-[11.5px] !text-err" onClick={() => { setCloseFor(b); setCloseDate(isoDay()); setCloseTo(""); setCloseReason(""); }}>Close today</Btn>
-                        : <Btn kind="ghost" className="!px-2.5 !py-1 !text-[11.5px] !text-ok" onClick={() => saveClosures(b, (b.closures ?? []).filter((c) => !(c.date <= isoDay() && (c.to ? c.to >= isoDay() : c.date === isoDay()))), "Reopened today")}>Reopen today</Btn>)}
-                      <Menu align="right" button={<button className="ml-auto px-1 text-ink3">⋯</button>} items={[
-                        { label: b.isActive ? "Deactivate centre" : "Activate centre", onClick: async () => { try { await api.branches.toggle(b._id); audit("BRANCH_UPDATED", `${b.name} ${b.isActive ? "deactivated" : "activated"}`, { branchId: b._id }); toast(`${b.name} ${b.isActive ? "deactivated" : "activated"}`); q.reload(); reloadBranches(); } catch (e) { toast((e as Error).message); } } },
-                        { label: <span className="text-err">Delete</span>, onClick: () => setDel(b) },
-                      ]} />
-                    </div>
-                  </div>
-                </Card>
-              );
-            })}
-          </div>
-        )}
-      </Async>
+  const openClosure = (b: Branch) => { setCloseFor(b); setCloseDate(isoDay()); setCloseTo(""); setCloseReason(""); };
+  const isClosedNow = (c: { date: string; to?: string | null }) => c.date <= isoDay() && (c.to ? c.to >= isoDay() : c.date === isoDay());
+  const sameClosure = (x: NonNullable<Branch["closures"]>[number], c: NonNullable<Branch["closures"]>[number]) =>
+    x.date === c.date && (x.to ?? null) === (c.to ?? null) && (x.reason ?? "") === (c.reason ?? "");
 
-      {/* ---- detail modal ---- */}
-      <Modal open={!!view} onClose={() => setView(null)} title={view?.name ?? ""} wide>
+  // Every closure still to come, across all centres — the Closures section.
+  const upcomingAll = useMemo(() =>
+    list.flatMap((b) => (b.closures ?? []).filter((c) => (c.to ?? c.date) >= isoDay()).map((c) => ({ b, c })))
+      .sort((x, y) => x.c.date.localeCompare(y.c.date)), [list]);
+
+  const sections: StudioSection[] = [
+    { id: "centres", title: "All centres", count: list.length || undefined },
+    { id: "closures", title: "Closures & holidays", count: upcomingAll.length || undefined },
+  ];
+  const [active, setActive] = useStudioSection("branches", sections);
+  const closureFor = list.find((b) => b._id === closureCentre) ?? list.find((b) => b.isActive) ?? list[0];
+
+  const exportBranches = () => exportCsv("zennara-branches",
+    ["Name", "Address", "Phone", "Email", "Today", "Active"],
+    list.map((b) => [b.name, addressLine(b), (b.contact?.phone ?? []).join(" / "), b.contact?.email ?? "", branchToday(b).label, b.isActive ? "yes" : "no"]));
+
+  return (
+    <StudioPage title="Branches" sections={sections} active={active} onSection={setActive}
+      intro="Every centre, stock locations included. Dermatologists, bookings, chat and the app's centre picker all follow this list."
+      actions={<>
+        <StudioBtn onClick={() => setAddOpen(true)}>Add centre</StudioBtn>
+        <StudioBtn kind="ghost" disabled={!list.length} onClick={exportBranches}>Export CSV</StudioBtn>
+      </>}>
+      <StudioStale error={q.data ? q.error : null} onRetry={q.reload} />
+
+      {active === "centres" && (
+        <Section title="All centres"
+          blurb="Each centre's weekly hours and closures decide when dermatologists can be booked there — slots outside the centre's hours never appear in the app. Use “Close today” for a holiday or an unexpected shutdown.">
+          <div className="col-span-full">
+            <Async q={q} label="Loading centres…" rows={4}>
+              {() => list.length === 0 ? (
+                <StudioEmpty title="No centres yet"
+                  hint="A branch is the unit everything routes by — dermatologists, bookings, chat and stock. Add the first one."
+                  action={<StudioBtn onClick={() => setAddOpen(true)}>Add centre</StudioBtn>} />
+              ) : (
+                <div className="grid gap-4">
+                  {list.map((b) => {
+                    const today = branchToday(b);
+                    const upcoming = (b.closures ?? []).filter((c) => (c.to ?? c.date) >= isoDay()).sort((x, y) => x.date.localeCompare(y.date));
+                    const phones = (b.contact?.phone ?? []).join(" / ");
+                    const n = doctorCount(b);
+                    return (
+                      <div key={b._id} className={`rounded-[12px] border border-border bg-surface p-4 ${b.isActive ? "" : "opacity-60"}`}>
+                        <div className="flex flex-wrap items-start gap-4">
+                          {b.images?.[0]
+                            ? <img src={b.images[0]} alt="" className="h-[72px] w-[72px] shrink-0 rounded-[10px] border border-border object-cover" />
+                            : <div className="grid h-[72px] w-[72px] shrink-0 place-items-center rounded-[10px] bg-sage text-[20px] font-semibold text-primary">{initials(b.name)}</div>}
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-[16px] font-semibold leading-6 text-ink">{b.name}</span>
+                              <StatusTag kind={!b.isActive ? "mute" : today.open ? "ok" : "err"}>{today.label}</StatusTag>
+                              {b.centreType && b.centreType !== "clinic" && <StatusTag kind="mute">{CENTRE_TYPE_LABEL[b.centreType] ?? b.centreType}</StatusTag>}
+                            </div>
+                            <div className="mt-0.5 text-[14px] leading-5 text-ink2">{addressLine(b)}</div>
+                            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[14px] leading-5 text-ink3">
+                              <span>{phones || "No phone"}</span>
+                              <span>{n} dermatologist{n === 1 ? "" : "s"}</span>
+                              {upcoming.length > 0 && <span className="text-warn">{upcoming.length} closure{upcoming.length === 1 ? "" : "s"} ahead</span>}
+                            </div>
+                            {!today.open && today.reason && <div className="mt-1 text-[14px] leading-5 text-err">{today.reason}</div>}
+                          </div>
+                        </div>
+                        <div className="mt-4 grid grid-cols-7 gap-1.5">
+                          {DAYS.map((d) => {
+                            const h = (b.operatingHours ?? {})[d] ?? {};
+                            const off = h.isOpen === false;
+                            return (
+                              <div key={d} className={`rounded-[8px] px-1 py-1.5 text-center ${off ? "bg-ivory text-ink3" : "bg-sage text-primary"}`}
+                                title={off ? "Closed" : `${h.openTime ?? h.open ?? "10:00"}–${h.closeTime ?? h.close ?? "19:00"}`}>
+                                <div className="text-[12.5px] font-semibold leading-5">{DAY_LABEL[d]}</div>
+                                <div className="text-[14px] leading-5 tabular-nums">{off ? "—" : (h.openTime ?? h.open ?? "10:00").slice(0, 5)}</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="mt-4 flex flex-wrap gap-2 border-t border-border pt-3">
+                          <StudioBtn kind="ghost" small onClick={() => setView(b)}>View details</StudioBtn>
+                          <StudioBtn kind="ghost" small onClick={() => setSel(b)}>Edit</StudioBtn>
+                          {b.isActive && (today.open || today.reason === "Weekly off"
+                            ? <StudioBtn kind="ghost" small className="!text-err" onClick={() => openClosure(b)}>Close today</StudioBtn>
+                            : <StudioBtn kind="ghost" small className="!text-ok" onClick={() => saveClosures(b, (b.closures ?? []).filter((c) => !isClosedNow(c)), "Reopened today")}>Reopen today</StudioBtn>)}
+                          <StudioBtn kind="ghost" small onClick={async () => {
+                            try {
+                              await api.branches.toggle(b._id);
+                              audit("BRANCH_UPDATED", `${b.name} ${b.isActive ? "deactivated" : "activated"}`, { branchId: b._id });
+                              toast(`${b.name} ${b.isActive ? "deactivated" : "activated"}`); q.reload(); reloadBranches();
+                            } catch (e) { toast((e as Error).message); }
+                          }}>{b.isActive ? "Deactivate centre" : "Activate centre"}</StudioBtn>
+                          <StudioBtn kind="link" small className="ml-auto !text-err" onClick={() => setDel(b)}>Delete</StudioBtn>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </Async>
+          </div>
+
+          <Note>
+            Deleting a branch <B>deactivates</B> it rather than erasing it, because bookings, chats and stock still point
+            at it. An inactive centre disappears from the app's picker and from the branch switcher here.
+            {!can("branches.manage") && " Permanent deletion is a super-admin action."}
+          </Note>
+          {can("branches.manage") && (
+            <ToggleRow full label="Super admin: erase permanently on the next delete"
+              description="Cannot be undone; history keeps the name only." on={permanent} onChange={setPermanent} />
+          )}
+        </Section>
+      )}
+
+      {active === "closures" && (
+        <Section title="Closures & holidays"
+          blurb="Every closure still to come, across all centres. No appointments can be booked for a closed day; existing bookings stay as they are — call those guests.">
+          <Field label="Add a closure" full hint="Pick the centre, then choose the dates and a reason.">
+            <div className="flex flex-wrap gap-2">
+              <div className="min-w-[240px] flex-1">
+                <Select value={closureFor?._id ?? ""} onChange={setClosureCentre}
+                  options={list.map((b) => ({ value: b._id, label: b.isActive ? b.name : `${b.name} (inactive)` }))} />
+              </div>
+              <StudioBtn disabled={!closureFor} onClick={() => { if (closureFor) openClosure(closureFor); }}>Add closure</StudioBtn>
+            </div>
+          </Field>
+          <div className="col-span-full">
+            <Async q={q} label="Loading centres…" rows={3}>
+              {() => upcomingAll.length === 0 ? (
+                <StudioEmpty title="No closures ahead" hint="Holidays and shutdowns you add here, or with “Close today” on a centre, appear in this list." />
+              ) : (
+                <div className="grid gap-2">
+                  {upcomingAll.map(({ b, c }, i) => (
+                    <Row key={`${b._id}-${c.date}-${i}`}>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[15px] font-semibold leading-6 text-ink">{b.name}</div>
+                        <div className="text-[14px] leading-5 text-ink2">
+                          {fmtDateFull(c.date)}{c.to ? ` → ${fmtDateFull(c.to)}` : ""}{c.reason ? <span className="text-ink3"> · {c.reason}</span> : null}
+                        </div>
+                      </div>
+                      {isClosedNow(c) && <StatusTag kind="err">Closed now</StatusTag>}
+                      <RemoveButton label="Remove closure" onClick={() => saveClosures(b, (b.closures ?? []).filter((x) => !sameClosure(x, c)), "Closure removed")} />
+                    </Row>
+                  ))}
+                </div>
+              )}
+            </Async>
+          </div>
+        </Section>
+      )}
+
+      {/* ---- detail sheet ---- */}
+      <StudioSheet open={!!view} onClose={() => setView(null)} title={view?.name ?? ""} sub={view ? addressLine(view) : undefined} width={640}
+        footer={view ? <>
+          <StudioBtn kind="ghost" onClick={() => setView(null)}>Close</StudioBtn>
+          <StudioBtn onClick={() => { setSel(view); setView(null); }}>Edit centre</StudioBtn>
+        </> : undefined}>
         {view && (() => {
           const today = branchToday(view);
           const closures = [...(view.closures ?? [])].sort((x, y) => y.date.localeCompare(x.date));
+          const todayKey = dayKeyOf(isoDay());
           return (
-            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_280px]">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2"><Tag kind={!view.isActive ? "mute" : today.open ? "ok" : "err"}>{today.label}</Tag>{!today.open && today.reason && <span className="text-[12px] text-err">{today.reason}</span>}</div>
-                <SecH t="Weekly hours" />
-                <div className="grid gap-1">
-                  {DAYS.map((d) => { const h = (view.operatingHours ?? {})[d] ?? {}; const off = h.isOpen === false; return (
-                    <div key={d} className={`flex items-center justify-between rounded-lg px-3 py-1.5 text-[12.5px] ${d === dayKeyOf(isoDay()) ? "bg-gold/10" : "bg-ivory"}`}>
-                      <span className="font-semibold">{DAY_LABEL[d]}</span>
-                      <span className={off ? "text-ink3" : ""}>{off ? "Closed" : `${h.openTime ?? h.open ?? "10:00"} – ${h.closeTime ?? h.close ?? "19:00"}`}</span>
-                    </div>); })}
-                </div>
-                <SecH t="Closures & holidays" em={`· ${closures.length}`} right={<Btn kind="ghost" className="!py-1 !text-[12px]" onClick={() => { setCloseFor(view); setCloseDate(isoDay()); setCloseTo(""); setCloseReason(""); }}>+ Add closure</Btn>} />
-                {closures.length === 0 ? <div className="text-[12px] text-ink3">No closures recorded.</div> : closures.map((c, i) => (
-                  <div key={`${c.date}-${i}`} className="flex items-center justify-between border-b border-border py-1.5 text-[12.5px] last:border-0">
-                    <span><B>{fmtDateFull(c.date)}</B>{c.to ? ` → ${fmtDateFull(c.to)}` : ""}{c.reason ? <span className="text-ink3"> · {c.reason}</span> : ""}{(c.to ?? c.date) < isoDay() && <Tag kind="mute">past</Tag>}</span>
-                    <button onClick={() => saveClosures(view, (view.closures ?? []).filter((x) => !(x.date === c.date && (x.to ?? null) === (c.to ?? null) && (x.reason ?? "") === (c.reason ?? ""))), "Closure removed")} className="text-[11.5px] text-ink3 hover:text-err">Remove</button>
-                  </div>
-                ))}
+            <div className="grid gap-6">
+              <div className="flex flex-wrap items-center gap-2 text-[14px] text-err">
+                <StatusTag kind={!view.isActive ? "mute" : today.open ? "ok" : "err"}>{today.label}</StatusTag>
+                {!today.open && today.reason && <span>{today.reason}</span>}
               </div>
-              <div className="grid gap-2 text-[12.5px]">
-                <div><div className="text-[10.5px] font-bold uppercase tracking-wider text-ink3">Address</div><div>{addressLine(view)}</div></div>
-                <div><div className="text-[10.5px] font-bold uppercase tracking-wider text-ink3">Phone</div><div>{(view.contact?.phone ?? []).join(" / ") || "—"}</div></div>
-                <div><div className="text-[10.5px] font-bold uppercase tracking-wider text-ink3">Email</div><div>{view.contact?.email || "—"}</div></div>
-                <div><div className="text-[10.5px] font-bold uppercase tracking-wider text-ink3">Dermatologists here</div><div>{(docs.data?.data ?? []).filter((d) => (d.availableCentres ?? []).includes(view.name)).map((d) => d.name).join(", ") || "—"}</div></div>
-                {!!view.amenities?.length && <div><div className="text-[10.5px] font-bold uppercase tracking-wider text-ink3">Amenities</div><div>{view.amenities.join(", ")}</div></div>}
-                {view.location?.coordinates?.length === 2 && <div><div className="text-[10.5px] font-bold uppercase tracking-wider text-ink3">Map</div><a className="text-primary underline" target="_blank" rel="noreferrer" href={`https://maps.google.com/?q=${view.location.coordinates[1]},${view.location.coordinates[0]}`}>Open in Google Maps</a></div>}
-                {!!view.images?.length && <div className="grid grid-cols-2 gap-1">{view.images.slice(0, 4).map((u) => <img key={u} src={u} alt="" className="h-16 w-full rounded-md object-cover" />)}</div>}
-                <div className="mt-2 flex flex-col gap-2">
-                  <Btn onClick={() => { setSel(view); setView(null); }}>Edit centre</Btn>
-                  <Btn kind="ghost" onClick={() => setView(null)}>Close</Btn>
+              <DetailList items={[
+                ["Address", addressLine(view)],
+                ["Phone", (view.contact?.phone ?? []).join(" / ") || "—"],
+                ["Email", view.contact?.email || "—"],
+                ["Dermatologists here", (docs.data?.data ?? []).filter((d) => (d.availableCentres ?? []).includes(view.name)).map((d) => d.name).join(", ") || "—"],
+                !!view.amenities?.length && ["Amenities", view.amenities.join(", ")],
+                view.location?.coordinates?.length === 2 && ["Map", <a key="map" className="font-semibold text-primary underline underline-offset-4" target="_blank" rel="noreferrer" href={`https://maps.google.com/?q=${view.location.coordinates[1]},${view.location.coordinates[0]}`}>Open in Google Maps</a>],
+              ]} />
+              {!!view.images?.length && (
+                <div className="grid grid-cols-2 gap-2 @sm/fields:grid-cols-4">
+                  {view.images.slice(0, 4).map((u) => <img key={u} src={u} alt="" className="h-24 w-full rounded-[10px] border border-border object-cover" />)}
                 </div>
+              )}
+              <div className="grid gap-4">
+                <SubHeading title="Weekly hours" />
+                <div className="grid gap-2">
+                  {DAYS.map((d) => {
+                    const h = (view.operatingHours ?? {})[d] ?? {};
+                    const off = h.isOpen === false;
+                    const isToday = d === todayKey;
+                    return (
+                      <Row key={d} className={isToday ? "!border-primary/40 !bg-primary/[0.04]" : ""}>
+                        <span className="w-14 text-[15px] font-semibold text-ink">{DAY_LABEL[d]}</span>
+                        <span className={`text-[14px] tabular-nums ${off ? "text-ink3" : "text-ink"}`}>{off ? "Closed" : `${h.openTime ?? h.open ?? "10:00"} – ${h.closeTime ?? h.close ?? "19:00"}`}</span>
+                        {isToday && <span className="ml-auto text-[12.5px] font-semibold text-primary">Today</span>}
+                      </Row>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="grid gap-4">
+                <SubHeading title="Closures & holidays" blurb={`${closures.length} on record.`}
+                  right={<StudioBtn kind="ghost" small onClick={() => openClosure(view)}>Add closure</StudioBtn>} />
+                {closures.length === 0 ? <div className="text-[14px] leading-6 text-ink3">No closures recorded.</div> : (
+                  <div className="grid gap-2">
+                    {closures.map((c, i) => (
+                      <Row key={`${c.date}-${i}`} muted={(c.to ?? c.date) < isoDay()}>
+                        <span className="min-w-0 flex-1 text-[14px] leading-5 text-ink">
+                          <B>{fmtDateFull(c.date)}</B>{c.to ? ` → ${fmtDateFull(c.to)}` : ""}{c.reason ? <span className="text-ink3"> · {c.reason}</span> : null}
+                        </span>
+                        {(c.to ?? c.date) < isoDay() && <StatusTag kind="mute">past</StatusTag>}
+                        <RemoveButton label="Remove closure" onClick={() => saveClosures(view, (view.closures ?? []).filter((x) => !sameClosure(x, c)), "Closure removed")} />
+                      </Row>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           );
         })()}
-      </Modal>
+      </StudioSheet>
 
       {/* ---- close today / add closure ---- */}
       <Modal open={!!closeFor} onClose={() => setCloseFor(null)} title={closeFor ? `Close ${closeFor.name}` : ""}>
-        <Note>No appointments can be booked at this centre for the closed day(s); existing bookings stay as they are — call those guests.</Note>
-        <div className="mt-3 grid gap-3 md:grid-cols-2">
-          <In label="From" type="date" value={closeDate} onChange={setCloseDate} />
-          <In label="To (optional)" type="date" value={closeTo} onChange={setCloseTo} hint="Leave empty for a single day" />
-          <In label="Reason" value={closeReason} onChange={setCloseReason} placeholder="e.g. Public holiday, maintenance" full />
-        </div>
-        <div className="mt-4 flex justify-end gap-2">
-          <Btn kind="ghost" onClick={() => setCloseFor(null)}>Cancel</Btn>
-          <Btn kind="danger" disabled={!closeDate} onClick={async () => {
-            if (!closeFor) return;
-            await saveClosures(closeFor, [...(closeFor.closures ?? []), { date: closeDate, to: closeTo || null, reason: closeReason.trim() }], closeTo ? `Closed ${closeDate} → ${closeTo}` : closeDate === isoDay() ? "Closed today" : `Closed on ${closeDate}`);
-            setCloseFor(null);
-          }}>Close centre</Btn>
+        <div className="@container/fields grid gap-4">
+          <Note kind="warn">No appointments can be booked at this centre for the closed day(s); existing bookings stay as they are — call those guests.</Note>
+          <div className="grid gap-4 @sm/fields:grid-cols-2">
+            <Field label="From"><DateInput value={closeDate} onChange={setCloseDate} /></Field>
+            <Field label="To (optional)" hint="Leave empty for a single day"><DateInput value={closeTo} onChange={setCloseTo} min={closeDate || undefined} /></Field>
+            <Field label="Reason" full><Input value={closeReason} onChange={setCloseReason} placeholder="e.g. Public holiday, maintenance" /></Field>
+          </div>
+          <div className="flex justify-end gap-2">
+            <StudioBtn kind="ghost" onClick={() => setCloseFor(null)}>Cancel</StudioBtn>
+            <StudioBtn kind="danger" disabled={!closeDate} onClick={async () => {
+              if (!closeFor) return;
+              await saveClosures(closeFor, [...(closeFor.closures ?? []), { date: closeDate, to: closeTo || null, reason: closeReason.trim() }], closeTo ? `Closed ${closeDate} → ${closeTo}` : closeDate === isoDay() ? "Closed today" : `Closed on ${closeDate}`);
+              setCloseFor(null);
+            }}>Close centre</StudioBtn>
+          </div>
         </div>
       </Modal>
 
@@ -208,18 +334,7 @@ export function Branches() {
             setPermanent(false);
           } catch (e) { toast((e as Error).message); }
         }} />
-
-      <Note>
-        Deleting a branch <B>deactivates</B> it rather than erasing it, because bookings, chats and stock still point
-        at it. An inactive centre disappears from the app's picker and from the branch switcher here.
-        {can("branches.manage") ? (
-          <label className="mt-2 flex items-center gap-2 text-[12px]">
-            <input type="checkbox" checked={permanent} onChange={(e) => setPermanent(e.target.checked)} className="h-4 w-4" />
-            Super admin: erase permanently on the next delete (cannot be undone; history keeps the name only)
-          </label>
-        ) : " Permanent deletion is a super-admin action."}
-      </Note>
-    </Page>
+    </StudioPage>
   );
 }
 
@@ -335,118 +450,118 @@ function BranchEditor({ open, branch, onClose, onSaved, onDelete }: {
   };
 
   return (
-    <Drawer open={open} onClose={onClose} title={branch ? branch.name : "New branch"}>
-      <div className="grid gap-3">
-        <In label="Branch name" value={f.name ?? ""} onChange={set("name")} placeholder="e.g. Kondapur" />
-        <In label="Description (optional)" value={f.description ?? ""} onChange={set("description")} />
+    <StudioSheet open={open} onClose={onClose} title={branch ? branch.name : "New centre"} width={640}
+      sub={branch ? "Details, hours and billing for this centre." : "A new centre goes live across the platform as soon as it is saved."}
+      footer={<>
+        {err && <span className="mr-auto text-[14px] font-semibold leading-5 text-err">{err}</span>}
+        {branch && <StudioBtn kind="danger" onClick={() => onDelete(branch)}>Deactivate</StudioBtn>}
+        <StudioBtn disabled={busy} onClick={save}>{busy ? "Saving…" : branch ? "Save centre" : "Create centre"}</StudioBtn>
+      </>}>
+      <div className="grid gap-5 @lg/fields:grid-cols-2">
+        <Field label="Centre name"><Input value={f.name ?? ""} onChange={set("name")} placeholder="e.g. Kondapur" /></Field>
+        <Field label="Description (optional)"><Input value={f.description ?? ""} onChange={set("description")} /></Field>
 
-        <SecH t="Centre image" />
-        {image && (
-          <img src={image} alt="" className="h-36 w-full rounded-xl border border-border object-cover" />
-        )}
-        <In label="Image URL" value={image} onChange={setImage} placeholder="https://…"
-          hint="Shown beside the centre in the app's centre picker" />
-        <label className={`inline-flex w-fit cursor-pointer items-center gap-2 rounded-lg border border-border bg-sage px-3 py-1.5 text-[12px] font-bold text-primary hover:bg-primary hover:text-white ${uploadingImg ? "opacity-60" : ""}`}>
-          <input type="file" accept="image/*" className="hidden" onChange={onPickImage} disabled={uploadingImg} />
-          {uploadingImg ? "Uploading…" : image ? "Replace image" : "Upload an image"}
-        </label>
-
-        <SecH t="Address" />
-        <In label="Address line 1 *" value={addr.line1 ?? ""} onChange={setAddr("line1")} />
-        <In label="Address line 2" value={addr.line2 ?? ""} onChange={setAddr("line2")} />
-        <div className="grid grid-cols-3 gap-3">
-          <In label="City" value={addr.city ?? ""} onChange={setAddr("city")} />
-          <In label="State" value={addr.state ?? ""} onChange={setAddr("state")} />
-          <In label="Pincode *" value={addr.pincode ?? ""} onChange={setAddr("pincode")} />
+        <SubHeading title="Centre image" blurb="Shown beside the centre in the app's centre picker." />
+        <div className="col-span-full grid gap-3">
+          <ImageInput value={image} onChange={setImage} emptyLabel="No image yet" />
+          <label className={`inline-flex min-h-[44px] w-fit cursor-pointer items-center gap-2 rounded-[10px] border border-border bg-surface px-4 text-[14px] font-semibold text-ink2 hover:bg-ivory hover:text-ink ${uploadingImg ? "opacity-60" : ""}`}>
+            <input type="file" accept="image/*" className="hidden" onChange={onPickImage} disabled={uploadingImg} />
+            {uploadingImg ? "Uploading…" : image ? "Replace image" : "Upload an image"}
+          </label>
         </div>
 
-        <SecH t="Contact" />
-        <div className="grid gap-2">
+        <SubHeading title="Address" />
+        <Field label="Address line 1" full><Input value={addr.line1 ?? ""} onChange={setAddr("line1")} /></Field>
+        <Field label="Address line 2" full><Input value={addr.line2 ?? ""} onChange={setAddr("line2")} /></Field>
+        <div className="col-span-full grid gap-5 @md/fields:grid-cols-3">
+          <Field label="City"><Input value={addr.city ?? ""} onChange={setAddr("city")} /></Field>
+          <Field label="State"><Input value={addr.state ?? ""} onChange={setAddr("state")} /></Field>
+          <Field label="Pincode"><Input value={addr.pincode ?? ""} onChange={setAddr("pincode")} /></Field>
+        </div>
+
+        <SubHeading title="Contact" blurb="Guests call the first number from the app." />
+        <div className="col-span-full grid gap-3">
           {phones.map((ph, i) => (
             <div key={i} className="flex items-end gap-2">
-              <div className="flex-1"><In label={i === 0 ? "Phone *" : `Phone ${i + 1}`} value={ph} onChange={(v) => setPhones(phones.map((x, j) => (j === i ? v : x)))} placeholder="+91 …" /></div>
-              {phones.length > 1 && <Btn kind="ghost" onClick={() => setPhones(phones.filter((_, j) => j !== i))}>×</Btn>}
+              <Field label={i === 0 ? "Phone" : `Phone ${i + 1}`} className="flex-1"><Input value={ph} onChange={(v) => setPhones(phones.map((x, j) => (j === i ? v : x)))} placeholder="+91 …" /></Field>
+              {phones.length > 1 && <div className="pb-1"><RemoveButton label="Remove this line" onClick={() => setPhones(phones.filter((_, j) => j !== i))} /></div>}
             </div>
           ))}
-          <Btn kind="ghost" className="w-fit !py-1 !text-[12px]" onClick={() => setPhones([...phones, ""])}>+ Another line</Btn>
-          <In label="Email *" type="email" value={contact.email ?? ""} onChange={setContact("email")} />
+          <StudioBtn kind="ghost" small className="w-fit" onClick={() => setPhones([...phones, ""])}>Add another line</StudioBtn>
         </div>
+        <Field label="Email" full><Input type="email" value={contact.email ?? ""} onChange={setContact("email")} /></Field>
 
-        <SecH t="Map location" />
-        <div className="grid grid-cols-2 gap-3">
-          <In label="Latitude" type="number" value={String(coords[1] ?? 0)} onChange={setCoord(1)} hint="e.g. 17.4326" />
-          <In label="Longitude" type="number" value={String(coords[0] ?? 0)} onChange={setCoord(0)} hint="e.g. 78.4071" />
-        </div>
-        <div className="-mt-1 text-[10.5px] text-ink3">Used by the app for directions and the nearest-centre order. Paste from Google Maps (right-click the pin → copy coordinates).</div>
+        <SubHeading title="Map location" blurb="Used by the app for directions and the nearest-centre order. Paste from Google Maps (right-click the pin → copy coordinates)." />
+        <Field label="Latitude" hint="e.g. 17.4326"><NumberInput value={String(coords[1] ?? 0)} onChange={setCoord(1)} /></Field>
+        <Field label="Longitude" hint="e.g. 78.4071"><NumberInput value={String(coords[0] ?? 0)} onChange={setCoord(0)} /></Field>
 
-        <SecH t="Billing & GST" em="· printed on every receipt from this centre" />
-        <div className="grid gap-3 md:grid-cols-2">
-          <In label="Legal entity name" value={f.legalName ?? ""} onChange={(v) => setF((s) => ({ ...s, legalName: v }))} placeholder="e.g. Curispro Health Care Services Pvt Ltd" />
-          <In label="Invoice prefix" value={f.invoicePrefix ?? ""} onChange={(v) => setF((s) => ({ ...s, invoicePrefix: v.toUpperCase() }))} placeholder="e.g. ZNJH (blank = ZN + initials)" hint="Invoices run ZNJH26 0001…; receipts ZNJH26R1…" />
-          <In label="GSTIN" value={f.gstin ?? ""} onChange={(v) => setF((s) => ({ ...s, gstin: v.toUpperCase() }))} placeholder="36AAJCC4657R2ZT" />
-          <In label="PAN" value={f.pan ?? ""} onChange={(v) => setF((s) => ({ ...s, pan: v.toUpperCase() }))} placeholder="AAJCC4657R" />
-          <In label="State code" value={f.stateCode ?? "36"} onChange={(v) => setF((s) => ({ ...s, stateCode: v }))} hint="36 = Telangana; decides CGST+SGST vs IGST" />
-          <In label="Zone" value={f.zone ?? "Hyderabad"} onChange={(v) => setF((s) => ({ ...s, zone: v }))} hint="Groups centres in the switcher" />
-          <Switch label="Pharmacy centre" sub="Retail-only shelf; grouped apart from clinics" on={!!f.isPharmacy} onChange={(v) => setF((s) => ({ ...s, isPharmacy: v }))} />
-        </div>
-        <SecH t="Guest messaging" em="· avoid double messages with Zenoti's ezConnect" />
-        <div className="grid gap-3 md:grid-cols-2">
-          <Switch label="Send WhatsApp from here" sub="Confirmations, reminders, check-in codes, receipts" on={f.messaging?.whatsappEnabled !== false} onChange={(v) => setF((s) => ({ ...s, messaging: { ...(s.messaging ?? {}), whatsappEnabled: v } }))} />
-          <Switch label="Zenoti (ezConnect) messages guests at this centre" sub="On = our automatic WhatsApp is skipped for appointments booked in Zenoti; check-in codes still go" on={!!f.messaging?.zenotiSendsGuestMessages} onChange={(v) => setF((s) => ({ ...s, messaging: { ...(s.messaging ?? {}), zenotiSendsGuestMessages: v } }))} gold />
-          <In label="WhatsApp number guests write to" value={f.messaging?.whatsappNumber ?? ""} onChange={(v) => setF((s) => ({ ...s, messaging: { ...(s.messaging ?? {}), whatsappNumber: v } }))} placeholder="+91 …" hint="Routes incoming WhatsApp messages to this centre's inbox" />
-        </div>
-        <SecH t="Booking" />
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <span className="mb-1 block text-[11px] font-semibold text-ink3">Session length</span>
-            <div className="rounded-lg border border-border bg-ivory px-3 py-2 text-[12px] font-semibold text-primary">
-              {SESSION_SLOT_MINUTES} minutes
-            </div>
-            <p className="mt-1 text-[10.5px] text-ink3">Fixed for consultations and treatments</p>
-          </div>
-          <In label="Display order" type="number" value={String(f.displayOrder ?? 0)}
-            onChange={(v) => set("displayOrder")(Number(v) || 0)} />
-        </div>
+        <SubHeading title="Billing & GST" blurb="Printed on every receipt from this centre." />
+        <Field label="Legal entity name"><Input value={f.legalName ?? ""} onChange={(v) => setF((s) => ({ ...s, legalName: v }))} placeholder="e.g. Curispro Health Care Services Pvt Ltd" /></Field>
+        <Field label="Invoice prefix" hint="Invoices run ZNJH26 0001…; receipts ZNJH26R1…"><Input value={f.invoicePrefix ?? ""} onChange={(v) => setF((s) => ({ ...s, invoicePrefix: v.toUpperCase() }))} placeholder="e.g. ZNJH (blank = ZN + initials)" /></Field>
+        <Field label="GSTIN"><Input value={f.gstin ?? ""} onChange={(v) => setF((s) => ({ ...s, gstin: v.toUpperCase() }))} placeholder="36AAJCC4657R2ZT" /></Field>
+        <Field label="PAN"><Input value={f.pan ?? ""} onChange={(v) => setF((s) => ({ ...s, pan: v.toUpperCase() }))} placeholder="AAJCC4657R" /></Field>
+        <Field label="State code" hint="36 = Telangana; decides CGST+SGST vs IGST"><Input value={f.stateCode ?? "36"} onChange={(v) => setF((s) => ({ ...s, stateCode: v }))} /></Field>
+        <Field label="Zone" hint="Groups centres in the switcher"><Input value={f.zone ?? "Hyderabad"} onChange={(v) => setF((s) => ({ ...s, zone: v }))} /></Field>
+        <ToggleRow full label="Pharmacy centre" description="Retail-only shelf; grouped apart from clinics" on={!!f.isPharmacy} onChange={(v) => setF((s) => ({ ...s, isPharmacy: v }))} />
 
-        <SecH t="Opening hours" />
-        <div className="grid gap-1.5">
+        <SubHeading title="Guest messaging" blurb="Avoid double messages with Zenoti's ezConnect." />
+        <ToggleRow full label="Send WhatsApp from here" description="Confirmations, reminders, check-in codes, receipts"
+          on={f.messaging?.whatsappEnabled !== false} onChange={(v) => setF((s) => ({ ...s, messaging: { ...(s.messaging ?? {}), whatsappEnabled: v } }))} />
+        <ToggleRow full label="Zenoti (ezConnect) messages guests at this centre" description="On = our automatic WhatsApp is skipped for appointments booked in Zenoti; check-in codes still go"
+          on={!!f.messaging?.zenotiSendsGuestMessages} onChange={(v) => setF((s) => ({ ...s, messaging: { ...(s.messaging ?? {}), zenotiSendsGuestMessages: v } }))} />
+        <Field label="WhatsApp number guests write to" full hint="Routes incoming WhatsApp messages to this centre's inbox">
+          <Input value={f.messaging?.whatsappNumber ?? ""} onChange={(v) => setF((s) => ({ ...s, messaging: { ...(s.messaging ?? {}), whatsappNumber: v } }))} placeholder="+91 …" />
+        </Field>
+
+        <SubHeading title="Booking" />
+        <Field label="Session length" hint="Fixed for consultations and treatments"><Input value={`${SESSION_SLOT_MINUTES} minutes`} readOnly /></Field>
+        <Field label="Display order"><NumberInput value={String(f.displayOrder ?? 0)} onChange={(v) => set("displayOrder")(Number(v) || 0)} /></Field>
+
+        <SubHeading title="Weekly hours" blurb="Slots outside these hours never appear in the app." />
+        <div className="col-span-full grid gap-2">
           {DAYS.map((day) => {
             const h = hours[day] ?? {};
+            const off = h.isOpen === false;
             return (
-              <div key={day} className="flex items-center gap-2 rounded-lg border border-border bg-ivory px-2.5 py-1.5">
-                <span className="w-20 shrink-0 text-[11.5px] font-semibold capitalize">{day.slice(0, 3)}</span>
-                <input type="time" value={h.open ?? "10:00"} onChange={(e) => setHours(day, { open: e.target.value })}
-                  disabled={h.isOpen === false}
-                  className="w-24 rounded border border-border bg-surface px-1.5 py-1 text-[11.5px] outline-none disabled:opacity-40" />
-                <span className="text-[11px] text-ink3">to</span>
-                <input type="time" value={h.close ?? "19:00"} onChange={(e) => setHours(day, { close: e.target.value })}
-                  disabled={h.isOpen === false}
-                  className="w-24 rounded border border-border bg-surface px-1.5 py-1 text-[11.5px] outline-none disabled:opacity-40" />
-                <label className="ml-auto flex items-center gap-1.5 text-[11px] text-ink3">
-                  <input type="checkbox" checked={h.isOpen !== false} onChange={(e) => setHours(day, { isOpen: e.target.checked })}
-                    className="h-3.5 w-3.5 accent-[var(--color-primary)]" />
-                  open
+              <Row key={day} className="flex-wrap">
+                <span className="w-12 text-[15px] font-semibold text-ink">{DAY_LABEL[day]}</span>
+                <div className="w-[124px]"><Input type="time" value={h.open ?? "10:00"} onChange={(v) => setHours(day, { open: v })} disabled={off} /></div>
+                <span className="text-[14px] text-ink3">to</span>
+                <div className="w-[124px]"><Input type="time" value={h.close ?? "19:00"} onChange={(v) => setHours(day, { close: v })} disabled={off} /></div>
+                <label className="ml-auto flex min-h-[44px] cursor-pointer items-center gap-2 text-[14px] text-ink2">
+                  <span>{off ? "Closed" : "Open"}</span>
+                  <Toggle on={!off} onChange={(v) => setHours(day, { isOpen: v })} />
                 </label>
-              </div>
+              </Row>
             );
           })}
         </div>
 
-        <Switch on={!!f.isActive} onChange={set("isActive")} label="Centre active"
-          sub="Inactive removes it from the app picker, the branch switcher and new bookings" />
+        <ToggleRow full on={!!f.isActive} onChange={set("isActive")} label="Centre active"
+          description="Inactive removes it from the app picker, the branch switcher and new bookings" />
 
-        {err && <Note kind="crit">{err}</Note>}
-        <div className="flex flex-wrap gap-2">
-          <Btn disabled={busy} onClick={save}>{busy ? "Saving…" : branch ? "Save branch" : "Create branch"}</Btn>
-          {branch && <Btn kind="danger" onClick={() => onDelete(branch)}>Deactivate</Btn>}
-        </div>
+        {err && <Note kind="err">{err}</Note>}
       </div>
-    </Drawer>
+    </StudioSheet>
   );
 }
 
 /* ================= REVIEWS ================= */
 type ReviewKind = "products" | "consultations" | "services";
+
+const REVIEW_SECTIONS: (StudioSection & { id: ReviewKind; heading: string })[] = [
+  { id: "consultations", title: "Consultations", heading: "Consultation reviews", blurb: "What guests said after a consultation." },
+  { id: "products", title: "Products", heading: "Product reviews", blurb: "What guests said after a delivered order." },
+  { id: "services", title: "Package services", heading: "Package service reviews", blurb: "What guests said after a package session." },
+];
+
+function BigStars({ n }: { n: number }) {
+  return (
+    <span className="inline-flex items-center gap-1 text-gold-dark" aria-label={`${n} out of 5`}>
+      {[1, 2, 3, 4, 5].map((i) => <Star key={i} size={20} strokeWidth={2} className={i <= n ? "fill-current" : "text-border"} />)}
+    </span>
+  );
+}
 
 export function Reviews() {
   const { toast, audit, can } = useStore();
@@ -496,91 +611,97 @@ export function Reviews() {
     } catch (e) { toast((e as Error).message); }
   };
 
+  const sec = REVIEW_SECTIONS.find((s) => s.id === kind) ?? REVIEW_SECTIONS[0];
+
   return (
-    <Page title="Reviews" sub="Guest reviews from the app — moderate what shows publicly"
-      actions={<>
-        <Menu button={<MenuButton kind="ghost">{pending ? "Awaiting approval" : "All reviews"}</MenuButton>}
-          items={[
-            { label: "All reviews", onClick: () => setPending(false) },
-            { label: "Awaiting approval", onClick: () => setPending(true) },
-          ]} />
-        <Btn kind="ghost" disabled={!rows.length} onClick={() => exportCsv(`zennara-${kind}-reviews`,
+    <StudioPage title="Reviews" intro="Guest reviews from the app — moderate what shows publicly."
+      sections={REVIEW_SECTIONS} active={kind} onSection={(id) => setKind(id as ReviewKind)}
+      actions={
+        <StudioBtn kind="ghost" disabled={!rows.length} onClick={() => exportCsv(`zennara-${kind}-reviews`,
           ["Date", "Guest", "Subject", "Rating", "Review", "Approved"],
           rows.map((r) => [fmtDate(r.createdAt), nameOf(r.userId, "Anonymous"), subjectOf(r), r.rating, r.reviewText, r.isApproved ? "yes" : "no"]))}>
           Export CSV
-        </Btn>
-      </>}>
-      <Tabs active={["consultations", "products", "services"].indexOf(kind)}
-        onChange={(i) => setKind((["consultations", "products", "services"] as ReviewKind[])[i])}
-        items={[["Consultations"], ["Products"], ["Package services"]]} />
+        </StudioBtn>
+      }>
+      <StudioStale error={q.data ? q.error : null} onRetry={q.reload} />
+      <Section title={sec.heading} blurb={sec.blurb}
+        right={<Segmented value={pending ? "pending" : "all"} onChange={(v) => setPending(v === "pending")}
+          options={[{ value: "all", label: "All reviews" }, { value: "pending", label: "Awaiting approval" }]} />}>
+        <StatGrid items={[
+          { k: "Reviews", v: rows.length },
+          { k: "Average rating", v: avg ? avg.toFixed(1) : "—", hot: avg >= 4.5 },
+          { k: "5 star", v: rows.filter((r) => r.rating === 5).length, tone: "up" },
+          { k: "2 star or less", v: lowScores.length, tone: lowScores.length ? "dn" : undefined },
+          { k: "Awaiting approval", v: rows.filter((r) => !r.isApproved).length },
+        ]} />
 
-      <Stats items={[
-        { k: "Reviews", v: rows.length },
-        { k: "Average rating", v: avg ? avg.toFixed(1) : "—", hot: avg >= 4.5 },
-        { k: "5 star", v: rows.filter((r) => r.rating === 5).length, tone: "up" },
-        { k: "2 star or less", v: lowScores.length, tone: lowScores.length ? "dn" : undefined },
-        { k: "Awaiting approval", v: rows.filter((r) => !r.isApproved).length },
-      ]} />
+        <div className="col-span-full">
+          <Async q={q} label="Loading reviews…" rows={6}>
+            {() => rows.length === 0 ? (
+              <StudioEmpty title={pending ? "Nothing awaiting approval" : "No reviews yet"}
+                hint="Guests are asked for a review after a completed visit or a delivered order." />
+            ) : (
+              <StudioTable cols={[{ label: "Date", nowrap: true }, "Guest", "Subject", { label: "Rating", nowrap: true }, { label: "Review", width: "36%" }, "Status"]}
+                onRow={(i) => setSel(rows[i]._id)}
+                rows={rows.map((r) => [
+                  fmtDate(r.createdAt),
+                  <span key={`${r._id}g`} className="font-semibold text-ink">{nameOf(r.userId, "Anonymous")}</span>,
+                  subjectOf(r),
+                  <Stars key={`${r._id}s`} n={r.rating} />,
+                  <span key={`${r._id}t`} className="line-clamp-2">{r.reviewText}</span>,
+                  r.isApproved ? <StatusTag key={`${r._id}a`} kind="ok">Published</StatusTag> : <StatusTag key={`${r._id}a`} kind="warn">Hidden</StatusTag>,
+                ])} />
+            )}
+          </Async>
+        </div>
 
-      <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
-      <Async q={q} label="Loading reviews…" rows={6}>
-        {() => rows.length === 0 ? (
-          <Empty title={pending ? "Nothing awaiting approval" : "No reviews yet"}
-            hint="Guests are asked for a review after a completed visit or a delivered order." />
-        ) : (
-          <DataTable cols={["Date", "Guest", "Subject", "Rating", "Review", "Status"]}
-            onRow={(i) => setSel(rows[i]._id)}
-            rows={rows.map((r) => [
-              fmtDate(r.createdAt),
-              nameOf(r.userId, "Anonymous"),
-              subjectOf(r),
-              <Stars key={`${r._id}s`} n={r.rating} />,
-              <span key={`${r._id}t`} className="line-clamp-2 text-[11.5px]">{r.reviewText}</span>,
-              r.isApproved ? <Tag key={`${r._id}a`} kind="ok">Published</Tag> : <Tag key={`${r._id}a`} kind="warn">Hidden</Tag>,
-            ])} />
-        )}
-      </Async>
+        <Note>
+          Approving publishes a review to the app and feeds the service or product's star rating. Hiding keeps it on
+          record without showing it — nothing is silently edited.
+        </Note>
+      </Section>
 
-      <Drawer open={!!selected} onClose={() => setSel(null)} title={selected ? nameOf(selected.userId, "Anonymous") : ""}>
+      <StudioSheet open={!!selected} onClose={() => setSel(null)} title={selected ? nameOf(selected.userId, "Anonymous") : ""}
+        sub={selected ? `${subjectOf(selected)} · ${fmtDateFull(selected.createdAt)}` : undefined}
+        footer={selected && canModerate ? <>
+          <StudioBtn kind="danger" className="mr-auto" onClick={() => remove(selected._id)}>Delete review</StudioBtn>
+          {selected.isApproved
+            ? <StudioBtn kind="ghost" onClick={() => approve(selected._id, false)}>Hide from the app</StudioBtn>
+            : <StudioBtn onClick={() => approve(selected._id, true)}>Publish to the app</StudioBtn>}
+        </> : undefined}>
         {selected && (
-          <div className="grid gap-3">
-            <Card className="p-3.5">
-              <Stars n={selected.rating} />
-              <div className="mt-1.5 text-[13px] leading-relaxed text-ink2">{selected.reviewText}</div>
-              <div className="mt-2 text-[11px] text-ink3">{subjectOf(selected)} · {fmtDateFull(selected.createdAt)}</div>
+          <div className="grid gap-5">
+            <div className="rounded-[12px] border border-border bg-surface p-5">
+              <BigStars n={selected.rating} />
+              <p className="m-0 mt-3 text-[15px] leading-7 text-ink">{selected.reviewText}</p>
               {"images" in selected && !!selected.images?.length && (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {selected.images.map((img, i) => <img key={i} src={img} alt="" className="h-16 w-16 rounded-lg border border-border object-cover" />)}
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {selected.images.map((img, i) => <img key={i} src={img} alt="" className="h-20 w-20 rounded-[10px] border border-border object-cover" />)}
                 </div>
               )}
-            </Card>
+            </div>
+            <DetailList items={[
+              ["Guest", nameOf(selected.userId, "Anonymous")],
+              ["Subject", subjectOf(selected)],
+              ["Rating", `${selected.rating} of 5`],
+              ["Written", fmtDateFull(selected.createdAt)],
+              ["Status", selected.isApproved ? <StatusTag kind="ok">Published</StatusTag> : <StatusTag kind="warn">Hidden</StatusTag>],
+            ]} />
 
             {selected.rating <= 2 && (
-              <Note kind="crit" className="my-0">
+              <Note kind="err">
                 A low score usually needs a call, not a reply. Open the guest's record and have the branch manager
                 reach out before anything is published.
               </Note>
             )}
 
-            {canModerate ? (
-              <>
-                {selected.isApproved
-                  ? <Btn kind="ghost" onClick={() => approve(selected._id, false)}>Hide from the app</Btn>
-                  : <Btn onClick={() => approve(selected._id, true)}>Publish to the app</Btn>}
-                <Btn kind="danger" onClick={() => remove(selected._id)}>Delete review</Btn>
-              </>
-            ) : (
-              <Note className="my-0">You can read reviews, but only someone with the “moderate reviews” permission can publish, hide or delete them.</Note>
+            {!canModerate && (
+              <Note>You can read reviews, but only someone with the “moderate reviews” permission can publish, hide or delete them.</Note>
             )}
           </div>
         )}
-      </Drawer>
-
-      <Note>
-        Approving publishes a review to the app and feeds the service or product's star rating. Hiding keeps it on
-        record without showing it — nothing is silently edited.
-      </Note>
-    </Page>
+      </StudioSheet>
+    </StudioPage>
   );
 }
 
@@ -594,7 +715,17 @@ export function Reviews() {
  * their OWN last 30 days when no start is given — which is how "All time" used
  * to show a month on those tabs — so they are sent the all-time floor instead.
  */
-const ANALYTICS_TABS: [string, (number | string)?][] = [["Revenue"], ["Appointments"], ["Dermatologists"], ["Services"], ["Guests"], ["Products & orders"], ["Packages & memberships"], ["Stock"], ["Staff sales"]];
+const ANALYTICS_SECTIONS: StudioSection[] = [
+  { id: "revenue", title: "Revenue", blurb: "Every stream, as paid, over the period." },
+  { id: "appointments", title: "Appointments", blurb: "Bookings, outcomes and when the centres are busiest." },
+  { id: "dermatologists", title: "Dermatologists", blurb: "Bookings, completion and revenue per dermatologist." },
+  { id: "services", title: "Services", blurb: "What gets booked, what earns, and what does not move." },
+  { id: "guests", title: "Guests", blurb: "The guest base, new joins and retention." },
+  { id: "products", title: "Products & orders", blurb: "App orders, clinic counter sales and stock value." },
+  { id: "packages", title: "Packages & memberships", blurb: "Packages sold and assigned, and the Zen membership base." },
+  { id: "stock", title: "Stock", blurb: "Items tracked, value on hand and what needs re-ordering." },
+  { id: "staffSales", title: "Staff sales", blurb: "Who sold what, from closed bills — the Sale-by on each line." },
+];
 
 /** Group a daily series into ≤ n buckets (sum) for bar charts. */
 function bucketSeries<T>(rows: T[], n: number, pick: (r: T) => number): number[] {
@@ -610,6 +741,9 @@ function bucketLabels(rows: { date: string }[], n: number): string[] {
   return out;
 }
 
+const CHART_GRID = "grid gap-6 @2xl/pane:grid-cols-2";
+const ANALYTICS_STATS = "@4xl/pane:grid-cols-6";
+
 export function Analytics() {
   // Trade happens at the three clinics; a pharmacy filter would always be empty.
   const { clinics: branches } = useStore();
@@ -618,7 +752,7 @@ export function Analytics() {
   const range: MetricRange = isMetricRange(rangeParam) ? rangeParam : DEFAULT_METRIC_RANGE;
   const [custom, setCustom] = useState<{ startDate: string; endDate: string } | null>(null);
   const [branchId, setBranchId] = useQueryString("branch", "");
-  const [tab, setTab] = useQueryNumber("tab", 0, { min: 0, max: ANALYTICS_TABS.length - 1 });
+  const [tab, setTab] = useQueryNumber("tab", 0, { min: 0, max: ANALYTICS_SECTIONS.length - 1 });
 
   const win = useMemo(() => (custom ? customWindow(custom.startDate, custom.endDate) : metricWindow(range)), [range, custom]);
   const window = useMemo(() => ({ startDate: win.startDate, endDate: win.endDate }), [win]);
@@ -651,366 +785,378 @@ export function Analytics() {
 
   const branchName = branches.find((b) => b._id === branchId)?.name ?? "All centres";
   const label = custom ? `Custom · ${win.label}` : range === "All time" ? "All time" : `${range} · ${win.label}`;
+  const seed = { startDate: win.startDate ?? metricWindow(DEFAULT_METRIC_RANGE).startDate!, endDate: win.endDate };
+
+  const sec = ANALYTICS_SECTIONS[tab] ?? ANALYTICS_SECTIONS[0];
+  const active = sec.id;
+  const onSection = (id: string) => setTab(Math.max(0, ANALYTICS_SECTIONS.findIndex((s) => s.id === id)));
+
+  const exportAll = () => {
+    if (!q.data) return;
+    const d = q.data.dash, a = q.data.appointments.overview;
+    exportCsv("zennara-analytics", ["Metric", "Value"], [
+      ["Range", label], ["Centre", branchName], ["Total revenue", d.revenue.total], ["Previous period", d.revenue.previous],
+      ...d.revenue.streams.map((s) => [`${s.label} revenue`, s.revenue] as [string, number]),
+      ...d.revenue.streams.map((s) => [`${s.label} count`, s.count] as [string, number]),
+      ["Bookings", a.totalBookings], ["Completed", a.completedBookings], ["Cancellation rate %", a.cancellationRate], ["No-show rate %", a.noShowRate],
+      ["New guests", d.counts.newPatients], ["Active Zen members", d.counts.activeZen], ["Orders", d.counts.orders], ["Packages assigned", d.counts.packagesAssigned],
+      ...d.dermatologists.map((x) => [`${x.name}`, `${x.bookings} bookings · ${x.completed} completed · ₹${x.revenue}`] as [string, string]),
+      ...d.topServices.map((x) => [`Service: ${x.name}`, `${x.bookings} · ₹${x.revenue}`] as [string, string]),
+    ]);
+  };
 
   return (
-    <Page title="Analytics" sub={`${branchName} · ${label}`}
-      actions={<>
-        <RangeSwitch value={range} onChange={setRange} custom={custom} onCustom={setCustom}
-          seed={{ startDate: win.startDate ?? metricWindow(DEFAULT_METRIC_RANGE).startDate!, endDate: win.endDate }} />
-        <Menu button={<MenuButton kind="ghost">{branchName}</MenuButton>}
-          items={[{ label: "All centres", onClick: () => setBranchId("") }, ...branches.map((b) => ({ label: b.name, onClick: () => setBranchId(b._id) }))]} />
-        <Btn kind="ghost" disabled={!q.data} onClick={() => {
-          if (!q.data) return;
-          const d = q.data.dash, a = q.data.appointments.overview;
-          exportCsv("zennara-analytics", ["Metric", "Value"], [
-            ["Range", label], ["Centre", branchName], ["Total revenue", d.revenue.total], ["Previous period", d.revenue.previous],
-            ...d.revenue.streams.map((s) => [`${s.label} revenue`, s.revenue] as [string, number]),
-            ...d.revenue.streams.map((s) => [`${s.label} count`, s.count] as [string, number]),
-            ["Bookings", a.totalBookings], ["Completed", a.completedBookings], ["Cancellation rate %", a.cancellationRate], ["No-show rate %", a.noShowRate],
-            ["New guests", d.counts.newPatients], ["Active Zen members", d.counts.activeZen], ["Orders", d.counts.orders], ["Packages assigned", d.counts.packagesAssigned],
-            ...d.dermatologists.map((x) => [`${x.name}`, `${x.bookings} bookings · ${x.completed} completed · ₹${x.revenue}`] as [string, string]),
-            ...d.topServices.map((x) => [`Service: ${x.name}`, `${x.bookings} · ₹${x.revenue}`] as [string, string]),
-          ]);
-        }}>Export CSV</Btn>
-      </>}>
-      <Tabs active={tab} onChange={setTab} items={ANALYTICS_TABS} />
-      <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
-      <Async q={q} label="Crunching the numbers…" rows={8}>
-        {({ dash: d, financial, appointments, patients, services, inventory, monthly, acquisition, demographics, sources, top, orders, products, pkgStats }) => {
-          const a = appointments.overview;
-          const growth = d.revenue.growthPercent;
-          const dailyLabels = d.daily.map((x) => fmtDayKey(x.date.slice(0, 10), { day: "numeric", month: "short", year: "2-digit" }));
-          const streams = d.revenue.streams;
-          const consultTrend = bucketSeries(d.daily, 10, (x) => x.consultations);
-          const treatTrend = bucketSeries(d.daily, 10, (x) => x.treatments);
-          const bookingsTrend = bucketSeries(d.daily, 10, (x) => x.bookings);
-          const bl = bucketLabels(d.daily, 10);
-          return (
-            <>
-              {tab === 0 && (
-                <>
-                  <Stats items={[
-                    { k: "Total revenue", v: fmtCompactINR(d.revenue.total), hot: true, d: growth === null ? (d.revenue.previousHasData === false ? "no comparable earlier period" : `prev ${fmtCompactINR(d.revenue.previous)}`) : `${growth >= 0 ? "▲" : "▼"} ${Math.abs(growth)}% vs previous ${d.period.days}d`, tone: growth === null ? undefined : growth >= 0 ? "up" : "dn" },
-                    ...streams.map((s) => ({
-                      k: s.label,
-                      v: s.key === "memberships" && s.revenue === 0 && s.count > 0 ? `${s.count} sold` : fmtCompactINR(s.revenue),
-                      d: s.unpriced
-                        ? `${s.count} sold · ${s.unpriced} without a recorded price`
-                        : `${s.count} · app ${fmtCompactINR(s.app)}${s.clinic ? ` · clinic ${fmtCompactINR(s.clinic)}` : ""}`,
-                    })),
-                  ]} />
-
-                  {/*
-                    Fixed reference points, deliberately separate from the
-                    revenue row above. These do not move with the date picker —
-                    "how many patients do we have" is always all of them, and a
-                    window-relative answer to that is just wrong.
-                  */}
-                  <Stats items={[
-                    { k: "Guests on file", v: d.counts.totalPatients.toLocaleString("en-IN"), hot: true,
-                      d: `${d.counts.newThisMonth ?? 0} joined this month` },
-                    { k: "New in this period", v: (d.counts.newPatients ?? 0).toLocaleString("en-IN"),
-                      d: d.period.isAllTime ? "all time" : `${d.period.days} days` },
-                    { k: "Returning guests", v: (d.counts.returningPatients ?? 0).toLocaleString("en-IN"),
-                      d: "seen more than once", tone: "up" },
-                    { k: "Appointments to date", v: (d.counts.appointmentsAllTime ?? 0).toLocaleString("en-IN"),
-                      d: `${d.counts.completed.toLocaleString("en-IN")} completed in period` },
-                    { k: "Treatments this week", v: (d.counts.treatmentsThisWeek ?? 0).toLocaleString("en-IN"),
-                      d: "completed, last 7 days" },
-                    { k: "Still to come", v: (d.counts.upcomingAll ?? 0).toLocaleString("en-IN"),
-                      d: "confirmed and awaiting, from now", hot: (d.counts.upcomingAll ?? 0) > 0 },
-                  ]} />
-
-                  <div className="grid gap-3 xl:grid-cols-2">
-                    <ChartCard title="Revenue by day" sub="All streams, as paid" hero={fmtINR(d.revenue.total)}>
-                      {d.daily.length > 1 ? <AreaChart pts={d.daily.map((x) => x.total)} labels={dailyLabels} label="Revenue" format={fmtCompactINR} /> : <Empty title="Pick a longer range" />}
-                    </ChartCard>
-                    <ChartCard title="Streams over time" sub="Consultations · treatments · products · packages · memberships">
-                      {bl.length > 1 ? <GBars cats={bl} series={[
-                        { n: "Consultations", v: bucketSeries(d.daily, 10, (x) => x.consultations) }, { n: "Treatments", v: bucketSeries(d.daily, 10, (x) => x.treatments) },
-                        { n: "Products", v: bucketSeries(d.daily, 10, (x) => x.products) }, { n: "Packages", v: bucketSeries(d.daily, 10, (x) => x.packages) }, { n: "Memberships", v: bucketSeries(d.daily, 10, (x) => x.memberships) },
-                      ]} /> : <Empty title="Pick a longer range" />}
-                    </ChartCard>
-                    <ChartCard title="Revenue mix" sub="Share by stream">
-                      <HBars rows={streams.map((s) => [s.label, s.revenue, `${d.revenue.total ? Math.round((s.revenue / d.revenue.total) * 100) : 0}% · ${fmtCompactINR(s.revenue)}`] as [string, number, string])} />
-                    </ChartCard>
-                    <ChartCard title="Monthly revenue" sub="Last 12 months, all centres in scope">
-                      {monthly.length > 1 ? <AreaChart pts={monthly.map((m) => Number((m as { totalRevenue?: number; revenue?: number }).totalRevenue ?? m.revenue) || 0)} labels={monthly.map((m) => String(m.month))} label="Monthly" format={fmtCompactINR} /> : <Empty title="Not enough history yet" />}
-                    </ChartCard>
-                    <ChartCard title="Revenue by centre" sub="Visits, packages and clinic sales — app orders have no centre">
-                      {d.revenueByCentre.length ? <HBars color="var(--color-c2)" rows={d.revenueByCentre.map((r) => [r.centre, r.revenue, `${r.bookings} bookings · ${fmtCompactINR(r.revenue)}`] as [string, number, string])} /> : <Empty title="No bookings" />}
-                    </ChartCard>
-                    <ChartCard title="Payment mix" sub="How the money came in">
-                      {d.paymentMix.length ? <HBars color="var(--color-c3)" rows={d.paymentMix.map((p) => [p.method, p.amount, fmtCompactINR(p.amount)] as [string, number, string])} /> : <Empty title="No payments" />}
-                      <div className="mt-3 grid gap-1.5 text-[12px]">
-                        <Row k="Outstanding (bookings + packages)" v={fmtINR(d.counts.outstanding)} />
-                        <Row k="Average ticket" v={fmtINR(d.counts.averageTicket)} />
-                        {financial && <Row k="Cancelled (catalogue value)" v={fmtINR(financial.overview.refundsLost)} />}
-                      </div>
-                    </ChartCard>
-                  </div>
-                </>
-              )}
-
-              {tab === 1 && (
-                <>
-                  <Stats items={[
-                    { k: "Bookings", v: d.counts.bookings, d: `${d.counts.upcoming} upcoming`, hot: true },
-                    { k: "Consultations", v: d.counts.consultations, d: `${Math.round((d.counts.consultations / Math.max(1, d.counts.bookings)) * 100)}% of bookings` },
-                    { k: "Treatments", v: d.counts.treatments, d: `${Math.round((d.counts.treatments / Math.max(1, d.counts.bookings)) * 100)}% of bookings` },
-                    { k: "Completed", v: d.counts.completed, d: `${pct(a.conversionRate)} conversion`, tone: "up" },
-                    { k: "No-show", v: `${d.counts.noShowRate}%`, d: `${d.counts.noShow} missed`, tone: d.counts.noShowRate > 8 ? "dn" : "up" },
-                    { k: "Cancelled", v: `${d.counts.cancellationRate}%`, d: `${d.counts.cancelled} cancelled`, tone: d.counts.cancellationRate > 10 ? "dn" : undefined },
-                  ]} />
-                  <div className="grid gap-3 xl:grid-cols-2">
-                    <ChartCard title="Consultations vs treatments" sub="Bookings over the period">
-                      {bl.length > 1 ? <GBars cats={bl} series={[{ n: "Consultations", v: consultTrend }, { n: "Treatments", v: treatTrend }]} /> : <Empty title="Pick a longer range" />}
-                    </ChartCard>
-                    <ChartCard title="Bookings per day" hero={String(d.counts.bookings)}>
-                      {d.daily.length > 1 ? <AreaChart pts={d.daily.map((x) => x.bookings)} labels={dailyLabels} label="Bookings" /> : <Empty title="Pick a longer range" />}
-                    </ChartCard>
-                    <ChartCard title="Outcome mix" sub={label}>
-                      <GBars cats={["Completed", "Upcoming", "Cancelled", "No-show"]} series={[{ n: "Bookings", v: [d.counts.completed, d.counts.upcoming, d.counts.cancelled, d.counts.noShow] }]} />
-                    </ChartCard>
-                    <ChartCard title="Where bookings come from" sub="App · reception · package · Zennara clinic">
-                      <HBars color="var(--color-c4)" rows={Object.entries(d.counts.bookingsBySource).map(([k, v]) => [k, v] as [string, number])} />
-                    </ChartCard>
-                    <ChartCard title="Busiest days" sub="Bookings by weekday">
-                      <HBars color="var(--color-c2)" rows={(appointments.peakDays ?? []).map((x) => [x.day, x.count] as [string, number])} />
-                    </ChartCard>
-                    <ChartCard title="Busiest hours" sub="Bookings by hour of day">
-                      <HBars color="var(--color-c3)" rows={(appointments.peakHours ?? []).filter((h) => h.count > 0).map((h) => [h.hour, h.count] as [string, number])} />
-                    </ChartCard>
-                    <Card className="p-4">
-                      <SecH t="Load & flow" />
-                      <div className="grid gap-2 text-[12.5px]">
-                        <Row k="Per day" v={String(appointments.averages?.perDay ?? 0)} />
-                        <Row k="Per week" v={String(appointments.averages?.perWeek ?? 0)} />
-                        <Row k="Per month" v={String(appointments.averages?.perMonth ?? 0)} />
-                        <Row k="Upcoming this week" v={String(appointments.upcomingThisWeek ?? 0)} />
-                        <Row k="Awaiting confirmation" v={String(d.counts.awaitingConfirmation)} />
-                        <Row k="Avg days between visits" v={String(appointments.avgTimeBetweenBookings ?? 0)} />
-                      </div>
-                    </Card>
-                    {!!(appointments as { noShowByService?: { service: string; count: number }[] }).noShowByService?.length && (
-                      <ChartCard title="No-shows by service">
-                        <HBars color="var(--color-err)" rows={((appointments as { noShowByService?: { service: string; count: number }[] }).noShowByService ?? []).slice(0, 8).map((x) => [x.service, x.count] as [string, number])} />
-                      </ChartCard>
-                    )}
-                  </div>
-                </>
-              )}
-
-              {tab === 2 && (
-                <>
-                  <Stats items={[
-                    { k: "Dermatologists", v: d.dermatologists.filter((x) => x.bookings > 0).length, d: `${d.dermatologists.length} on the roster`, hot: true },
-                    { k: "Top earner", v: d.dermatologists[0]?.revenue ? d.dermatologists[0].name.split(" ")[0] : "—", d: d.dermatologists[0] ? fmtCompactINR(d.dermatologists[0].revenue) : "" },
-                    { k: "Busiest", v: [...d.dermatologists].sort((x, y) => y.bookings - x.bookings)[0]?.name.split(" ")[0] ?? "—", d: `${[...d.dermatologists].sort((x, y) => y.bookings - x.bookings)[0]?.bookings ?? 0} bookings` },
-                    { k: "Best completion", v: `${Math.max(0, ...d.dermatologists.filter((x) => x.bookings >= 3).map((x) => x.completionRate))}%`, d: "min 3 bookings" },
-                    { k: "Avg rating", v: (() => { const r = d.dermatologists.filter((x) => x.avgRating); return r.length ? <RatingValue value={Number((r.reduce((n, x) => n + (x.avgRating ?? 0), 0) / r.length).toFixed(1))} /> : "—"; })(), d: "across rated visits" },
-                  ]} />
-                  <div className="grid gap-3 xl:grid-cols-2">
-                    <ChartCard title="Revenue by dermatologist" sub={label}>
-                      <HBars rows={d.dermatologists.filter((x) => x.revenue > 0).map((x) => [x.name, x.revenue, fmtCompactINR(x.revenue)] as [string, number, string])} />
-                    </ChartCard>
-                    <ChartCard title="Consultations vs treatments" sub="Per dermatologist">
-                      <GBars cats={d.dermatologists.filter((x) => x.bookings > 0).map((x) => x.name.split(" ")[0])} series={[{ n: "Consultations", v: d.dermatologists.filter((x) => x.bookings > 0).map((x) => x.consultations) }, { n: "Treatments", v: d.dermatologists.filter((x) => x.bookings > 0).map((x) => x.treatments) }]} />
-                    </ChartCard>
-                  </div>
-                  <div className="mt-3">
-                    <DataTable cols={["Dermatologist", "Level", "Bookings", "Consults", "Treatments", "Completed", "No-show", "Guests", "Rating", "Revenue", "Per booking"]}
-                      rows={d.dermatologists.map((x, i) => [
-                        <span key={x.doctorId} className="flex items-center gap-2"><span className={`grid h-6 w-6 place-items-center rounded-full text-[10px] font-bold ${i === 0 && x.revenue > 0 ? "bg-gold text-primary" : "bg-sage text-ink2"}`}>{i + 1}</span><B>{x.name}</B>{!x.onboarded && <Tag kind="info">Zenoti</Tag>}</span>,
-                        <Tag key={`${x.doctorId}l`} kind={!x.onboarded ? "info" : x.level === "Senior Dermatologist" ? "gold" : "mute"}>{x.level}</Tag>,
-                        x.bookings, x.consultations, x.treatments, `${x.completed} (${x.completionRate}%)`, x.noShow, x.patients, x.avgRating ? <RatingValue value={x.avgRating} /> : "—", <B key={`${x.doctorId}r`}>{fmtINR(x.revenue)}</B>, fmtINR(x.bookings ? Math.round(x.revenue / x.bookings) : 0),
-                      ])} />
-                  </div>
-                </>
-              )}
-
-              {tab === 3 && (
-                <>
-                  <Stats items={[
-                    { k: "Services booked", v: d.topServices.length, d: `${services?.summary?.totalServices ?? "—"} in catalogue`, hot: true },
-                    { k: "Top service", v: d.topServices[0]?.name ?? "—", d: d.topServices[0] ? `${d.topServices[0].bookings} bookings · ${fmtCompactINR(d.topServices[0].revenue)}` : "" },
-                    { k: "Revenue / service", v: fmtINR(services?.summary?.avgRevenuePerService), d: "average" },
-                    { k: "Categories", v: services?.categoryPerformance?.length ?? 0, d: "with bookings" },
-                  ]} />
-                  <div className="grid gap-3 xl:grid-cols-2">
-                    <ChartCard title="Top services by revenue" sub={label}>
-                      {d.topServices.length ? <HBars rows={d.topServices.slice(0, 10).map((x) => [x.name, x.revenue, `${x.bookings} · ${fmtCompactINR(x.revenue)}`] as [string, number, string])} /> : <Empty title="No services booked" />}
-                    </ChartCard>
-                    <ChartCard title="Top services by volume">
-                      {d.topServices.length ? <HBars color="var(--color-c2)" rows={[...d.topServices].sort((x, y) => y.bookings - x.bookings).slice(0, 10).map((x) => [x.name, x.bookings, x.kind] as [string, number, string])} /> : <Empty title="No services booked" />}
-                    </ChartCard>
-                    <ChartCard title="Category performance" sub={label}>
-                      {services?.categoryPerformance?.length ? <HBars color="var(--color-c3)" rows={services.categoryPerformance.slice(0, 10).map((c) => [c.category, c.revenue, fmtCompactINR(c.revenue)] as [string, number, string])} /> : <Empty title="No category data" />}
-                    </ChartCard>
-                    {!!services?.leastPerformingServices?.length && (
-                      <ChartCard title="Needs attention" sub="Least booked services in the catalogue">
-                        <HBars color="var(--color-err)" rows={(services.leastPerformingServices as { name: string; bookings?: number }[]).slice(0, 8).map((x) => [x.name, x.bookings ?? 0] as [string, number])} />
-                      </ChartCard>
-                    )}
-                    {!!services?.packageUtilization?.length && (
-                      <ChartCard title="Package utilisation" sub="Sessions used of sessions sold">
-                        <HBars color="var(--color-c4)" rows={services.packageUtilization.slice(0, 8).map((p2) => [p2.name, p2.used, `${p2.used}/${p2.total}`] as [string, number, string])} />
-                      </ChartCard>
-                    )}
-                  </div>
-                </>
-              )}
-
-              {tab === 4 && (
-                <>
-                  <Stats items={[
-                    { k: "Guests on file", v: d.counts.totalPatients.toLocaleString("en-IN"), hot: true, d: `${d.counts.newPatients} new in period` },
-                    { k: "New guests", v: d.counts.newPatients, d: patients ? `${pct(patients.overview.newPatientRatio)} of bookers` : "" },
-                    { k: "Retention", v: patients ? pct(patients.overview.retentionRate) : "—", d: patients ? `${patients.overview.returningPatients} returning` : "" },
-                    { k: "Zen members", v: d.counts.activeZen, d: `${d.counts.zenExpiring} expiring in 30d`, tone: d.counts.zenExpiring ? "dn" : undefined },
-                    { k: "Birthdays today", v: patients?.birthdaysToday?.length ?? 0, d: "send a wish from the guest page" },
-                    { k: "Inactive", v: patients?.inactivePatients?.count ?? 0, d: `no visit in ${patients?.inactivePatients?.threshold ?? 90}d` },
-                  ]} />
-                  <div className="grid gap-3 xl:grid-cols-2">
-                    <ChartCard title="New guests per month" hero={String(d.counts.newPatients)}>
-                      {acquisition.length > 1 ? <AreaChart pts={acquisition.map((m) => Number(m.count) || 0)} labels={acquisition.map((m) => String(m.month))} label="New guests" /> : <Empty title="Not enough history yet" />}
-                    </ChartCard>
-                    <ChartCard title="By home centre" sub="Registered guests">
-                      {sources.length ? <HBars color="var(--color-c2)" rows={sources.map((x) => [x.source || "Unknown", x.count, `${x.count} · ${pct(x.percentage)}`] as [string, number, string])} /> : <Empty title="No data" />}
-                    </ChartCard>
-                    {demographics && (
+    <StudioPage title="Analytics" wide intro={`Showing ${branchName}, ${label}. Every figure follows the period and centre chosen below.`}
+      sections={ANALYTICS_SECTIONS} active={active} onSection={onSection}
+      actions={
+        <div className="grid w-full gap-2">
+          <Segmented value={custom ? "custom" : range}
+            onChange={(v) => { if (v === "custom") { setCustom(custom ?? seed); } else { setCustom(null); setRange(v); } }}
+            options={[...METRIC_RANGES.map((r) => ({ value: r, label: r })), { value: "custom", label: "Custom" }]} />
+          {custom && (
+            <div className="grid grid-cols-2 gap-2">
+              <DateInput ariaLabel="From" value={custom.startDate} max={custom.endDate} onChange={(v) => v && setCustom({ ...custom, startDate: v })} />
+              <DateInput ariaLabel="To" value={custom.endDate} min={custom.startDate} onChange={(v) => v && setCustom({ ...custom, endDate: v })} />
+            </div>
+          )}
+          <Select value={branchId} onChange={setBranchId}
+            options={[{ value: "", label: "All centres" }, ...branches.map((b) => ({ value: b._id, label: b.name }))]} />
+          <StudioBtn kind="ghost" disabled={!q.data} onClick={exportAll}>Export CSV</StudioBtn>
+        </div>
+      }>
+      <StudioStale error={q.data ? q.error : null} onRetry={q.reload} />
+      <Section title={sec.title} blurb={sec.blurb}>
+        <div className="col-span-full grid gap-6">
+          {active === "staffSales" ? <StaffSalesPanel /> : (
+            <Async q={q} label="Crunching the numbers…" rows={8}>
+              {({ dash: d, financial, appointments, patients, services, inventory, monthly, acquisition, demographics, sources, top, orders, products, pkgStats }) => {
+                const a = appointments.overview;
+                const growth = d.revenue.growthPercent;
+                const dailyLabels = d.daily.map((x) => fmtDayKey(x.date.slice(0, 10), { day: "numeric", month: "short", year: "2-digit" }));
+                const streams = d.revenue.streams;
+                const consultTrend = bucketSeries(d.daily, 10, (x) => x.consultations);
+                const treatTrend = bucketSeries(d.daily, 10, (x) => x.treatments);
+                const bookingsTrend = bucketSeries(d.daily, 10, (x) => x.bookings);
+                void bookingsTrend;
+                const bl = bucketLabels(d.daily, 10);
+                const longer = <StudioEmpty title="Pick a longer range" />;
+                return (
+                  <>
+                    {active === "revenue" && (
                       <>
-                        <ChartCard title="Age groups" sub="Registered guests"><HBars rows={(demographics.ageGroups ?? []).map((g) => [(g as { range?: string; group?: string }).range ?? (g as { group?: string }).group ?? "—", g.count] as [string, number])} /></ChartCard>
-                        <ChartCard title="Gender" sub="Registered guests"><HBars color="var(--color-c3)" rows={Object.entries(demographics.gender ?? {}).filter(([k]) => k !== "total").map(([k, v]) => [k, Number(v)] as [string, number])} /></ChartCard>
+                        <StatGrid className={ANALYTICS_STATS} items={[
+                          { k: "Total revenue", v: fmtCompactINR(d.revenue.total), hot: true, d: growth === null ? (d.revenue.previousHasData === false ? "no comparable earlier period" : `prev ${fmtCompactINR(d.revenue.previous)}`) : `${growth >= 0 ? "▲" : "▼"} ${Math.abs(growth)}% vs previous ${d.period.days}d`, tone: growth === null ? undefined : growth >= 0 ? "up" : "dn" },
+                          ...streams.map((s) => ({
+                            k: s.label,
+                            v: s.key === "memberships" && s.revenue === 0 && s.count > 0 ? `${s.count} sold` : fmtCompactINR(s.revenue),
+                            d: s.unpriced
+                              ? `${s.count} sold · ${s.unpriced} without a recorded price`
+                              : `${s.count} · app ${fmtCompactINR(s.app)}${s.clinic ? ` · clinic ${fmtCompactINR(s.clinic)}` : ""}`,
+                          })),
+                        ]} />
+
+                        {/*
+                          Fixed reference points, deliberately separate from the
+                          revenue row above. These do not move with the date picker —
+                          "how many guests do we have" is always all of them, and a
+                          window-relative answer to that is just wrong.
+                        */}
+                        <StatGrid className={ANALYTICS_STATS} items={[
+                          { k: "Guests on file", v: d.counts.totalPatients.toLocaleString("en-IN"), hot: true,
+                            d: `${d.counts.newThisMonth ?? 0} joined this month` },
+                          { k: "New in this period", v: (d.counts.newPatients ?? 0).toLocaleString("en-IN"),
+                            d: d.period.isAllTime ? "all time" : `${d.period.days} days` },
+                          { k: "Returning guests", v: (d.counts.returningPatients ?? 0).toLocaleString("en-IN"),
+                            d: "seen more than once", tone: "up" },
+                          { k: "Appointments to date", v: (d.counts.appointmentsAllTime ?? 0).toLocaleString("en-IN"),
+                            d: `${d.counts.completed.toLocaleString("en-IN")} completed in period` },
+                          { k: "Treatments this week", v: (d.counts.treatmentsThisWeek ?? 0).toLocaleString("en-IN"),
+                            d: "completed, last 7 days" },
+                          { k: "Still to come", v: (d.counts.upcomingAll ?? 0).toLocaleString("en-IN"),
+                            d: "confirmed and awaiting, from now", hot: (d.counts.upcomingAll ?? 0) > 0 },
+                        ]} />
+
+                        <div className={CHART_GRID}>
+                          <ChartPanel full title="Revenue by day" sub="All streams, as paid" hero={fmtINR(d.revenue.total)}>
+                            {d.daily.length > 1 ? <AreaChart pts={d.daily.map((x) => x.total)} labels={dailyLabels} label="Revenue" format={fmtCompactINR} /> : longer}
+                          </ChartPanel>
+                          <ChartPanel full title="Streams over time" sub="Consultations · treatments · products · packages · memberships">
+                            {bl.length > 1 ? <GBars cats={bl} series={[
+                              { n: "Consultations", v: bucketSeries(d.daily, 10, (x) => x.consultations) }, { n: "Treatments", v: bucketSeries(d.daily, 10, (x) => x.treatments) },
+                              { n: "Products", v: bucketSeries(d.daily, 10, (x) => x.products) }, { n: "Packages", v: bucketSeries(d.daily, 10, (x) => x.packages) }, { n: "Memberships", v: bucketSeries(d.daily, 10, (x) => x.memberships) },
+                            ]} /> : longer}
+                          </ChartPanel>
+                          <ChartPanel title="Revenue mix" sub="Share by stream">
+                            <HBars rows={streams.map((s) => [s.label, s.revenue, `${d.revenue.total ? Math.round((s.revenue / d.revenue.total) * 100) : 0}% · ${fmtCompactINR(s.revenue)}`] as [string, number, string])} />
+                          </ChartPanel>
+                          <ChartPanel title="Revenue by centre" sub="Visits, packages and clinic sales — app orders have no centre">
+                            {d.revenueByCentre.length ? <HBars color="var(--color-c2)" rows={d.revenueByCentre.map((r) => [r.centre, r.revenue, `${r.bookings} bookings · ${fmtCompactINR(r.revenue)}`] as [string, number, string])} /> : <StudioEmpty title="No bookings" />}
+                          </ChartPanel>
+                          <ChartPanel full title="Monthly revenue" sub="Last 12 months, all centres in scope">
+                            {monthly.length > 1 ? <AreaChart pts={monthly.map((m) => Number((m as { totalRevenue?: number; revenue?: number }).totalRevenue ?? m.revenue) || 0)} labels={monthly.map((m) => String(m.month))} label="Monthly" format={fmtCompactINR} /> : <StudioEmpty title="Not enough history yet" />}
+                          </ChartPanel>
+                          <ChartPanel title="Payment mix" sub="How the money came in">
+                            {d.paymentMix.length ? <HBars color="var(--color-c3)" rows={d.paymentMix.map((p) => [p.method, p.amount, fmtCompactINR(p.amount)] as [string, number, string])} /> : <StudioEmpty title="No payments" />}
+                          </ChartPanel>
+                          <ChartPanel title="Money owed and averages" sub="Across the period">
+                            <KeyValue k="Outstanding (bookings + packages)" v={fmtINR(d.counts.outstanding)} />
+                            <KeyValue k="Average ticket" v={fmtINR(d.counts.averageTicket)} />
+                            {financial && <KeyValue k="Cancelled (catalogue value)" v={fmtINR(financial.overview.refundsLost)} />}
+                          </ChartPanel>
+                        </div>
                       </>
                     )}
-                    <Card className="p-4 xl:col-span-2">
-                      <SecH t="Top guests by spend" em={`· ${label}`} />
-                      {top.length === 0 ? <Empty title="No spend recorded" /> : <DataTable cols={["Guest", "Spend", "Visits"]} rows={top.map((t) => [<B key={t._id}>{t.fullName}</B>, fmtINR(t.totalSpent), t.visits ?? "—"])} />}
-                    </Card>
-                  </div>
-                </>
-              )}
 
-              {tab === 5 && (
-                <>
-                  <Stats items={[
-                    { k: "Product revenue", v: fmtCompactINR(streams.find((s) => s.key === "products")?.revenue ?? 0), hot: true, d: `app ${fmtCompactINR(streams.find((s) => s.key === "products")?.app ?? 0)} · clinic ${fmtCompactINR(streams.find((s) => s.key === "products")?.clinic ?? 0)}` },
-                    { k: "Orders", v: d.counts.orders, d: `${d.counts.paidOrders} paid · ${d.counts.openOrders} open` },
-                    { k: "Delivered", v: d.counts.ordersByStatus["Delivered"] ?? 0, d: `${d.counts.ordersByStatus["Cancelled"] ?? 0} cancelled · ${d.counts.ordersByStatus["Returned"] ?? 0} returned` },
-                    { k: "All-time orders", v: orders?.totalOrders ?? "—", d: orders ? fmtCompactINR(orders.totalRevenue) : "" },
-                    { k: "Products", v: products?.total ?? "—", d: products ? `${products.active} live · ${products.lowStock} low stock` : "" },
-                    { k: "Stock value", v: products ? fmtCompactINR(products.totalValue) : "—", d: products ? `${products.totalStock} units` : "" },
-                  ]} />
-                  <div className="grid gap-3 xl:grid-cols-2">
-                    <ChartCard title="Product revenue by day" hero={fmtINR(streams.find((s) => s.key === "products")?.app ?? 0)}>
-                      {d.daily.length > 1 ? <AreaChart pts={d.daily.map((x) => x.products)} labels={dailyLabels} label="Products" format={fmtCompactINR} /> : <Empty title="Pick a longer range" />}
-                    </ChartCard>
-                    <ChartCard title="Orders by status" sub={label}>
-                      {Object.keys(d.counts.ordersByStatus).length ? <HBars color="var(--color-c2)" rows={Object.entries(d.counts.ordersByStatus).map(([k, v]) => [k, v] as [string, number])} /> : <Empty title="No orders in this period" />}
-                    </ChartCard>
-                    {products?.byFormulation && Object.keys(products.byFormulation).length > 0 && (
-                      <ChartCard title="Stock value by formulation">
-                        <HBars color="var(--color-c3)" rows={Object.entries(products.byFormulation).map(([k, v]) => [k, v.value, `${v.count} products · ${v.stock} units`] as [string, number, string])} />
-                      </ChartCard>
-                    )}
-                    {orders && (
-                      <Card className="p-4"><SecH t="Order pipeline (all time)" />
-                        <div className="grid gap-2 text-[12.5px]">
-                          <Row k="New" v={String(orders.newOrders)} /><Row k="Confirmed" v={String(orders.confirmedOrders)} /><Row k="Processing" v={String(orders.processingOrders)} /><Row k="Shipped" v={String(orders.shippedOrders)} /><Row k="Delivered" v={String(orders.deliveredOrders)} /><Row k="Cancelled" v={String(orders.cancelledOrders)} />
+                    {active === "appointments" && (
+                      <>
+                        <StatGrid className={ANALYTICS_STATS} items={[
+                          { k: "Bookings", v: d.counts.bookings, d: `${d.counts.upcoming} upcoming`, hot: true },
+                          { k: "Consultations", v: d.counts.consultations, d: `${Math.round((d.counts.consultations / Math.max(1, d.counts.bookings)) * 100)}% of bookings` },
+                          { k: "Treatments", v: d.counts.treatments, d: `${Math.round((d.counts.treatments / Math.max(1, d.counts.bookings)) * 100)}% of bookings` },
+                          { k: "Completed", v: d.counts.completed, d: `${pct(a.conversionRate)} conversion`, tone: "up" },
+                          { k: "No-show", v: `${d.counts.noShowRate}%`, d: `${d.counts.noShow} missed`, tone: d.counts.noShowRate > 8 ? "dn" : "up" },
+                          { k: "Cancelled", v: `${d.counts.cancellationRate}%`, d: `${d.counts.cancelled} cancelled`, tone: d.counts.cancellationRate > 10 ? "dn" : undefined },
+                        ]} />
+                        <div className={CHART_GRID}>
+                          <ChartPanel full title="Consultations vs treatments" sub="Bookings over the period">
+                            {bl.length > 1 ? <GBars cats={bl} series={[{ n: "Consultations", v: consultTrend }, { n: "Treatments", v: treatTrend }]} /> : longer}
+                          </ChartPanel>
+                          <ChartPanel full title="Bookings per day" hero={String(d.counts.bookings)}>
+                            {d.daily.length > 1 ? <AreaChart pts={d.daily.map((x) => x.bookings)} labels={dailyLabels} label="Bookings" /> : longer}
+                          </ChartPanel>
+                          <ChartPanel title="Outcome mix" sub={label}>
+                            <GBars cats={["Completed", "Upcoming", "Cancelled", "No-show"]} series={[{ n: "Bookings", v: [d.counts.completed, d.counts.upcoming, d.counts.cancelled, d.counts.noShow] }]} />
+                          </ChartPanel>
+                          <ChartPanel title="Where bookings come from" sub="App · reception · package · Zennara clinic">
+                            <HBars color="var(--color-c4)" rows={Object.entries(d.counts.bookingsBySource).map(([k, v]) => [k, v] as [string, number])} />
+                          </ChartPanel>
+                          <ChartPanel title="Busiest days" sub="Bookings by weekday">
+                            <HBars color="var(--color-c2)" rows={(appointments.peakDays ?? []).map((x) => [x.day, x.count] as [string, number])} />
+                          </ChartPanel>
+                          <ChartPanel title="Busiest hours" sub="Bookings by hour of day">
+                            <HBars color="var(--color-c3)" rows={(appointments.peakHours ?? []).filter((h) => h.count > 0).map((h) => [h.hour, h.count] as [string, number])} />
+                          </ChartPanel>
+                          <ChartPanel title="Load & flow" sub="Averages over the period">
+                            <KeyValue k="Per day" v={String(appointments.averages?.perDay ?? 0)} />
+                            <KeyValue k="Per week" v={String(appointments.averages?.perWeek ?? 0)} />
+                            <KeyValue k="Per month" v={String(appointments.averages?.perMonth ?? 0)} />
+                            <KeyValue k="Upcoming this week" v={String(appointments.upcomingThisWeek ?? 0)} />
+                            <KeyValue k="Awaiting confirmation" v={String(d.counts.awaitingConfirmation)} />
+                            <KeyValue k="Avg days between visits" v={String(appointments.avgTimeBetweenBookings ?? 0)} />
+                          </ChartPanel>
+                          {!!(appointments as { noShowByService?: { service: string; count: number }[] }).noShowByService?.length && (
+                            <ChartPanel title="No-shows by service">
+                              <HBars color="var(--color-err)" rows={((appointments as { noShowByService?: { service: string; count: number }[] }).noShowByService ?? []).slice(0, 8).map((x) => [x.service, x.count] as [string, number])} />
+                            </ChartPanel>
+                          )}
                         </div>
-                      </Card>
+                      </>
                     )}
-                  </div>
-                </>
-              )}
 
-              {tab === 6 && (
-                <>
-                  <Stats items={[
-                    { k: "Package revenue", v: fmtCompactINR(streams.find((s) => s.key === "packages")?.revenue ?? 0), hot: true, d: `app ${fmtCompactINR(streams.find((s) => s.key === "packages")?.app ?? 0)} · clinic ${fmtCompactINR(streams.find((s) => s.key === "packages")?.clinic ?? 0)}` },
-                    { k: "Packages assigned", v: d.counts.packagesAssigned, d: `${d.counts.packagesPaid} paid · ${d.counts.packagesUnpaid} due` },
-                    { k: "Membership revenue", v: fmtCompactINR(streams.find((s) => s.key === "memberships")?.revenue ?? 0), d: d.counts.membershipsUnpriced ? `${d.counts.membershipsSold} sold · ${d.counts.membershipsUnpriced} unpriced` : `${d.counts.membershipsSold} sold` },
-                    { k: "Active Zen members", v: d.counts.activeZen, d: `${d.counts.zenExpiring} expiring in 30d`, tone: d.counts.zenExpiring ? "dn" : undefined },
-                    { k: "Active assignments", v: pkgStats?.statusCounts?.find((s) => s._id === "Active")?.count ?? "—", d: `${pkgStats?.statusCounts?.find((s) => s._id === "Completed")?.count ?? 0} completed` },
-                  ]} />
-                  <div className="grid gap-3 xl:grid-cols-2">
-                    <ChartCard title="Packages & memberships by day">
-                      {bl.length > 1 ? <GBars cats={bl} series={[{ n: "Packages", v: bucketSeries(d.daily, 10, (x) => x.packages) }, { n: "Memberships", v: bucketSeries(d.daily, 10, (x) => x.memberships) }]} /> : <Empty title="Pick a longer range" />}
-                    </ChartCard>
-                    {pkgStats?.statusCounts && (
-                      <ChartCard title="Assignments by status" sub="All time">
-                        <HBars color="var(--color-c2)" rows={pkgStats.statusCounts.map((s) => [s._id, s.count] as [string, number])} />
-                      </ChartCard>
-                    )}
-                    {pkgStats?.paymentStats && (
-                      <ChartCard title="Package payments" sub="Received vs due (all time)">
-                        <HBars color="var(--color-c3)" rows={pkgStats.paymentStats.map((s) => [s._id ? "Received" : "Due", s.totalAmount, `${s.count} · ${fmtCompactINR(s.totalAmount)}`] as [string, number, string])} />
-                      </ChartCard>
-                    )}
-                    {!!services?.packageUtilization?.length && (
-                      <ChartCard title="Package utilisation" sub="Sessions used of sessions sold">
-                        <HBars color="var(--color-c4)" rows={services.packageUtilization.slice(0, 10).map((p2) => [p2.name, p2.used, `${p2.used}/${p2.total} · ${pct(p2.utilizationRate)}`] as [string, number, string])} />
-                      </ChartCard>
-                    )}
-                    {!!d.counts.membershipsUnpriced && (
-                      <Card className="p-4"><SecH t="Memberships without a recorded price" />
-                        <div className="text-[12.5px] text-ink2">
-                          <B>{d.counts.membershipsUnpriced}</B> of {d.counts.membershipsSold} memberships in this period have no amount on record — Zennara clinic (Zenoti) memberships carry no price in the CRM feed, and desk grants made before amounts were captured have none either.
-                          They are counted here but contribute <B>₹0</B> to revenue rather than an invented figure. Open the guest and use <B>Record payment details</B> on their membership card to add what was charged.
+                    {active === "dermatologists" && (
+                      <>
+                        <StatGrid className={ANALYTICS_STATS} items={[
+                          { k: "Dermatologists", v: d.dermatologists.filter((x) => x.bookings > 0).length, d: `${d.dermatologists.length} on the roster`, hot: true },
+                          { k: "Top earner", v: d.dermatologists[0]?.revenue ? d.dermatologists[0].name.split(" ")[0] : "—", d: d.dermatologists[0] ? fmtCompactINR(d.dermatologists[0].revenue) : "" },
+                          { k: "Busiest", v: [...d.dermatologists].sort((x, y) => y.bookings - x.bookings)[0]?.name.split(" ")[0] ?? "—", d: `${[...d.dermatologists].sort((x, y) => y.bookings - x.bookings)[0]?.bookings ?? 0} bookings` },
+                          { k: "Best completion", v: `${Math.max(0, ...d.dermatologists.filter((x) => x.bookings >= 3).map((x) => x.completionRate))}%`, d: "min 3 bookings" },
+                          { k: "Avg rating", v: (() => { const r = d.dermatologists.filter((x) => x.avgRating); return r.length ? <RatingValue value={Number((r.reduce((n, x) => n + (x.avgRating ?? 0), 0) / r.length).toFixed(1))} /> : "—"; })(), d: "across rated visits" },
+                        ]} />
+                        <div className={CHART_GRID}>
+                          <ChartPanel title="Revenue by dermatologist" sub={label}>
+                            <HBars rows={d.dermatologists.filter((x) => x.revenue > 0).map((x) => [x.name, x.revenue, fmtCompactINR(x.revenue)] as [string, number, string])} />
+                          </ChartPanel>
+                          <ChartPanel title="Consultations vs treatments" sub="Per dermatologist">
+                            <GBars cats={d.dermatologists.filter((x) => x.bookings > 0).map((x) => x.name.split(" ")[0])} series={[{ n: "Consultations", v: d.dermatologists.filter((x) => x.bookings > 0).map((x) => x.consultations) }, { n: "Treatments", v: d.dermatologists.filter((x) => x.bookings > 0).map((x) => x.treatments) }]} />
+                          </ChartPanel>
                         </div>
-                      </Card>
+                        <StudioTable stickyFirst minWidth={1100}
+                          cols={["Dermatologist", "Level", { label: "Bookings", align: "right" }, { label: "Consults", align: "right" }, { label: "Treatments", align: "right" }, { label: "Completed", align: "right", nowrap: true }, { label: "No-show", align: "right" }, { label: "Guests", align: "right" }, "Rating", { label: "Revenue", align: "right", nowrap: true }, { label: "Per booking", align: "right", nowrap: true }]}
+                          rows={d.dermatologists.map((x, i) => [
+                            <span key={x.doctorId} className="flex items-center gap-2 whitespace-nowrap">
+                              <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-[12.5px] font-bold ${i === 0 && x.revenue > 0 ? "bg-primary text-white" : "bg-sage text-ink2"}`}>{i + 1}</span>
+                              <B>{x.name}</B>{!x.onboarded && <StatusTag kind="info">Zenoti</StatusTag>}
+                            </span>,
+                            <StatusTag key={`${x.doctorId}l`} kind={!x.onboarded ? "info" : x.level === "Senior Dermatologist" ? "primary" : "mute"}>{x.level}</StatusTag>,
+                            x.bookings, x.consultations, x.treatments, `${x.completed} (${x.completionRate}%)`, x.noShow, x.patients, x.avgRating ? <RatingValue value={x.avgRating} /> : "—", <B key={`${x.doctorId}r`}>{fmtINR(x.revenue)}</B>, fmtINR(x.bookings ? Math.round(x.revenue / x.bookings) : 0),
+                          ])} />
+                      </>
                     )}
-                    {patients?.membershipStatus && (
-                      <Card className="p-4"><SecH t="Membership base" />
-                        <div className="grid gap-2 text-[12.5px]">
-                          <Row k="Active" v={String(patients.membershipStatus.active)} /><Row k="Expired" v={String(patients.membershipStatus.expired)} /><Row k="Pending" v={String(patients.membershipStatus.pending)} />
-                        </div>
-                      </Card>
-                    )}
-                  </div>
-                </>
-              )}
 
-              {tab === 8 && <StaffSalesPanel />}
-              {tab === 7 && (
-                inventory ? (
-                  <>
-                    <Stats items={[
-                      { k: "Items tracked", v: inventory.summary?.totalItems ?? 0, hot: true },
-                      { k: "Stock value", v: fmtCompactINR(inventory.summary?.totalValue), d: `cost ${fmtCompactINR(inventory.summary?.totalCost)}` },
-                      { k: "Below re-order", v: inventory.summary?.lowStockCount ?? 0, tone: (inventory.summary?.lowStockCount ?? 0) ? "dn" : undefined },
-                      { k: "Out of stock", v: inventory.summary?.outOfStockCount ?? 0, tone: (inventory.summary?.outOfStockCount ?? 0) ? "dn" : undefined },
-                      { k: "Expiring in 30d", v: inventory.summary?.expiringIn30Days ?? 0, d: `${inventory.summary?.expired ?? 0} expired` },
-                    ]} />
-                    <div className="grid gap-3 xl:grid-cols-2">
-                      <Card className="p-4">
-                        <SecH t="Low-stock alerts" />
-                        {(inventory.lowStockAlerts ?? []).length === 0 ? <Empty title="Nothing below re-order level" /> : (
-                          <DataTable cols={["Item", "On hand", "Re-order"]} rows={(inventory.lowStockAlerts ?? []).slice(0, 15).map((i) => [<B key={i._id}>{i.inventoryName}</B>, i.qohAllBatches ?? 0, i.reOrderLevel ?? 0])} />)}
-                      </Card>
-                      {!!(inventory as { fastMovingProducts?: { name?: string; inventoryName?: string; consumed?: number; quantity?: number }[] }).fastMovingProducts?.length && (
-                        <ChartCard title="Fast-moving stock">
-                          <HBars color="var(--color-c2)" rows={((inventory as { fastMovingProducts?: { name?: string; inventoryName?: string; consumed?: number; quantity?: number }[] }).fastMovingProducts ?? []).slice(0, 10).map((x) => [x.name ?? x.inventoryName ?? "—", x.consumed ?? x.quantity ?? 0] as [string, number])} />
-                        </ChartCard>
-                      )}
-                    </div>
+                    {active === "services" && (
+                      <>
+                        <StatGrid className={ANALYTICS_STATS} items={[
+                          { k: "Services booked", v: d.topServices.length, d: `${services?.summary?.totalServices ?? "—"} in catalogue`, hot: true },
+                          { k: "Top service", v: d.topServices[0]?.name ?? "—", d: d.topServices[0] ? `${d.topServices[0].bookings} bookings · ${fmtCompactINR(d.topServices[0].revenue)}` : "" },
+                          { k: "Revenue / service", v: fmtINR(services?.summary?.avgRevenuePerService), d: "average" },
+                          { k: "Categories", v: services?.categoryPerformance?.length ?? 0, d: "with bookings" },
+                        ]} />
+                        <div className={CHART_GRID}>
+                          <ChartPanel title="Top services by revenue" sub={label}>
+                            {d.topServices.length ? <HBars rows={d.topServices.slice(0, 10).map((x) => [x.name, x.revenue, `${x.bookings} · ${fmtCompactINR(x.revenue)}`] as [string, number, string])} /> : <StudioEmpty title="No services booked" />}
+                          </ChartPanel>
+                          <ChartPanel title="Top services by volume">
+                            {d.topServices.length ? <HBars color="var(--color-c2)" rows={[...d.topServices].sort((x, y) => y.bookings - x.bookings).slice(0, 10).map((x) => [x.name, x.bookings, x.kind] as [string, number, string])} /> : <StudioEmpty title="No services booked" />}
+                          </ChartPanel>
+                          <ChartPanel title="Category performance" sub={label}>
+                            {services?.categoryPerformance?.length ? <HBars color="var(--color-c3)" rows={services.categoryPerformance.slice(0, 10).map((c) => [c.category, c.revenue, fmtCompactINR(c.revenue)] as [string, number, string])} /> : <StudioEmpty title="No category data" />}
+                          </ChartPanel>
+                          {!!services?.leastPerformingServices?.length && (
+                            <ChartPanel title="Needs attention" sub="Least booked services in the catalogue">
+                              <HBars color="var(--color-err)" rows={(services.leastPerformingServices as { name: string; bookings?: number }[]).slice(0, 8).map((x) => [x.name, x.bookings ?? 0] as [string, number])} />
+                            </ChartPanel>
+                          )}
+                          {!!services?.packageUtilization?.length && (
+                            <ChartPanel title="Package utilisation" sub="Sessions used of sessions sold">
+                              <HBars color="var(--color-c4)" rows={services.packageUtilization.slice(0, 8).map((p2) => [p2.name, p2.used, `${p2.used}/${p2.total}`] as [string, number, string])} />
+                            </ChartPanel>
+                          )}
+                        </div>
+                      </>
+                    )}
+
+                    {active === "guests" && (
+                      <>
+                        <StatGrid className={ANALYTICS_STATS} items={[
+                          { k: "Guests on file", v: d.counts.totalPatients.toLocaleString("en-IN"), hot: true, d: `${d.counts.newPatients} new in period` },
+                          { k: "New guests", v: d.counts.newPatients, d: patients ? `${pct(patients.overview.newPatientRatio)} of bookers` : "" },
+                          { k: "Retention", v: patients ? pct(patients.overview.retentionRate) : "—", d: patients ? `${patients.overview.returningPatients} returning` : "" },
+                          { k: "Zen members", v: d.counts.activeZen, d: `${d.counts.zenExpiring} expiring in 30d`, tone: d.counts.zenExpiring ? "dn" : undefined },
+                          { k: "Birthdays today", v: patients?.birthdaysToday?.length ?? 0, d: "send a wish from the guest page" },
+                          { k: "Inactive", v: patients?.inactivePatients?.count ?? 0, d: `no visit in ${patients?.inactivePatients?.threshold ?? 90}d` },
+                        ]} />
+                        <div className={CHART_GRID}>
+                          <ChartPanel full title="New guests per month" hero={String(d.counts.newPatients)}>
+                            {acquisition.length > 1 ? <AreaChart pts={acquisition.map((m) => Number(m.count) || 0)} labels={acquisition.map((m) => String(m.month))} label="New guests" /> : <StudioEmpty title="Not enough history yet" />}
+                          </ChartPanel>
+                          <ChartPanel title="By home centre" sub="Registered guests">
+                            {sources.length ? <HBars color="var(--color-c2)" rows={sources.map((x) => [x.source || "Unknown", x.count, `${x.count} · ${pct(x.percentage)}`] as [string, number, string])} /> : <StudioEmpty title="No data" />}
+                          </ChartPanel>
+                          {demographics && (
+                            <>
+                              <ChartPanel title="Age groups" sub="Registered guests"><HBars rows={(demographics.ageGroups ?? []).map((g) => [(g as { range?: string; group?: string }).range ?? (g as { group?: string }).group ?? "—", g.count] as [string, number])} /></ChartPanel>
+                              <ChartPanel title="Gender" sub="Registered guests"><HBars color="var(--color-c3)" rows={Object.entries(demographics.gender ?? {}).filter(([k]) => k !== "total").map(([k, v]) => [k, Number(v)] as [string, number])} /></ChartPanel>
+                            </>
+                          )}
+                          <ChartPanel full title="Top guests by spend" sub={label}>
+                            {top.length === 0 ? <StudioEmpty title="No spend recorded" /> : (
+                              <StudioTable minWidth={420} cols={["Guest", { label: "Spend", align: "right", nowrap: true }, { label: "Visits", align: "right" }]}
+                                rows={top.map((t) => [<B key={t._id}>{t.fullName}</B>, fmtINR(t.totalSpent), t.visits ?? "—"])} />
+                            )}
+                          </ChartPanel>
+                        </div>
+                      </>
+                    )}
+
+                    {active === "products" && (
+                      <>
+                        <StatGrid className={ANALYTICS_STATS} items={[
+                          { k: "Product revenue", v: fmtCompactINR(streams.find((s) => s.key === "products")?.revenue ?? 0), hot: true, d: `app ${fmtCompactINR(streams.find((s) => s.key === "products")?.app ?? 0)} · clinic ${fmtCompactINR(streams.find((s) => s.key === "products")?.clinic ?? 0)}` },
+                          { k: "Orders", v: d.counts.orders, d: `${d.counts.paidOrders} paid · ${d.counts.openOrders} open` },
+                          { k: "Delivered", v: d.counts.ordersByStatus["Delivered"] ?? 0, d: `${d.counts.ordersByStatus["Cancelled"] ?? 0} cancelled · ${d.counts.ordersByStatus["Returned"] ?? 0} returned` },
+                          { k: "All-time orders", v: orders?.totalOrders ?? "—", d: orders ? fmtCompactINR(orders.totalRevenue) : "" },
+                          { k: "Products", v: products?.total ?? "—", d: products ? `${products.active} live · ${products.lowStock} low stock` : "" },
+                          { k: "Stock value", v: products ? fmtCompactINR(products.totalValue) : "—", d: products ? `${products.totalStock} units` : "" },
+                        ]} />
+                        <div className={CHART_GRID}>
+                          <ChartPanel full title="Product revenue by day" hero={fmtINR(streams.find((s) => s.key === "products")?.app ?? 0)}>
+                            {d.daily.length > 1 ? <AreaChart pts={d.daily.map((x) => x.products)} labels={dailyLabels} label="Products" format={fmtCompactINR} /> : longer}
+                          </ChartPanel>
+                          <ChartPanel title="Orders by status" sub={label}>
+                            {Object.keys(d.counts.ordersByStatus).length ? <HBars color="var(--color-c2)" rows={Object.entries(d.counts.ordersByStatus).map(([k, v]) => [k, v] as [string, number])} /> : <StudioEmpty title="No orders in this period" />}
+                          </ChartPanel>
+                          {products?.byFormulation && Object.keys(products.byFormulation).length > 0 && (
+                            <ChartPanel title="Stock value by formulation">
+                              <HBars color="var(--color-c3)" rows={Object.entries(products.byFormulation).map(([k, v]) => [k, v.value, `${v.count} products · ${v.stock} units`] as [string, number, string])} />
+                            </ChartPanel>
+                          )}
+                          {orders && (
+                            <ChartPanel title="Order pipeline" sub="All time">
+                              <KeyValue k="New" v={String(orders.newOrders)} /><KeyValue k="Confirmed" v={String(orders.confirmedOrders)} /><KeyValue k="Processing" v={String(orders.processingOrders)} /><KeyValue k="Shipped" v={String(orders.shippedOrders)} /><KeyValue k="Delivered" v={String(orders.deliveredOrders)} /><KeyValue k="Cancelled" v={String(orders.cancelledOrders)} />
+                            </ChartPanel>
+                          )}
+                        </div>
+                      </>
+                    )}
+
+                    {active === "packages" && (
+                      <>
+                        <StatGrid className={ANALYTICS_STATS} items={[
+                          { k: "Package revenue", v: fmtCompactINR(streams.find((s) => s.key === "packages")?.revenue ?? 0), hot: true, d: `app ${fmtCompactINR(streams.find((s) => s.key === "packages")?.app ?? 0)} · clinic ${fmtCompactINR(streams.find((s) => s.key === "packages")?.clinic ?? 0)}` },
+                          { k: "Packages assigned", v: d.counts.packagesAssigned, d: `${d.counts.packagesPaid} paid · ${d.counts.packagesUnpaid} due` },
+                          { k: "Membership revenue", v: fmtCompactINR(streams.find((s) => s.key === "memberships")?.revenue ?? 0), d: d.counts.membershipsUnpriced ? `${d.counts.membershipsSold} sold · ${d.counts.membershipsUnpriced} unpriced` : `${d.counts.membershipsSold} sold` },
+                          { k: "Active Zen members", v: d.counts.activeZen, d: `${d.counts.zenExpiring} expiring in 30d`, tone: d.counts.zenExpiring ? "dn" : undefined },
+                          { k: "Active assignments", v: pkgStats?.statusCounts?.find((s) => s._id === "Active")?.count ?? "—", d: `${pkgStats?.statusCounts?.find((s) => s._id === "Completed")?.count ?? 0} completed` },
+                        ]} />
+                        {!!d.counts.membershipsUnpriced && (
+                          <Note kind="warn">
+                            <B>{d.counts.membershipsUnpriced}</B> of {d.counts.membershipsSold} memberships in this period have no amount on record — Zennara clinic (Zenoti) memberships carry no price in the CRM feed, and desk grants made before amounts were captured have none either.
+                            They are counted here but contribute <B>₹0</B> to revenue rather than an invented figure. Open the guest and use <B>Record payment details</B> on their membership card to add what was charged.
+                          </Note>
+                        )}
+                        <div className={CHART_GRID}>
+                          <ChartPanel full title="Packages & memberships by day">
+                            {bl.length > 1 ? <GBars cats={bl} series={[{ n: "Packages", v: bucketSeries(d.daily, 10, (x) => x.packages) }, { n: "Memberships", v: bucketSeries(d.daily, 10, (x) => x.memberships) }]} /> : longer}
+                          </ChartPanel>
+                          {pkgStats?.statusCounts && (
+                            <ChartPanel title="Assignments by status" sub="All time">
+                              <HBars color="var(--color-c2)" rows={pkgStats.statusCounts.map((s) => [s._id, s.count] as [string, number])} />
+                            </ChartPanel>
+                          )}
+                          {pkgStats?.paymentStats && (
+                            <ChartPanel title="Package payments" sub="Received vs due (all time)">
+                              <HBars color="var(--color-c3)" rows={pkgStats.paymentStats.map((s) => [s._id ? "Received" : "Due", s.totalAmount, `${s.count} · ${fmtCompactINR(s.totalAmount)}`] as [string, number, string])} />
+                            </ChartPanel>
+                          )}
+                          {!!services?.packageUtilization?.length && (
+                            <ChartPanel title="Package utilisation" sub="Sessions used of sessions sold">
+                              <HBars color="var(--color-c4)" rows={services.packageUtilization.slice(0, 10).map((p2) => [p2.name, p2.used, `${p2.used}/${p2.total} · ${pct(p2.utilizationRate)}`] as [string, number, string])} />
+                            </ChartPanel>
+                          )}
+                          {patients?.membershipStatus && (
+                            <ChartPanel title="Membership base" sub="Every Zen membership on record">
+                              <KeyValue k="Active" v={String(patients.membershipStatus.active)} /><KeyValue k="Expired" v={String(patients.membershipStatus.expired)} /><KeyValue k="Pending" v={String(patients.membershipStatus.pending)} />
+                            </ChartPanel>
+                          )}
+                        </div>
+                      </>
+                    )}
+
+                    {active === "stock" && (
+                      inventory ? (
+                        <>
+                          <StatGrid className={ANALYTICS_STATS} items={[
+                            { k: "Items tracked", v: inventory.summary?.totalItems ?? 0, hot: true },
+                            { k: "Stock value", v: fmtCompactINR(inventory.summary?.totalValue), d: `cost ${fmtCompactINR(inventory.summary?.totalCost)}` },
+                            { k: "Below re-order", v: inventory.summary?.lowStockCount ?? 0, tone: (inventory.summary?.lowStockCount ?? 0) ? "dn" : undefined },
+                            { k: "Out of stock", v: inventory.summary?.outOfStockCount ?? 0, tone: (inventory.summary?.outOfStockCount ?? 0) ? "dn" : undefined },
+                            { k: "Expiring in 30d", v: inventory.summary?.expiringIn30Days ?? 0, d: `${inventory.summary?.expired ?? 0} expired` },
+                          ]} />
+                          <div className={CHART_GRID}>
+                            <ChartPanel title="Low-stock alerts" sub="Below the re-order level">
+                              {(inventory.lowStockAlerts ?? []).length === 0 ? <StudioEmpty title="Nothing below re-order level" /> : (
+                                <StudioTable minWidth={360} cols={["Item", { label: "On hand", align: "right" }, { label: "Re-order", align: "right" }]}
+                                  rows={(inventory.lowStockAlerts ?? []).slice(0, 15).map((i) => [<B key={i._id}>{i.inventoryName}</B>, i.qohAllBatches ?? 0, i.reOrderLevel ?? 0])} />)}
+                            </ChartPanel>
+                            {!!(inventory as { fastMovingProducts?: { name?: string; inventoryName?: string; consumed?: number; quantity?: number }[] }).fastMovingProducts?.length && (
+                              <ChartPanel title="Fast-moving stock">
+                                <HBars color="var(--color-c2)" rows={((inventory as { fastMovingProducts?: { name?: string; inventoryName?: string; consumed?: number; quantity?: number }[] }).fastMovingProducts ?? []).slice(0, 10).map((x) => [x.name ?? x.inventoryName ?? "—", x.consumed ?? x.quantity ?? 0] as [string, number])} />
+                              </ChartPanel>
+                            )}
+                          </div>
+                        </>
+                      ) : <StudioEmpty title="Stock analytics unavailable" hint="The inventory analytics endpoint did not respond." />
+                    )}
                   </>
-                ) : <Empty title="Stock analytics unavailable" hint="The inventory analytics endpoint did not respond." />
-              )}
-            </>
-          );
-        }}
-      </Async>
-    </Page>
+                );
+              }}
+            </Async>
+          )}
+        </div>
+      </Section>
+    </StudioPage>
   );
 }
-
-const Row = ({ k, v }: { k: string; v: string }) => (
-  <div className="flex items-center justify-between border-b border-border pb-1.5 last:border-0">
-    <span className="text-ink3">{k}</span><b className="font-semibold tabular-nums">{v}</b>
-  </div>
-);
 
 /* ================= STAFF & ROLES ================= */
 type StaffRow = Admin & {
@@ -1026,8 +1172,6 @@ export function Roles() {
   const { can, isSuperAdmin } = useStore();
   const canViewStaff = can("staff.view");
   const canViewRoles = can("roles.view");
-  // Land on whichever tab the account can actually see.
-  const [tab, setTab] = useState(canViewStaff ? 0 : 1);
 
   const rolesQ = useApi(() => (canViewRoles || canViewStaff ? api.roles.list() : Promise.resolve([] as Role[])), []);
   const roleCount = rolesQ.data?.length;
@@ -1038,25 +1182,27 @@ export function Roles() {
    * grantable through a custom role someone assembles later. The server
    * enforces the same rule.
    */
-  const panels: { label: string; count?: number | string; render: () => ReactNode }[] = [];
-  if (canViewStaff) panels.push({ label: "Staff", render: () => <StaffTab roles={rolesQ.data ?? []} /> });
-  if (canViewRoles) panels.push({ label: "Roles & permissions", count: roleCount, render: () => <RolesManager /> });
-  if (isSuperAdmin) panels.push({ label: "Sign-in security", render: () => <SignInSecurityTab /> });
+  const sections: StudioSection[] = [];
+  if (canViewStaff) sections.push({ id: "staff", title: "Staff" });
+  if (canViewRoles) sections.push({ id: "roles", title: "Roles & permissions", count: roleCount });
+  if (isSuperAdmin) sections.push({ id: "security", title: "Sign-in security" });
 
-  const showTabs = panels.length > 1;
-  const active = Math.min(tab, panels.length - 1);
+  // Lands on whichever section the account can actually see.
+  const [active, setActive] = useStudioSection("roles", sections);
 
   return (
-    <Page title="Staff & roles" sub="Who signs into the panel, and exactly what each person can do">
-      {showTabs && <Tabs items={panels.map((p) => [p.label, p.count] as [string, (number | string)?])} active={active} onChange={setTab} />}
-      {panels[active]?.render() ?? null}
-    </Page>
+    <StudioPage title="Staff & roles" intro="Who signs into the panel, and exactly what each person can do."
+      sections={sections} active={active} onSection={setActive}>
+      {active === "staff" && canViewStaff && <StaffTab roles={rolesQ.data ?? []} />}
+      {active === "roles" && canViewRoles && <RolesManager />}
+      {active === "security" && isSuperAdmin && <SignInSecurityTab />}
+    </StudioPage>
   );
 }
 
 function StaffTab({ roles }: { roles: Role[] }) {
   // Staff are posted to clinics; stock locations have no roster.
-  const { toast, audit, canManageStaff, admin, can, clinics: branches } = useStore();
+  const { toast, audit, canManageStaff, admin, clinics: branches } = useStore();
   const [invOpen, setInvOpen] = useState(false);
   const [sel, setSel] = useState<StaffRow | null>(null);
   const [del, setDel] = useState<StaffRow | null>(null);
@@ -1070,98 +1216,121 @@ function StaffTab({ roles }: { roles: Role[] }) {
   const stats = q.data?.stats as { total?: number; active?: number; byRole?: Record<string, number> } | undefined;
   const catalog = useCatalog();
   const roleName = (id?: string | null) => roles.find((r) => r._id === id)?.name ?? null;
-  // Doctor profiles, for linking a `doctor` login to the profile it edits.
+  const branchName = (id?: string | null) => branches.find((b) => b._id === id)?.name ?? null;
+  // Dermatologist profiles, for linking a `doctor` login to the profile it edits.
   const doctors = useApi(() => api.doctors.list({ includeInactive: "true" }).then((r) => r.data ?? []), []);
   const doctorOptions = ["— not linked —", ...(doctors.data ?? []).map((d) => `${d.name} (${d.email || "no email"})`)];
   const doctorByLabel = (label: string) => (doctors.data ?? []).find((d) => `${d.name} (${d.email || "no email"})` === label)?._id ?? null;
   const doctorLabel = (id?: string | null) => { const d = (doctors.data ?? []).find((x) => x._id === id); return d ? `${d.name} (${d.email || "no email"})` : "— not linked —"; };
 
   const ROLES: AdminRole[] = ["super_admin", "staff", "doctor", "therapist"];
+  const panelOf = (s: StaffRow) => (s.role === "doctor" ? "Dermatologist panel" : s.role === "therapist" ? "Floor panel" : "Admin panel");
+  const centresOf = (s: StaffRow) => {
+    const names = (s.assignments ?? []).map((a) => branchName(a.branchId)).filter(Boolean) as string[];
+    return names.length ? Array.from(new Set(names)).join(", ") : "—";
+  };
+
+  const save = async () => {
+    if (!sel) return;
+    try {
+      await api.staff.update(sel._id, {
+        name: sel.name,
+        jobTitle: sel.jobTitle ?? null,
+        assignments: sel.assignments ?? [],
+        doctorId: sel.role === "doctor" ? (sel.doctorId ?? null) : null,
+        ...(sel.role === "staff" ? { customRoleId: sel.customRoleId ?? null, permissions: sel.permissions ?? [] } : {}),
+      });
+      audit("SETTINGS_UPDATED", `Staff ${sel.email} updated`, { staffId: sel._id });
+      toast("Staff account updated"); q.reload(); setSel(null);
+    } catch (e) { toast((e as Error).message); }
+  };
 
   return (
-    <>
-      {canManageStaff && <div className="mb-3 flex justify-end"><Btn onClick={() => setInvOpen(true)}>+ Add staff</Btn></div>}
-      <Hint id="roles-live" steps={[
+    <Section title="Staff" blurb="Every panel account — super admins, staff, dermatologists and therapists."
+      right={canManageStaff ? <StudioBtn onClick={() => setInvOpen(true)}>Add staff member</StudioBtn> : undefined}>
+      <StudioHint id="roles-live" steps={[
         "Every panel account lives here — super admins, staff, dermatologists and therapists.",
-        "A Staff account gets a custom role (a bundle of permissions) — build roles on the Roles & permissions tab.",
+        "A Staff account gets a custom role (a bundle of permissions) — build roles under Roles & permissions.",
         "Super admins hold every permission; dermatologists and therapists sign into their own panels.",
         "Deactivating blocks sign-in immediately but keeps every audit entry that person created.",
       ]} />
 
       {!canManageStaff && (
-        <Note kind="crit">You can see the team, but only someone with the “manage staff” permission can add, change or remove accounts.</Note>
+        <Note kind="warn">You can see the team, but only someone with the “manage staff” permission can add, change or remove accounts.</Note>
       )}
 
       {stats && (
-        <Stats items={[
+        <StatGrid items={[
           { k: "Staff accounts", v: stats.total ?? rows.length },
           { k: "Active", v: stats.active ?? rows.filter((r) => r.isActive).length },
           ...ROLES.slice(0, 4).map((r) => ({ k: ROLE_LABEL[r], v: stats.byRole?.[r] ?? rows.filter((x) => x.role === r).length })),
         ]} />
       )}
 
-      <div className="mb-3">
-        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name or email…"
-          className="w-full max-w-[380px] rounded-(--radius-btn) border border-border bg-surface px-3.5 py-2 text-[13px] outline-none focus:border-gold-dark" />
+      <SearchInput value={search} onChange={setSearch} placeholder="Search by name or email…" className="col-span-full max-w-[420px]" />
+
+      <div className="col-span-full">
+        <StudioStale error={q.data ? q.error : null} onRetry={q.reload} />
+        <Async q={q} label="Loading staff…" rows={5}>
+          {() => rows.length === 0 ? (
+            <StudioEmpty title="No staff accounts" hint="Add the people who need to sign into the panel."
+              action={canManageStaff ? <StudioBtn onClick={() => setInvOpen(true)}>Add staff member</StudioBtn> : undefined} />
+          ) : (
+            <StudioTable minWidth={900} stickyFirst
+              cols={["Name", "Email", "Role", "Centres", { label: "Sign-in", nowrap: true }, { label: "Last sign-in", nowrap: true }, "Status"]}
+              onRow={(i) => setSel(rows[i])}
+              rows={rows.map((s) => [
+                <span key={s._id} className="flex items-center gap-3">
+                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-secondary text-[12.5px] font-bold text-white">
+                    {initials(s.name || s.email)}
+                  </span>
+                  <CellStack primary={s.name || s.email.split("@")[0]} secondary={s.jobTitle || undefined} />
+                </span>,
+                <span key={`${s._id}e`} className="break-all">{s.email}</span>,
+                <span key={`${s._id}r`} className="block">
+                  {s.role === "staff"
+                    ? (roleName(s.customRoleId) ? <RoleChip role={{ name: roleName(s.customRoleId)!, color: roles.find((r) => r._id === s.customRoleId)?.color }} /> : <StatusTag kind="warn">no role</StatusTag>)
+                    : <StatusTag kind={s.role === "super_admin" ? "primary" : "info"}>{ROLE_LABEL[s.role]}</StatusTag>}
+                  <span className="mt-1 block text-[12.5px] leading-5 text-ink3">{panelOf(s)}</span>
+                </span>,
+                centresOf(s),
+                <StatusTag key={`${s._id}m`} kind={s.hasPassword ? "ok" : "info"}>{s.hasPassword ? "password" : "code"}</StatusTag>,
+                s.lastLogin ? fmtWhen(s.lastLogin) : "Never",
+                s.terminatedAt
+                  ? <StatusTag key={`${s._id}s`} kind="mute">Left {fmtWhen(s.terminatedAt)}</StatusTag>
+                  : !s.isActive
+                  ? <StatusTag key={`${s._id}s`} kind="mute">Deactivated</StatusTag>
+                  : s.canSignIn === false
+                    ? <StatusTag key={`${s._id}s`} kind="warn">Not on allow-list</StatusTag>
+                    : <StatusTag key={`${s._id}s`} kind="ok">Active</StatusTag>,
+              ])} />
+          )}
+        </Async>
       </div>
 
-      <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
-      <Async q={q} label="Loading staff…" rows={5}>
-        {() => rows.length === 0 ? (
-          <Empty title="No staff accounts" hint="Add the people who need to sign into the panel."
-            action={canManageStaff ? <Btn onClick={() => setInvOpen(true)}>+ Add staff</Btn> : undefined} />
-        ) : (
-          <DataTable cols={["Name", "Email", "Job", "Role", "Panel", "Sign-in", "Last sign-in", "Status"]}
-            onRow={(i) => setSel(rows[i])}
-            rows={rows.map((s) => [
-              <span key={s._id} className="flex items-center gap-2">
-                <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-secondary text-[9px] font-bold text-white">
-                  {initials(s.name || s.email)}
-                </span>
-                <B>{s.name || s.email.split("@")[0]}</B>
-              </span>,
-              <span key={`${s._id}e`} className="text-[11.5px]">{s.email}</span>,
-              <span key={`${s._id}j`} className="text-[11.5px] text-ink2">{s.jobTitle || "—"}</span>,
-              s.role === "staff"
-                ? (roleName(s.customRoleId) ? <RoleChip key={`${s._id}r`} role={{ name: roleName(s.customRoleId)!, color: roles.find((r) => r._id === s.customRoleId)?.color }} /> : <Tag key={`${s._id}r`} kind="warn">no role</Tag>)
-                : <Tag key={`${s._id}r`} kind={s.role === "super_admin" ? "gold" : "info"}>{ROLE_LABEL[s.role]}</Tag>,
-              s.role === "doctor" ? "Dermatologist panel" : s.role === "therapist" ? "Floor panel" : "Admin panel",
-              <Tag key={`${s._id}m`} kind={s.hasPassword ? "ok" : "info"}>{s.hasPassword ? "password" : "code"}</Tag>,
-              s.lastLogin ? fmtWhen(s.lastLogin) : "Never",
-              s.terminatedAt
-                ? <Tag key={`${s._id}s`} kind="mute">Left {fmtWhen(s.terminatedAt)}</Tag>
-                : !s.isActive
-                ? <Tag key={`${s._id}s`} kind="mute">Deactivated</Tag>
-                : s.canSignIn === false
-                  ? <Tag key={`${s._id}s`} kind="warn">Not on allow-list</Tag>
-                  : <Tag key={`${s._id}s`} kind="ok">Active</Tag>,
-            ])} />
-        )}
-      </Async>
-
-      <Drawer open={!!sel} onClose={() => setSel(null)} title={sel?.name || sel?.email || ""}>
+      <StudioSheet open={!!sel} onClose={() => setSel(null)} title={sel?.name || sel?.email || ""} width={640}
+        sub={sel ? `${sel.email} · ${ROLE_LABEL[sel.role]} · ${sel.isActive ? "active" : "deactivated"} · ${sel.lastLogin ? `last signed in ${fmtDateFull(sel.lastLogin)}` : "has never signed in"}` : undefined}
+        footer={sel && canManageStaff ? <>
+          <StudioBtn kind="ghost" onClick={() => setSel(null)}>Cancel</StudioBtn>
+          <StudioBtn onClick={save}>Save changes</StudioBtn>
+        </> : undefined}>
         {sel && (
-          <div className="grid gap-3">
-            <div className="rounded-xl bg-ivory px-3.5 py-2.5 text-[12.5px] text-ink2">
-              {sel.email}<br />
-              {ROLE_LABEL[sel.role]} · {sel.isActive ? "active" : "deactivated"}<br />
-              {sel.lastLogin ? `Last signed in ${fmtDateFull(sel.lastLogin)}` : "Has never signed in"}
-            </div>
-
+          <div className="grid gap-6">
             {canManageStaff ? (
               <SignInControls accountId={sel._id} email={sel.email} phone={sel.phone} hasPassword={!!sel.hasPassword}
                 onChanged={() => { q.reload(); }} />
             ) : (
-              <Note className="my-0 text-[11.5px]">
+              <Note>
                 Signs into the {sel.role === "doctor" ? "dermatologist" : sel.role === "therapist" ? "therapist" : "admin"} panel with <B>{sel.email}</B> and {sel.hasPassword ? "a password or " : ""}a 6-digit code emailed at sign-in.
               </Note>
             )}
 
             {canManageStaff ? (
-              <>
-                <In label="Display name" value={sel.name ?? ""} onChange={(v) => setSel({ ...sel, name: v })} />
-                <In label="Job title" value={sel.jobTitle ?? ""} onChange={(v) => setSel({ ...sel, jobTitle: v })}
-                  placeholder="Clinic Manager, Front desk, Accountant…" hint="For display and reports. What they can do is the role below." />
+              <div className="grid gap-5 @lg/fields:grid-cols-2">
+                <Field label="Display name"><Input value={sel.name ?? ""} onChange={(v) => setSel({ ...sel, name: v })} /></Field>
+                <Field label="Job title" hint="For display and reports. What they can do is the role below.">
+                  <Input value={sel.jobTitle ?? ""} onChange={(v) => setSel({ ...sel, jobTitle: v })} placeholder="Clinic Manager, Front desk, Accountant…" />
+                </Field>
                 {/*
                   * Account type is shown, not chosen. Each kind is created and
                   * retired where it belongs — super admins in ADMIN_EMAILS,
@@ -1169,11 +1338,10 @@ function StaffTab({ roles }: { roles: Role[] }) {
                   * dropdown here would be a second, contradictory way to mint
                   * one. What a Staff account may do is the role below.
                   */}
-                <div>
-                  <div className="mb-1.5 text-[11px] font-bold text-ink2">Account type</div>
-                  <div className="flex items-center gap-2 rounded-(--radius-btn) border border-border bg-ivory px-3 py-2.5">
-                    <Tag kind={sel.role === "super_admin" ? "gold" : sel.role === "staff" ? "ok" : "info"}>{ROLE_LABEL[sel.role]}</Tag>
-                    <span className="text-[11.5px] text-ink3">
+                <Field label="Account type" full>
+                  <div className="flex min-h-[44px] flex-wrap items-center gap-2 rounded-[10px] border border-border bg-ivory px-3.5 py-2 text-[14px] leading-5 text-ink3">
+                    <StatusTag kind={sel.role === "super_admin" ? "primary" : sel.role === "staff" ? "ok" : "info"}>{ROLE_LABEL[sel.role]}</StatusTag>
+                    <span>
                       {sel.role === "super_admin"
                         ? <>Set by the server's <code>ADMIN_EMAILS</code> list</>
                         : sel.role === "doctor" ? "Managed on the Dermatologists page"
@@ -1181,14 +1349,12 @@ function StaffTab({ roles }: { roles: Role[] }) {
                         : "Admin panel access, defined by the role below"}
                     </span>
                   </div>
-                </div>
+                </Field>
                 {sel.role === "doctor" && (
-                  <Sel label="Dermatologist profile" value={doctorLabel(sel.doctorId)}
-                    onChange={(v) => setSel({ ...sel, doctorId: doctorByLabel(v) })}
-                    options={doctorOptions} />
-                )}
-                {sel.role === "doctor" && !sel.doctorId && (
-                  <div className="-mt-2 text-[10.5px] text-ink3">Without a link the dermatologist panel matches on email; linking here is explicit and survives an email change.</div>
+                  <Field label="Dermatologist profile" full
+                    hint={!sel.doctorId ? "Without a link the dermatologist panel matches on email; linking here is explicit and survives an email change." : undefined}>
+                    <Select value={doctorLabel(sel.doctorId)} onChange={(v) => setSel({ ...sel, doctorId: doctorByLabel(v) })} options={doctorOptions} />
+                  </Field>
                 )}
 
                 {sel.role === "staff" && (
@@ -1206,50 +1372,32 @@ function StaffTab({ roles }: { roles: Role[] }) {
                     onChange={(next) => setSel({ ...sel, assignments: next })} />
                 )}
 
-                <Btn onClick={async () => {
-                  try {
-                    await api.staff.update(sel._id, {
-                      name: sel.name,
-                      jobTitle: sel.jobTitle ?? null,
-                      assignments: sel.assignments ?? [],
-                      doctorId: sel.role === "doctor" ? (sel.doctorId ?? null) : null,
-                      ...(sel.role === "staff" ? { customRoleId: sel.customRoleId ?? null, permissions: sel.permissions ?? [] } : {}),
-                    });
-                    audit("SETTINGS_UPDATED", `Staff ${sel.email} updated`, { staffId: sel._id });
-                    toast("Staff account updated"); q.reload(); setSel(null);
-                  } catch (e) { toast((e as Error).message); }
-                }}>Save changes</Btn>
-
                 {sel._id !== admin?._id && (
                   <>
-                    <div className="grid grid-cols-2 gap-2">
-                      <Btn kind="ghost" onClick={async () => {
+                    <SubHeading title="Account" blurb="Deactivating blocks the next sign-in immediately. Removing the account keeps their audit history — actions never disappear with the person." />
+                    <div className="col-span-full flex flex-wrap gap-2">
+                      <StudioBtn kind="ghost" onClick={async () => {
                         try {
                           await api.staff.toggle(sel._id);
                           toast(sel.isActive ? "Sign-in blocked" : "Account reactivated");
                           q.reload(); setSel(null);
                         } catch (e) { toast((e as Error).message); }
-                      }}>{sel.isActive ? "Deactivate login" : "Reactivate login"}</Btn>
+                      }}>{sel.isActive ? "Deactivate login" : "Reactivate login"}</StudioBtn>
                       {(sel.role === "staff" || sel.role === "therapist") && (
-                        <Btn kind="ghost" onClick={() => { setCloneOf(sel); setSel(null); }}>Clone access</Btn>
+                        <StudioBtn kind="ghost" onClick={() => { setCloneOf(sel); setSel(null); }}>Clone access</StudioBtn>
                       )}
+                      {!sel.terminatedAt && <StudioBtn kind="ghost" onClick={() => { setEndOf(sel); setSel(null); }}>End employment…</StudioBtn>}
+                      <StudioBtn kind="danger" onClick={() => { setSel(null); setDel(sel); }}>Remove staff</StudioBtn>
                     </div>
-                    {!sel.terminatedAt && <Btn kind="ghost" onClick={() => { setEndOf(sel); setSel(null); }}>End employment…</Btn>}
-                    <Btn kind="danger" onClick={() => { setSel(null); setDel(sel); }}>Remove staff</Btn>
                   </>
                 )}
-              </>
+              </div>
             ) : (
               <Note>Only someone with the “manage staff” permission can change staff accounts.</Note>
             )}
-
-            <Note className="text-[11.5px]">
-              Deactivating blocks the next sign-in immediately. Removing the account keeps their audit history —
-              actions never disappear with the person.
-            </Note>
           </div>
         )}
-      </Drawer>
+      </StudioSheet>
 
       <Modal open={invOpen} onClose={() => setInvOpen(false)} title="Add staff account" wide>
         <AddStaffForm roles={roles} groups={catalog.data ?? []} branches={branches} onDone={() => { setInvOpen(false); q.reload(); }} />
@@ -1267,7 +1415,7 @@ function StaffTab({ roles }: { roles: Role[] }) {
             toast("Staff account removed"); q.reload();
           } catch (e) { toast((e as Error).message); }
         }} />
-    </>
+    </Section>
   );
 }
 
@@ -1319,76 +1467,70 @@ function AddStaffForm({ roles, groups, branches, onDone }: { roles: Role[]; grou
 
   if (issued) {
     return (
-      <div className="grid gap-3">
-        <Note kind="gold">Account created. This temporary password is shown once; they choose their own at first sign-in.</Note>
-        <div className="text-[12.5px]">Sign-in email: <B>{issued.email}</B></div>
-        <div className="rounded-xl border border-border bg-ivory px-4 py-3 text-center font-mono text-[20px] font-bold tracking-wide">{issued.password}</div>
+      <div className="grid gap-4">
+        <Note>Account created. This temporary password is shown once; they choose their own at first sign-in.</Note>
+        <div className="text-[14px] leading-6 text-ink2">Sign-in email: <B>{issued.email}</B></div>
+        <div className="rounded-[12px] border border-border bg-ivory px-4 py-4 text-center font-mono text-[22px] font-bold tracking-wide tabular-nums text-ink">{issued.password}</div>
         {issued.delivery && (
-          <div className="text-[11.5px] text-ink3">
+          <div className="text-[14px] leading-6 text-ink2">
             {issued.delivery.email && <div>Email: {issued.delivery.email}</div>}
             {issued.delivery.whatsapp && <div>WhatsApp: {issued.delivery.whatsapp}</div>}
           </div>
         )}
-        <div className="flex justify-end"><Btn onClick={onDone}>Done</Btn></div>
+        <div className="flex justify-end"><StudioBtn onClick={onDone}>Done</StudioBtn></div>
       </div>
     );
   }
 
-  const pill = (on: boolean) => `rounded-full border px-3 py-1 text-[12px] font-semibold ${on ? "border-primary bg-cream" : "border-border bg-surface hover:bg-ivory"}`;
-
   return (
-    <>
-      <div className="grid gap-3">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <In label="Work email" type="email" value={email} onChange={setEmail} placeholder="name@zennara.in" hint="Their sign-in address." />
-          <In label="Display name" value={name} onChange={setName} placeholder="Leave blank to use the email prefix" />
-          <In label="Phone" value={phone} onChange={setPhone} placeholder="10-digit mobile" hint="Needed to send sign-in details by WhatsApp." />
-          <In label="Job title" value={jobTitle} onChange={setJobTitle} placeholder="Front desk, Clinic Manager, Accountant…" />
-        </div>
-        <StaffAccessFields
-          roles={roles} groups={groups}
-          customRoleId={customRoleId} permissions={perms}
-          onRole={setCustomRoleId} onPermissions={setPerms}
-        />
-        <CentreRolesEditor roles={roles} branches={branches} value={assignments} onChange={setAssignments} />
+    <div className="@container/fields grid gap-5">
+      <div className="grid gap-5 @lg/fields:grid-cols-2">
+        <Field label="Work email" hint="Their sign-in address."><Input type="email" value={email} onChange={setEmail} placeholder="name@zennara.in" /></Field>
+        <Field label="Display name"><Input value={name} onChange={setName} placeholder="Leave blank to use the email prefix" /></Field>
+        <Field label="Phone" hint="Needed to send sign-in details by WhatsApp."><Input value={phone} onChange={setPhone} placeholder="10-digit mobile" /></Field>
+        <Field label="Job title"><Input value={jobTitle} onChange={setJobTitle} placeholder="Front desk, Clinic Manager, Accountant…" /></Field>
+      </div>
+      <StaffAccessFields
+        roles={roles} groups={groups}
+        customRoleId={customRoleId} permissions={perms}
+        onRole={setCustomRoleId} onPermissions={setPerms}
+      />
+      <CentreRolesEditor roles={roles} branches={branches} value={assignments} onChange={setAssignments} />
 
-        <div className="grid gap-2 rounded-xl border border-border bg-ivory/60 p-3">
-          <SecH t="Sign-in" em="· how they get into the panel" />
-          <div className="flex flex-wrap gap-1.5">
-            <button onClick={() => setSignIn("generate")} className={pill(signIn === "generate")}>Generate a temporary password</button>
-            <button onClick={() => setSignIn("typed")} className={pill(signIn === "typed")}>Set a password now</button>
-            <button onClick={() => setSignIn("code")} className={pill(signIn === "code")}>Emailed code only</button>
-          </div>
-          {signIn === "typed" && <In label="Password" type="password" value={password} onChange={setPassword} hint="At least 8 characters. Stored as a hash." />}
-          {signIn !== "code" && (
-            <div>
-              <div className="mb-1 text-[11px] font-bold text-ink2">Send the details by</div>
-              <div className="flex flex-wrap gap-1.5">
-                {(["email", "whatsapp", "both"] as const).map((c) => (
-                  <button key={c} onClick={() => setNotify(c)} disabled={c !== "email" && !phone.trim()} className={`${pill(notify === c)} disabled:opacity-40`}>
-                    {c === "email" ? "Email" : c === "whatsapp" ? "WhatsApp" : "Email and WhatsApp"}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-          <div className="text-[11px] text-ink3">
-            {signIn === "code" ? "They sign in with a 6-digit code emailed at every sign-in. A password can be set later." : "A temporary password must be changed at first sign-in. The emailed code keeps working too."}
-          </div>
+      <div className="grid gap-4 rounded-[12px] border border-border bg-ivory p-4">
+        <div>
+          <div className="text-[16px] font-semibold leading-6 text-ink">Sign-in</div>
+          <div className="text-[14px] leading-5 text-ink2">How they get into the panel.</div>
         </div>
+        <Field label="Password"
+          hint={signIn === "code" ? "They sign in with a 6-digit code emailed at every sign-in. A password can be set later." : "A temporary password must be changed at first sign-in. The emailed code keeps working too."}>
+          <ChoicePills<string> value={signIn} onChange={(v) => setSignIn(v as typeof signIn)}
+            options={[{ value: "generate", label: "Generate a temporary password" }, { value: "typed", label: "Set a password now" }, { value: "code", label: "Emailed code only" }]} />
+        </Field>
+        {signIn === "typed" && (
+          <Field label="Password" hint="At least 8 characters. Stored as a hash."><Input type="password" value={password} onChange={setPassword} /></Field>
+        )}
+        {signIn !== "code" && (
+          <Field label="Send the details by" hint={!phone.trim() ? "Add a phone number to send by WhatsApp." : undefined}>
+            <ChoicePills<string> value={notify} onChange={(v) => setNotify(v as typeof notify)}
+              options={(["email", "whatsapp", "both"] as const).map((c) => ({
+                value: c, label: c === "email" ? "Email" : c === "whatsapp" ? "WhatsApp" : "Email and WhatsApp", disabled: c !== "email" && !phone.trim(),
+              }))} />
+          </Field>
+        )}
       </div>
 
-      <Note className="text-[11.5px]">
+      <Note>
         Adding a <B>dermatologist</B> or <B>therapist</B>? Create them on their own page instead — that is where their
         profile and centres live. <B>Super admins</B> come from the server's <code>ADMIN_EMAILS</code> list
         and appear here once they first sign in.
       </Note>
-      {err && <Note kind="crit">{err}</Note>}
-      <div className="mt-3 flex justify-end gap-2">
-        <Btn kind="ghost" onClick={onDone}>Cancel</Btn>
-        <Btn disabled={busy || !/^\S+@\S+\.\S+$/.test(email) || (signIn === "typed" && password.length < 8)} onClick={submit}>{busy ? "Adding…" : "Add staff"}</Btn>
+      {err && <Note kind="err">{err}</Note>}
+      <div className="flex justify-end gap-2">
+        <StudioBtn kind="ghost" onClick={onDone}>Cancel</StudioBtn>
+        <StudioBtn disabled={busy || !/^\S+@\S+\.\S+$/.test(email) || (signIn === "typed" && password.length < 8)} onClick={submit}>{busy ? "Adding…" : "Add staff member"}</StudioBtn>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -1403,15 +1545,15 @@ function CloneStaffModal({ source, onClose, onDone }: { source: StaffRow | null;
   useEffect(() => { setEmail(""); setName(""); setPhone(""); setErr(null); }, [source?._id]);
   return (
     <Modal open={!!source} onClose={onClose} title={source ? `Clone ${source.name || source.email}'s access` : ""}>
-      <div className="grid gap-3">
-        <Note className="my-0">Copies the role, job title, centres and centre roles onto a new account. The password and any doctor link are not copied.</Note>
-        <In label="New person's work email" type="email" value={email} onChange={setEmail} placeholder="name@zennara.in" />
-        <In label="Display name" value={name} onChange={setName} />
-        <In label="Phone" value={phone} onChange={setPhone} placeholder="10-digit mobile" />
-        {err && <Note kind="crit">{err}</Note>}
+      <div className="grid gap-4">
+        <Note>Copies the role, job title, centres and centre roles onto a new account. The password and any dermatologist link are not copied.</Note>
+        <Field label="New person's work email"><Input type="email" value={email} onChange={setEmail} placeholder="name@zennara.in" /></Field>
+        <Field label="Display name"><Input value={name} onChange={setName} /></Field>
+        <Field label="Phone"><Input value={phone} onChange={setPhone} placeholder="10-digit mobile" /></Field>
+        {err && <Note kind="err">{err}</Note>}
         <div className="flex justify-end gap-2">
-          <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
-          <Btn disabled={busy || !/^\S+@\S+\.\S+$/.test(email)} onClick={async () => {
+          <StudioBtn kind="ghost" onClick={onClose}>Cancel</StudioBtn>
+          <StudioBtn disabled={busy || !/^\S+@\S+\.\S+$/.test(email)} onClick={async () => {
             if (!source) return;
             setBusy(true); setErr(null);
             try {
@@ -1419,7 +1561,7 @@ function CloneStaffModal({ source, onClose, onDone }: { source: StaffRow | null;
               audit("SETTINGS_UPDATED", `Cloned ${source.email} onto ${email}`, { staffId: (res.data as Admin)?._id });
               toast(res.message || "Cloned"); onDone();
             } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
-          }}>{busy ? "Cloning…" : "Create account"}</Btn>
+          }}>{busy ? "Cloning…" : "Create account"}</StudioBtn>
         </div>
       </div>
     </Modal>
@@ -1436,14 +1578,14 @@ function EndEmploymentModal({ target, onClose, onDone }: { target: StaffRow | nu
   useEffect(() => { setReason(""); setDate(new Date().toISOString().slice(0, 10)); setErr(null); }, [target?._id]);
   return (
     <Modal open={!!target} onClose={onClose} title={target ? `End employment — ${target.name || target.email}` : ""}>
-      <div className="grid gap-3">
-        <Note className="my-0" kind="crit">Their sign-in stops on the date below and every open session is ended. Audit history is kept. A dermatologist is also removed from the app.</Note>
-        <In label="Last working day" type="date" value={date} onChange={setDate} />
-        <Area label="Reason" value={reason} onChange={setReason} placeholder="Resigned, contract ended, …" />
-        {err && <Note kind="crit">{err}</Note>}
+      <div className="grid gap-4">
+        <Note kind="err">Their sign-in stops on the date below and every open session is ended. Audit history is kept. A dermatologist is also removed from the app.</Note>
+        <Field label="Last working day"><DateInput value={date} onChange={setDate} /></Field>
+        <Field label="Reason"><Textarea value={reason} onChange={setReason} placeholder="Resigned, contract ended, …" /></Field>
+        {err && <Note kind="err">{err}</Note>}
         <div className="flex justify-end gap-2">
-          <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
-          <Btn kind="danger" disabled={busy || reason.trim().length < 3} onClick={async () => {
+          <StudioBtn kind="ghost" onClick={onClose}>Cancel</StudioBtn>
+          <StudioBtn kind="danger" disabled={busy || reason.trim().length < 3} onClick={async () => {
             if (!target) return;
             setBusy(true); setErr(null);
             try {
@@ -1451,7 +1593,7 @@ function EndEmploymentModal({ target, onClose, onDone }: { target: StaffRow | nu
               audit("SETTINGS_UPDATED", `Ended employment for ${target.email} · ${reason.trim()}`, { staffId: target._id });
               toast(res.message || "Employment ended"); onDone();
             } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
-          }}>{busy ? "Saving…" : "End employment"}</Btn>
+          }}>{busy ? "Saving…" : "End employment"}</StudioBtn>
         </div>
       </div>
     </Modal>
@@ -1459,6 +1601,11 @@ function EndEmploymentModal({ target, onClose, onDone }: { target: StaffRow | nu
 }
 
 /* ================= AUDIT LOG ================= */
+const AUDIT_SECTIONS: StudioSection[] = [
+  { id: "all", title: "All entries" },
+  { id: "suspicious", title: "Suspicious activity" },
+];
+
 export function AuditLog() {
   const [page, setPage] = useQueryPage();
   const [action, setAction] = useQueryString("action");
@@ -1489,6 +1636,8 @@ export function AuditLog() {
   const rows = q.data?.data ?? [];
   const pagination = q.data?.pagination;
   const f = filters.data as { actions?: string[]; resources?: string[]; admins?: string[] } | undefined;
+  const filtersActive = !!(action || resource || status || who || from || to || search);
+  const clearFilters = () => { setSearch(""); setAction(""); setResource(""); setWho(""); setStatus(""); setFrom(""); setTo(""); };
 
   const detailOf = (d?: Record<string, unknown>) => {
     if (!d) return "—";
@@ -1517,92 +1666,97 @@ export function AuditLog() {
     } finally { setExporting(false); }
   };
 
-  return (
-    <Page title="Audit log" sub="Every administrative change, with who, when and from where"
-      actions={<>
-        <Btn kind="ghost" onClick={() => setView(view === "all" ? "suspicious" : "all")}>{view === "all" ? "Suspicious activity (72h)" : "← All entries"}</Btn>
-        <Btn kind="ghost" disabled={!rows.length || exporting} onClick={exportAll}>{exporting ? "Exporting…" : "Export CSV (all matching)"}</Btn>
-      </>}>
-      <Hint id="audit-live">Sensitive routes write here automatically, and the panel adds an entry for decisions the route can't see — a cancellation reason, a stock adjustment, a role change. Entries are kept for 90 days.</Hint>
+  const table = (
+    <StudioTable minWidth={960}
+      cols={[{ label: "When", nowrap: true }, "Who", { label: "Action", nowrap: true }, "Resource", { label: "Detail", width: "30%" }, { label: "IP", nowrap: true }, "Status"]}
+      onRow={(i) => setSel(rows[i])}
+      empty={view === "suspicious" ? "Nothing suspicious in the last 72 hours." : "No entries match."}
+      {...(view === "all" && pagination ? { page: pagination.currentPage ?? page, pageSize: 15, total: pagination.total ?? rows.length, onPage: (p: number) => setPage(p) } : {})}
+      rows={rows.map((a) => [
+        fmtWhen(a.timestamp),
+        <span key={`${a._id}w`} className="break-all font-semibold text-ink">{a.adminEmail}</span>,
+        a.action,
+        <StatusTag key={`${a._id}r`} kind="mute">{a.resource}</StatusTag>,
+        <span key={`${a._id}d`} className="line-clamp-2 text-ink3">{detailOf(a.details)}</span>,
+        <span key={`${a._id}i`} className="text-ink3">{a.ipAddress ?? "—"}</span>,
+        a.status === "SUCCESS"
+          ? <StatusTag key={`${a._id}s`} kind="ok">ok</StatusTag>
+          : <StatusTag key={`${a._id}s`} kind="err">{a.status}</StatusTag>,
+      ])} />
+  );
 
-      {view === "all" && (
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by email, action or record id…"
-            className="w-64 rounded-(--radius-btn) border border-border bg-surface px-3.5 py-2 text-[13px] outline-none focus:border-gold-dark" />
-          <Menu button={<MenuButton kind="ghost">{action || "All actions"}</MenuButton>}
-            items={[{ label: "All actions", onClick: () => setAction("") },
-              ...(f?.actions ?? []).map((a) => ({ label: a, onClick: () => setAction(a) }))]} />
-          <Menu button={<MenuButton kind="ghost">{resource || "All resources"}</MenuButton>}
-            items={[{ label: "All resources", onClick: () => setResource("") },
-              ...(f?.resources ?? []).map((r) => ({ label: r, onClick: () => setResource(r) }))]} />
-          <Menu button={<MenuButton kind="ghost">{who || "Everyone"}</MenuButton>}
-            items={[{ label: "Everyone", onClick: () => setWho("") },
-              ...(f?.admins ?? []).map((a) => ({ label: a, onClick: () => setWho(a) }))]} />
-          <Menu button={<MenuButton kind="ghost">{status || "Any outcome"}</MenuButton>}
-            items={[{ label: "Any outcome", onClick: () => setStatus("") },
-              { label: "SUCCESS", onClick: () => setStatus("SUCCESS") },
-              { label: "FAILED", onClick: () => setStatus("FAILED") },
-              { label: "WARNING", onClick: () => setStatus("WARNING") }]} />
-          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="rounded-(--radius-btn) border border-border bg-surface px-3 py-1.5 text-[12.5px] outline-none" />
-          <span className="text-[12px] text-ink3">to</span>
-          <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="rounded-(--radius-btn) border border-border bg-surface px-3 py-1.5 text-[12.5px] outline-none" />
-        </div>
+  return (
+    <StudioPage title="Audit log" wide intro="Every administrative change, with who, when and from where. Entries are written by the server and kept for 90 days."
+      sections={AUDIT_SECTIONS} active={view} onSection={(id) => setView(id)}
+      actions={<StudioBtn kind="ghost" disabled={!rows.length || exporting} onClick={exportAll}>{exporting ? "Exporting…" : "Export CSV (all matching)"}</StudioBtn>}>
+      <StudioStale error={q.data ? q.error : null} onRetry={q.reload} />
+
+      {view === "all" ? (
+        <Section title="All entries" blurb="Sensitive routes write here automatically, and the panel adds an entry for decisions the route can't see — a cancellation reason, a stock adjustment, a role change.">
+          <FilterBar onClear={filtersActive ? clearFilters : undefined}>
+            <Field label="Search" className="min-w-[240px] flex-1">
+              <SearchInput value={search} onChange={setSearch} placeholder="Email, action or record id…" />
+            </Field>
+            <Field label="Action" className="w-[200px]">
+              <Select value={action} onChange={setAction} options={[{ value: "", label: "All actions" }, ...(f?.actions ?? []).map((a) => ({ value: a, label: a }))]} />
+            </Field>
+            <Field label="Resource" className="w-[180px]">
+              <Select value={resource} onChange={setResource} options={[{ value: "", label: "All resources" }, ...(f?.resources ?? []).map((r) => ({ value: r, label: r }))]} />
+            </Field>
+            <Field label="Who" className="w-[220px]">
+              <Select value={who} onChange={setWho} options={[{ value: "", label: "Everyone" }, ...(f?.admins ?? []).map((a) => ({ value: a, label: a }))]} />
+            </Field>
+            <Field label="Outcome" className="w-[160px]">
+              <Select value={status} onChange={setStatus} options={[{ value: "", label: "Any outcome" }, { value: "SUCCESS", label: "SUCCESS" }, { value: "FAILED", label: "FAILED" }, { value: "WARNING", label: "WARNING" }]} />
+            </Field>
+            <Field label="From" className="w-[170px]"><DateInput value={from} onChange={setFrom} max={to || undefined} /></Field>
+            <Field label="To" className="w-[170px]"><DateInput value={to} onChange={setTo} min={from || undefined} /></Field>
+          </FilterBar>
+          <div className="col-span-full">
+            <Async q={q} label="Loading the audit trail…" rows={10}>
+              {() => rows.length === 0 ? (
+                <StudioEmpty title="No entries match" hint="Try clearing the filters, or make a change in the panel and come back." />
+              ) : table}
+            </Async>
+          </div>
+          <Note>
+            A failed or denied action is recorded too — that is often the more interesting row.
+          </Note>
+        </Section>
+      ) : (
+        <Section title="Suspicious activity" blurb="Repeated failures, denied access and off-hours changes from the last 72 hours.">
+          <div className="col-span-full">
+            <Async q={q} label="Loading the audit trail…" rows={10}>
+              {() => rows.length === 0 ? (
+                <StudioEmpty title="Nothing suspicious in the last 72 hours" hint="Repeated failures, denied access and off-hours changes show up here." />
+              ) : table}
+            </Async>
+          </div>
+        </Section>
       )}
 
-      <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
-      <Async q={q} label="Loading the audit trail…" rows={10}>
-        {() => rows.length === 0 ? (
-          <Empty title={view === "suspicious" ? "Nothing suspicious in the last 72 hours" : "No entries match"}
-            hint={view === "suspicious" ? "Repeated failures, denied access and off-hours changes show up here." : "Try clearing the filters, or make a change in the panel and come back."} />
-        ) : (
-          <>
-            <DataTable cols={["When", "Who", "Action", "Resource", "Detail", "IP", "Status"]}
-              onRow={(i) => setSel(rows[i])}
-              rows={rows.map((a) => [
-                <span key={a._id} className="whitespace-nowrap font-mono text-[11.5px]">{fmtWhen(a.timestamp)}</span>,
-                <B key={`${a._id}w`}>{a.adminEmail}</B>,
-                <span key={`${a._id}a`} className="font-mono text-[11px]">{a.action}</span>,
-                <Tag key={`${a._id}r`} kind="mute">{a.resource}</Tag>,
-                <span key={`${a._id}d`} className="line-clamp-2 text-[11.5px] text-ink3">{detailOf(a.details)}</span>,
-                <span key={`${a._id}i`} className="font-mono text-[10.5px] text-ink3">{a.ipAddress ?? "—"}</span>,
-                a.status === "SUCCESS"
-                  ? <Tag key={`${a._id}s`} kind="ok">ok</Tag>
-                  : <Tag key={`${a._id}s`} kind="err">{a.status}</Tag>,
-              ])} />
-            {view === "all" && pagination && pagination.totalPages > 1 && (
-              <div className="mt-3 flex items-center justify-between text-[12.5px] text-ink3">
-                <span>Page {pagination.currentPage} of {pagination.totalPages} · {(pagination.total ?? 0).toLocaleString("en-IN")} entries</span>
-                <div className="flex gap-2">
-                  <Btn kind="ghost" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>← Previous</Btn>
-                  <Btn kind="ghost" disabled={page >= pagination.totalPages} onClick={() => setPage((p) => p + 1)}>Next →</Btn>
-                </div>
-              </div>
-            )}
-          </>
-        )}
-      </Async>
-
-      <Drawer open={!!sel} onClose={() => setSel(null)} title={sel ? sel.action : "Entry"}>
+      <StudioSheet open={!!sel} onClose={() => setSel(null)} title={sel ? sel.action : "Entry"}
+        sub={sel ? `${fmtDateFull(sel.timestamp)} · ${sel.adminEmail}` : undefined} width={600}
+        footer={<StudioBtn kind="ghost" onClick={() => setSel(null)}>Close</StudioBtn>}>
         {sel && (
-          <div className="grid gap-2 text-[12.5px]">
-            <div className="flex justify-between"><span className="text-ink3">When</span><span className="font-mono">{fmtDateFull(sel.timestamp)}</span></div>
-            <div className="flex justify-between"><span className="text-ink3">Who</span><B>{sel.adminEmail}</B></div>
-            <div className="flex justify-between"><span className="text-ink3">Resource</span><span>{sel.resource}{sel.resourceId ? <span className="ml-1 font-mono text-[10.5px] text-ink3">{sel.resourceId}</span> : null}</span></div>
-            <div className="flex justify-between"><span className="text-ink3">Outcome</span>{sel.status === "SUCCESS" ? <Tag kind="ok">ok</Tag> : <Tag kind="err">{sel.status}</Tag>}</div>
-            {sel.errorMessage && <Note kind="crit" className="my-0">{sel.errorMessage}</Note>}
-            <div className="flex justify-between"><span className="text-ink3">IP</span><span className="font-mono text-[11px]">{sel.ipAddress ?? "—"}</span></div>
-            {sel.userAgent && <div><span className="text-ink3">Browser</span><div className="break-all text-[11px] text-ink3">{sel.userAgent}</div></div>}
-            <SecH t="Details" />
-            <pre className="max-h-[50vh] overflow-auto rounded-lg bg-ivory p-2.5 font-mono text-[11px] leading-relaxed">{JSON.stringify(sel.details ?? {}, null, 2)}</pre>
+          <div className="grid gap-5">
+            <DetailList items={[
+              ["When", fmtDateFull(sel.timestamp)],
+              ["Who", <B key="who">{sel.adminEmail}</B>],
+              ["Resource", <span key="res">{sel.resource}{sel.resourceId ? <span className="ml-2 break-all text-ink3">{sel.resourceId}</span> : null}</span>],
+              ["Outcome", sel.status === "SUCCESS" ? <StatusTag key="st" kind="ok">ok</StatusTag> : <StatusTag key="st" kind="err">{sel.status}</StatusTag>],
+              ["IP", sel.ipAddress ?? "—"],
+              !!sel.userAgent && ["Browser", <span key="ua" className="break-all text-ink2">{sel.userAgent}</span>],
+            ]} />
+            {sel.errorMessage && <Note kind="err">{sel.errorMessage}</Note>}
+            <div className="grid gap-3">
+              <SubHeading title="Details" blurb="The record exactly as the server wrote it." />
+              <pre className="st-json m-0 max-h-[50vh] overflow-auto rounded-[10px] border border-border bg-ivory p-4 text-ink">{JSON.stringify(sel.details ?? {}, null, 2)}</pre>
+            </div>
           </div>
         )}
-      </Drawer>
-
-      <Note>
-        Entries are written by the server, not the browser, and are kept for 90 days before they age out. A failed
-        or denied action is recorded too — that is often the more interesting row.
-      </Note>
-    </Page>
+      </StudioSheet>
+    </StudioPage>
   );
 }
 
@@ -1617,18 +1771,20 @@ function StaffSalesPanel() {
   const rows = (q.data?.data ?? []) as import("../lib/types").StaffSalesRow[];
   const totals = q.data?.totals;
   return (
-    <div className="mt-3">
-      <div className="mb-3 flex flex-wrap items-end gap-3">
-        <DateRange from={from} to={to} onChange={(a, b) => { setFrom(a); setTo(b); }} />
-        <Btn kind="ghost" disabled={!rows.length} onClick={() => exportCsv(`staff-sales-${from}-${to}`, ["Staff", "Services", "Products", "Packages", "Memberships", "Other", "Total", "Items", "Bills"], rows.map((r) => [r.staff, r.services, r.products, r.packages, r.memberships, r.other, r.total, r.items, r.bills]))}>Export CSV</Btn>
-        {totals && <span className="text-[12px] text-ink3">{totals.staff} staff · {totals.invoices} bills · <B>{fmtINR(totals.total)}</B></span>}
-      </div>
+    <>
+      <FilterBar>
+        <Field label="From" className="w-[170px]"><DateInput value={from} onChange={setFrom} max={to || undefined} /></Field>
+        <Field label="To" className="w-[170px]"><DateInput value={to} onChange={setTo} min={from || undefined} /></Field>
+        <StudioBtn kind="ghost" disabled={!rows.length} onClick={() => exportCsv(`staff-sales-${from}-${to}`, ["Staff", "Services", "Products", "Packages", "Memberships", "Other", "Total", "Items", "Bills"], rows.map((r) => [r.staff, r.services, r.products, r.packages, r.memberships, r.other, r.total, r.items, r.bills]))}>Export CSV</StudioBtn>
+        {totals && <span className="self-center text-[14px] leading-5 text-ink2">{totals.staff} staff · {totals.invoices} bills · <B>{fmtINR(totals.total)}</B></span>}
+      </FilterBar>
       <Async q={q} label="Adding up sales…" rows={4}>
-        {() => rows.length === 0 ? <Empty title="No sales in this range" hint="Sales are attributed by the Sale-by on each bill line; visits paid without a bill go to their dermatologist." /> : (
-          <DataTable cols={["Staff", "Services", "Products", "Packages", "Memberships", "Other", "Total", "Items", "Bills"]}
+        {() => rows.length === 0 ? <StudioEmpty title="No sales in this range" hint="Sales are attributed by the Sale-by on each bill line; visits paid without a bill go to their dermatologist." /> : (
+          <StudioTable stickyFirst minWidth={980}
+            cols={["Staff", { label: "Services", align: "right", nowrap: true }, { label: "Products", align: "right", nowrap: true }, { label: "Packages", align: "right", nowrap: true }, { label: "Memberships", align: "right", nowrap: true }, { label: "Other", align: "right", nowrap: true }, { label: "Total", align: "right", nowrap: true }, { label: "Items", align: "right" }, { label: "Bills", align: "right" }]}
             rows={rows.map((r) => [<B key="s">{r.staff}</B>, fmtINR(r.services), fmtINR(r.products), fmtINR(r.packages), fmtINR(r.memberships), fmtINR(r.other), <B key="t">{fmtINR(r.total)}</B>, String(r.items), String(r.bills)])} />
         )}
       </Async>
-    </div>
+    </>
   );
 }

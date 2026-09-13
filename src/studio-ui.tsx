@@ -1,7 +1,8 @@
-import { Component, useLayoutEffect, useRef, useState } from "react";
+import { Component, Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ErrorInfo, ReactNode } from "react";
-import { ChevronDown, ChevronUp, Loader2, RefreshCw, Upload, X } from "lucide-react";
-import { Toggle } from "./ui";
+import { createPortal } from "react-dom";
+import { ChevronDown, ChevronUp, Loader2, RefreshCw, Search, Upload, X } from "lucide-react";
+import { Toggle, getPageSizePref } from "./ui";
 import { useStore } from "./store";
 import api from "./lib/api";
 
@@ -65,7 +66,7 @@ function useFillHeight() {
   return { ref, height: `calc(100vh - ${top ?? 72}px - 20px)` };
 }
 
-export function StudioPage({ title, intro, sections, active, onSection, actions, children, footer }: {
+export function StudioPage({ title, intro, sections, active, onSection, actions, children, footer, wide }: {
   title: string;
   intro: string;
   sections: StudioSection[];
@@ -76,6 +77,8 @@ export function StudioPage({ title, intro, sections, active, onSection, actions,
   children: ReactNode;
   /** Normally a <PublishBar>. Sits at the bottom of the content pane. */
   footer?: ReactNode;
+  /** Dashboards with side-by-side charts and wide tables get the whole pane (default caps at 880px). */
+  wide?: boolean;
 }) {
   const { ref, height } = useFillHeight();
   const showRail = sections.length > 1;
@@ -112,7 +115,7 @@ export function StudioPage({ title, intro, sections, active, onSection, actions,
 
         {/* ---- content pane: the only thing that scrolls ---- */}
         <div className="@container/pane min-h-0 min-w-0 flex-1 overflow-y-auto rounded-(--radius-card) border border-border bg-surface">
-          <div className="mx-auto w-full max-w-[880px] px-6 py-8">{children}</div>
+          <div className={`mx-auto w-full px-6 py-8 ${wide ? "max-w-[1280px]" : "max-w-[880px]"}`}>{children}</div>
         </div>
       </div>
       {footer && <div className="shrink-0 pt-4">{footer}</div>}
@@ -491,5 +494,419 @@ export function PhonePreview({ children, caption }: { children: ReactNode; capti
       </div>
       {caption && <figcaption className="text-center text-[12.5px] leading-5 text-ink3">{caption}</figcaption>}
     </figure>
+  );
+}
+
+/* =====================================================================
+ * Organisation pages — tables, stat tiles, chart panels, filters, detail
+ * lists, the permission matrix and a wide side sheet.
+ *
+ * Added for Branches, Reviews, Analytics, Staff & roles and the Audit log
+ * (src/pages/org.tsx + src/pages/access.tsx). Same rules as everything above:
+ * nothing under 14px except 12.5px hints and table headers, no tracked
+ * uppercase, every control at least 44px.
+ * =================================================================== */
+
+/** Rows per page, following the panel-wide "Page size" preference unless fixed. */
+function useStudioPageSize(fixed?: number) {
+  const [n, setN] = useState(() => fixed ?? getPageSizePref());
+  useEffect(() => {
+    if (fixed !== undefined) return;
+    const h = () => setN(getPageSizePref());
+    window.addEventListener("zennara:pageSize", h);
+    return () => window.removeEventListener("zennara:pageSize", h);
+  }, [fixed]);
+  return fixed ?? n;
+}
+
+export type StudioCol = {
+  key?: string;
+  label: ReactNode;
+  align?: "left" | "right" | "center";
+  /** CSS width, e.g. "160px" or "20%". */
+  width?: string;
+  /** Keep the cell on one line (dates, chips, references). */
+  nowrap?: boolean;
+  /** Record rows only: how to draw the cell. Defaults to `row[key]`. */
+  render?: (row: any, i: number) => ReactNode;
+};
+
+/**
+ * The readable table. Accepts the same data `DataTable` (ui.tsx) takes —
+ * `cols: string[]` and `rows: ReactNode[][]` — so a page migrates by renaming
+ * the tag, and also `columns` + record rows for new code.
+ *
+ * Pagination: pass `page`, `total` and `onPage` when the server pages (rows
+ * are one page); leave them out and the table pages itself at the panel's
+ * page size. `onRow` always receives the index into the rows you passed.
+ */
+export function StudioTable({ columns, cols, rows, onRow, empty = "Nothing here yet.", page, pageSize: fixedPageSize, total, onPage, dense, stickyFirst, minWidth = 640, className = "" }: {
+  columns?: StudioCol[];
+  cols?: (string | StudioCol)[];
+  rows: (ReactNode[] | Record<string, unknown>)[];
+  onRow?: (i: number) => void;
+  empty?: ReactNode;
+  page?: number;
+  pageSize?: number;
+  total?: number;
+  onPage?: (page: number) => void;
+  dense?: boolean;
+  stickyFirst?: boolean;
+  minWidth?: number;
+  className?: string;
+}) {
+  const defs: StudioCol[] = (columns ?? (cols ?? []).map((c) => (typeof c === "string" ? { label: c } : c)));
+  const alignOf = (a?: string) => (a === "right" ? "text-right" : a === "center" ? "text-center" : "text-left");
+  const pad = dense ? "px-3.5 py-2" : "px-4 py-3";
+  const size = dense ? "text-[13.5px]" : "text-[14px]";
+
+  const controlled = onPage !== undefined && page !== undefined;
+  const pref = useStudioPageSize(fixedPageSize);
+  const pageSize = controlled ? (fixedPageSize ?? Math.max(rows.length, 1)) : pref;
+  const [inner, setInner] = useState(1);
+  const count = controlled ? (total ?? rows.length) : rows.length;
+  const pages = Math.max(1, Math.ceil(count / pageSize));
+  useEffect(() => { if (!controlled && inner > pages) setInner(pages); }, [controlled, pages, inner]);
+  const current = controlled ? page! : Math.min(inner, pages);
+  const offset = (current - 1) * pageSize;
+  const shown = controlled ? rows : rows.length > pageSize ? rows.slice(offset, offset + pageSize) : rows;
+  const go = (p: number) => (controlled ? onPage!(p) : setInner(p));
+  const from = count === 0 ? 0 : offset + 1;
+  const to = Math.min(offset + shown.length, count);
+
+  const cell = (row: ReactNode[] | Record<string, unknown>, def: StudioCol, j: number, i: number): ReactNode => {
+    if (Array.isArray(row)) return row[j];
+    if (def.render) return def.render(row, i);
+    return (def.key ? (row as Record<string, unknown>)[def.key] : undefined) as ReactNode;
+  };
+
+  return (
+    <div className={`min-w-0 ${className}`}>
+      <div className="overflow-x-auto rounded-[12px] border border-border bg-surface">
+        <table className={`w-full border-collapse ${size}`} style={{ minWidth }}>
+          <thead>
+            <tr>
+              {defs.map((c, j) => (
+                <th key={j} scope="col" style={c.width ? { width: c.width } : undefined}
+                  className={`whitespace-nowrap border-b border-border bg-surface ${pad} ${alignOf(c.align)} text-[12.5px] font-semibold leading-5 text-ink3 ${
+                    stickyFirst && j === 0 ? "sticky left-0 z-[1]" : ""}`}>
+                  {c.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((r, i) => {
+              const index = controlled ? i : offset + i;
+              return (
+                <tr key={index} onClick={onRow ? () => onRow(index) : undefined}
+                  className={`group border-b border-border last:border-0 ${onRow ? "cursor-pointer transition-colors hover:bg-ivory" : ""}`}>
+                  {defs.map((c, j) => (
+                    <td key={j}
+                      className={`${pad} align-middle leading-6 text-ink2 tabular-nums ${alignOf(c.align)} ${c.nowrap ? "whitespace-nowrap" : ""} ${
+                        stickyFirst && j === 0 ? "sticky left-0 z-[1] bg-surface group-hover:bg-ivory" : ""}`}>
+                      {cell(r, c, j, index)}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
+            {shown.length === 0 && (
+              <tr><td colSpan={defs.length} className="px-4 py-10 text-center text-[14px] leading-6 text-ink3">{empty}</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {count > pageSize && (
+        <div className="mt-3 flex flex-wrap items-center justify-end gap-3 text-[14px] text-ink2">
+          <span className="tabular-nums">{from}–{to} of {count.toLocaleString("en-IN")}</span>
+          <span className="flex gap-2">
+            <StudioBtn kind="ghost" small disabled={current <= 1} onClick={() => go(current - 1)}>Prev</StudioBtn>
+            <StudioBtn kind="ghost" small disabled={current >= pages} onClick={() => go(current + 1)}>Next</StudioBtn>
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Two lines in one table cell — a name over its detail. */
+export function CellStack({ primary, secondary, className = "" }: { primary: ReactNode; secondary?: ReactNode; className?: string }) {
+  return (
+    <span className={`block min-w-0 ${className}`}>
+      <span className="block truncate font-semibold text-ink">{primary}</span>
+      {secondary !== undefined && secondary !== null && secondary !== "" && <span className="block truncate text-[12.5px] leading-5 text-ink3">{secondary}</span>}
+    </span>
+  );
+}
+
+/* ---------------- stat tiles ---------------- */
+export type StatTone = "up" | "dn";
+export function StatTile({ label, value, delta, tone, onClick, hot }: {
+  label: ReactNode; value: ReactNode; delta?: ReactNode; tone?: StatTone; onClick?: () => void; hot?: boolean;
+}) {
+  // A long text value (a name, "3 sold") steps down so it stays on one line.
+  const big = typeof value === "number" || (typeof value === "string" && value.length <= 12);
+  const toneCls = tone === "up" ? "text-ok" : tone === "dn" ? "text-err" : "text-ink3";
+  return (
+    <div onClick={onClick} role={onClick ? "button" : undefined} tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } } : undefined}
+      className={`flex min-h-[88px] min-w-0 flex-col justify-center rounded-[12px] border px-4 py-3.5 ${
+        hot ? "border-primary/40 bg-primary/[0.03]" : "border-border bg-surface"} ${onClick ? "cursor-pointer transition-colors hover:bg-ivory" : ""}`}>
+      <div className="text-[14px] leading-5 text-ink2">{label}</div>
+      <div className={`mt-1 min-w-0 break-words font-bold tracking-[-0.01em] tabular-nums text-ink ${big ? "text-[28px] leading-8" : "text-[20px] leading-7"}`}>{value}</div>
+      {delta !== undefined && delta !== null && delta !== "" && <div className={`mt-1 text-[13px] leading-5 ${toneCls}`}>{delta}</div>}
+    </div>
+  );
+}
+
+/**
+ * A row of stat tiles. Takes either `<StatTile>` children or the `items`
+ * array `Stats` (ui.tsx) takes, so a page migrates by renaming the tag.
+ */
+export function StatGrid({ items, children, className = "" }: {
+  items?: { k: ReactNode; v: ReactNode; d?: ReactNode; hot?: boolean; tone?: StatTone; onClick?: () => void }[];
+  children?: ReactNode; className?: string;
+}) {
+  return (
+    <div className={`col-span-full grid grid-cols-2 gap-3 @lg/pane:grid-cols-3 ${className}`}>
+      {items?.map((s, i) => <StatTile key={i} label={s.k} value={s.v} delta={s.d} hot={s.hot} tone={s.tone} onClick={s.onClick} />)}
+      {children}
+    </div>
+  );
+}
+
+/* ---------------- chart panel ---------------- */
+/** A titled panel around one of ui.tsx's charts (AreaChart, HBars, GBars) or a small table. */
+export function ChartPanel({ title, sub, hero, heroTone, children, actions, full, className = "" }: {
+  title: ReactNode; sub?: ReactNode; hero?: ReactNode; heroTone?: ReactNode; children?: ReactNode; actions?: ReactNode;
+  /** Span both columns of a two-column chart grid. */
+  full?: boolean; className?: string;
+}) {
+  return (
+    <section className={`min-w-0 rounded-[12px] border border-border bg-surface p-4 ${full ? "col-span-full" : ""} ${className}`}>
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <h3 className="text-[16px] font-semibold leading-6 text-ink">{title}</h3>
+          {sub && <p className="mt-0.5 text-[14px] leading-5 text-ink2">{sub}</p>}
+        </div>
+        {actions && <div className="shrink-0">{actions}</div>}
+      </header>
+      {hero !== undefined && hero !== null && hero !== "" && (
+        <div className="mt-2 text-[32px] font-bold leading-9 tracking-[-0.01em] tabular-nums text-ink">
+          {hero}{heroTone && <span className="ml-2 text-[14px] font-semibold text-ok">{heroTone}</span>}
+        </div>
+      )}
+      {children !== undefined && <div className="mt-3 min-w-0">{children}</div>}
+    </section>
+  );
+}
+
+/** Label / value line inside a ChartPanel ("Per day · 14"). */
+export function KeyValue({ k, v }: { k: ReactNode; v: ReactNode }) {
+  return (
+    <div className="flex min-h-[40px] items-center justify-between gap-4 border-b border-border py-2 text-[14px] leading-5 last:border-0">
+      <span className="text-ink2">{k}</span><span className="font-semibold tabular-nums text-ink">{v}</span>
+    </div>
+  );
+}
+
+/* ---------------- filters ---------------- */
+/** A wrapping row of 44px filter controls with a right-aligned clear link. */
+export function FilterBar({ children, onClear, clearLabel = "Clear filters", className = "" }: {
+  children: ReactNode; onClear?: () => void; clearLabel?: string; className?: string;
+}) {
+  return (
+    <div className={`col-span-full flex flex-wrap items-end gap-3 rounded-[12px] border border-border bg-ivory p-3 ${className}`}>
+      {children}
+      {onClear && <StudioBtn kind="link" onClick={onClear} className="ml-auto self-center">{clearLabel}</StudioBtn>}
+    </div>
+  );
+}
+
+export function SearchInput({ value, onChange, placeholder = "Search…", className = "", autoFocus, ariaLabel }: {
+  value: string; onChange: (v: string) => void; placeholder?: string; className?: string; autoFocus?: boolean; ariaLabel?: string;
+}) {
+  return (
+    <div className={`relative min-w-0 ${className}`}>
+      <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-ink3" aria-hidden />
+      <input type="search" value={value} placeholder={placeholder} autoFocus={autoFocus} aria-label={ariaLabel ?? placeholder}
+        onChange={(e) => onChange(e.target.value)} className={`${CONTROL} pl-10`} />
+    </div>
+  );
+}
+
+/* ---------------- definition rows for drawers ---------------- */
+export function DetailList({ items, className = "" }: {
+  items: ([ReactNode, ReactNode] | false | null | undefined)[]; className?: string;
+}) {
+  const rows = items.filter((x): x is [ReactNode, ReactNode] => Array.isArray(x));
+  return (
+    <dl className={`m-0 grid divide-y divide-border rounded-[10px] border border-border bg-surface ${className}`}>
+      {rows.map(([k, v], i) => (
+        <div key={i} className="grid gap-1 px-4 py-2.5 text-[14px] leading-5 @sm/fields:grid-cols-[150px_minmax(0,1fr)] sm:grid-cols-[150px_minmax(0,1fr)]">
+          <dt className="text-ink3">{k}</dt>
+          <dd className="m-0 min-w-0 break-words text-ink">{v}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/* ---------------- matrix (permissions) ---------------- */
+export type MatrixColumn = { key: string; label: ReactNode; width?: number; align?: "left" | "center" | "right" };
+export type MatrixRow = { key: string; label: ReactNode; cells: ReactNode[]; muted?: boolean };
+export type MatrixGroup = { key: string; label: ReactNode; meta?: ReactNode; right?: ReactNode; rows: MatrixRow[] };
+
+/**
+ * Grouped rows × columns with a sticky first column. Scrolls sideways inside
+ * its own box, never the page. Group headers are 15px on a sage band.
+ */
+export function Matrix({ columns, groups, firstLabel = "", firstWidth = 260, className = "" }: {
+  columns: MatrixColumn[]; groups: MatrixGroup[]; firstLabel?: ReactNode; firstWidth?: number; className?: string;
+}) {
+  const alignOf = (a?: string) => (a === "right" ? "text-right" : a === "left" ? "text-left" : "text-center");
+  return (
+    <div className={`overflow-x-auto rounded-[12px] border border-border bg-surface ${className}`}>
+      <table className="w-full border-collapse text-[14px]" style={{ minWidth: firstWidth + columns.length * 120 }}>
+        <thead>
+          <tr>
+            <th scope="col" style={{ minWidth: firstWidth }}
+              className="sticky left-0 z-[2] border-b border-border bg-surface px-4 py-3 text-left text-[12.5px] font-semibold leading-5 text-ink3">{firstLabel}</th>
+            {columns.map((c) => (
+              <th key={c.key} scope="col" style={{ minWidth: c.width ?? 120 }}
+                className={`border-b border-border bg-surface px-4 py-3 text-[12.5px] font-semibold leading-5 text-ink3 ${alignOf(c.align)}`}>{c.label}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {groups.map((g) => (
+            <Fragment key={g.key}>
+              <tr>
+                <th scope="rowgroup" className="sticky left-0 z-[1] bg-sage px-4 py-2.5 text-left text-[15px] font-semibold leading-6 text-ink">
+                  <span className="flex items-center gap-2">{g.label}{g.meta && <span className="text-[14px] font-normal text-ink2">{g.meta}</span>}</span>
+                </th>
+                <td colSpan={columns.length} className="bg-sage px-4 py-2.5 text-right">{g.right}</td>
+              </tr>
+              {g.rows.map((r) => (
+                <tr key={r.key} className={`group border-b border-border last:border-0 hover:bg-ivory ${r.muted ? "opacity-60" : ""}`}>
+                  <th scope="row" className="sticky left-0 z-[1] bg-surface px-4 py-2.5 text-left text-[14px] font-normal leading-6 text-ink group-hover:bg-ivory">{r.label}</th>
+                  {r.cells.map((c, j) => (
+                    <td key={j} className={`px-4 py-1.5 align-middle leading-6 ${alignOf(columns[j]?.align)}`}>{c}</td>
+                  ))}
+                </tr>
+              ))}
+            </Fragment>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** A checkbox sized for a matrix cell — 24px box inside a 44px target. */
+export function MatrixCheck({ checked, onChange, disabled, label }: { checked: boolean; onChange?: (v: boolean) => void; disabled?: boolean; label?: string }) {
+  return (
+    <label className={`inline-grid h-11 w-11 place-items-center rounded-[8px] ${disabled ? "cursor-default" : "cursor-pointer hover:bg-sage"}`}>
+      <input type="checkbox" checked={checked} disabled={disabled} aria-label={label}
+        onChange={(e) => onChange?.(e.target.checked)} className="h-6 w-6 cursor-[inherit] rounded accent-[var(--color-primary)]" />
+    </label>
+  );
+}
+
+/** A wrapping row of choice pills (a role, a duration) — each at least 44px. */
+export function ChoicePills<T extends string | null>({ value, onChange, options, disabled }: {
+  value: T; onChange: (v: T) => void; options: { value: T; label: ReactNode; disabled?: boolean }[]; disabled?: boolean;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {options.map((o) => {
+        const on = o.value === value;
+        return (
+          <button key={String(o.value)} type="button" disabled={disabled || o.disabled} onClick={() => onChange(o.value)} aria-pressed={on}
+            className={`min-h-[44px] rounded-full border px-4 text-[14px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+              on ? "border-primary bg-primary text-white" : "border-border bg-surface text-ink2 hover:bg-ivory hover:text-ink"}`}>
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ---------------- dismissable page hint ---------------- */
+/** First-visit explainer, remembered per browser under the same key ui.tsx's Hint uses. */
+export function StudioHint({ id, title = "How this page works", children, steps }: { id: string; title?: string; children?: ReactNode; steps?: string[] }) {
+  const [gone, setGone] = useState(() => { try { return localStorage.getItem("hint-" + id) === "1"; } catch { return false; } });
+  if (gone) return null;
+  return (
+    <div className="col-span-full rounded-[12px] border border-primary/25 bg-primary/[0.04] px-5 py-4 text-[14px] leading-6 text-ink2">
+      <div className="flex items-start justify-between gap-3">
+        <div className="text-[15px] font-semibold text-ink">{title}</div>
+        <StudioBtn kind="ghost" small onClick={() => { try { localStorage.setItem("hint-" + id, "1"); } catch { /* private mode */ } setGone(true); }}>Got it</StudioBtn>
+      </div>
+      {children && <div className="mt-1">{children}</div>}
+      {steps && (
+        <ol className="mt-2 grid list-none gap-2 p-0">
+          {steps.map((st, i) => (
+            <li key={i} className="flex items-start gap-3">
+              <span className="mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full bg-primary text-[12.5px] font-bold text-white">{i + 1}</span>
+              <span>{st}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+/* ---------------- side sheet ---------------- */
+/**
+ * A wide sheet from the right edge for editors and detail views: a 20px title,
+ * a body that scrolls on its own and a footer that stays put. Escape closes it
+ * unless a dialog (ui.tsx Modal) is open on top.
+ */
+export function StudioSheet({ open, onClose, title, sub, children, footer, width = 560 }: {
+  open: boolean; onClose: () => void; title: ReactNode; sub?: ReactNode; children: ReactNode; footer?: ReactNode; width?: number;
+}) {
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (document.querySelector('[aria-modal="true"]:not([data-studio-sheet])')) return;
+      closeRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+  if (!open) return null;
+  return createPortal(
+    <div className="fixed inset-0 z-[70]" role="dialog" aria-modal="true" data-studio-sheet="" aria-label={typeof title === "string" ? title : undefined}>
+      <div className="absolute inset-0 bg-primary/30" style={{ animation: "fade-in 200ms ease-out both" }} onClick={onClose} />
+      <div className="absolute right-0 top-0 flex h-full w-full flex-col border-l border-border bg-bg shadow-2xl" style={{ maxWidth: width, animation: "sheet-in 220ms ease-out both" }}>
+        <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border bg-surface px-6 py-4">
+          <div className="min-w-0">
+            <h2 className="text-[20px] font-semibold leading-7 text-ink">{title}</h2>
+            {sub && <p className="mt-0.5 text-[14px] leading-5 text-ink2">{sub}</p>}
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close" className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-ink2 hover:bg-sage hover:text-ink"><X className="h-5 w-5" /></button>
+        </header>
+        <div className="@container/fields min-h-0 flex-1 overflow-y-auto px-6 py-6">{children}</div>
+        {footer && <footer className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-border bg-surface px-6 py-3">{footer}</footer>}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/** A 44px date field with the native picker, optional bounds. */
+export function DateInput({ value, onChange, min, max, ariaLabel, className = "", disabled }: {
+  value: string; onChange: (v: string) => void; min?: string; max?: string; ariaLabel?: string; className?: string; disabled?: boolean;
+}) {
+  return (
+    <input type="date" value={value} min={min || undefined} max={max || undefined} aria-label={ariaLabel} disabled={disabled}
+      onChange={(e) => onChange(e.target.value)} className={`${CONTROL} tabular-nums ${className}`} />
   );
 }

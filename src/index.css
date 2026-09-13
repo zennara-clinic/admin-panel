@@ -173,3 +173,19 @@ body {
   border-color: var(--color-primary);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 15%, transparent);
 }
+
+/* Organisation pages (src/pages/org.tsx, src/pages/access.tsx): native date and
+   time pickers inside the 44px studio controls, and the one monospace block. */
+.st-control::-webkit-calendar-picker-indicator {
+  opacity: 0.55;
+  cursor: pointer;
+}
+.st-control::-webkit-search-cancel-button {
+  cursor: pointer;
+}
+.st-json {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  tab-size: 2;
+}
