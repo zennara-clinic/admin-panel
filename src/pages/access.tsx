@@ -1,9 +1,6 @@
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
-import { B, Modal, Async, DeleteModal } from "../ui";
-import {
-  ChoicePills, Field, Input, Matrix, MatrixCheck, Note, Section, Select, StatusTag, StudioBtn, StudioEmpty, StudioTable, SubHeading, Textarea,
-} from "../studio-ui";
+import { Btn, Tag, Card, B, Note, In, Sel, Area, Modal, Empty, Async, SecH, DataTable, DeleteModal } from "../ui";
 import { useStore } from "../store";
 import api from "../lib/api";
 import { useApi } from "../lib/useApi";
@@ -46,34 +43,47 @@ export function PermissionMatrix({
     onChange(next);
   };
 
-  if (groups.length === 0) return <StudioEmpty title="No permissions to show" hint="The permission catalogue has not loaded yet." />;
-
   return (
-    <Matrix
-      firstLabel="Permission"
-      columns={[{ key: "granted", label: "Granted", width: 120 }]}
-      groups={groups.map((g) => {
+    <div className="grid gap-3">
+      {groups.map((g) => {
         const on = g.permissions.filter((p) => value.has(p.key)).length;
         const all = on === g.permissions.length;
-        return {
-          key: g.key,
-          label: g.label,
-          meta: <span className="tabular-nums">{on}/{g.permissions.length}</span>,
-          right: editable ? (
-            <StudioBtn kind="link" small onClick={() => setGroup(g, !all)}>{all ? "Clear all" : "Select all"}</StudioBtn>
-          ) : undefined,
-          rows: g.permissions.map((p) => ({
-            key: p.key,
-            label: (
-              <span className="flex flex-wrap items-center gap-2">
-                <span>{p.label}</span>
-                {p.sensitive && <StatusTag kind="warn">sensitive</StatusTag>}
-              </span>
-            ),
-            cells: [<MatrixCheck key={p.key} checked={value.has(p.key)} disabled={!editable} label={p.label} onChange={() => toggle(p.key)} />],
-          })),
-        };
-      })} />
+        return (
+          <Card key={g.key} className="p-3.5">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <B>{g.label}</B>
+                <span className="font-mono text-[10.5px] text-ink3">{on}/{g.permissions.length}</span>
+              </div>
+              {editable && (
+                <button
+                  onClick={() => setGroup(g, !all)}
+                  className="text-[11px] font-bold text-gold-dark hover:underline">
+                  {all ? "Clear all" : "Select all"}
+                </button>
+              )}
+            </div>
+            <div className="grid gap-1.5 sm:grid-cols-2">
+              {g.permissions.map((p) => {
+                const checked = value.has(p.key);
+                return (
+                  <label key={p.key}
+                    className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[12px] ${
+                      editable ? "cursor-pointer hover:bg-ivory" : "cursor-default"
+                    } ${checked ? "border-gold-dark bg-cream/60" : "border-border bg-surface"}`}>
+                    <input type="checkbox" checked={checked} disabled={!editable}
+                      onChange={() => toggle(p.key)}
+                      className="h-3.5 w-3.5 accent-[var(--color-primary)]" />
+                    <span className="flex-1">{p.label}</span>
+                    {p.sensitive && <Tag kind="warn">sensitive</Tag>}
+                  </label>
+                );
+              })}
+            </div>
+          </Card>
+        );
+      })}
+    </div>
   );
 }
 
@@ -106,27 +116,33 @@ export function StaffAccessFields({
   }, [role?._id, permissions]);
 
   return (
-    <div className="col-span-full grid gap-4 rounded-[12px] border border-border bg-ivory p-4">
+    <div className="grid gap-2.5 rounded-xl border border-border bg-ivory/60 p-3">
+      <SecH t="Access" em="· what this staff member can do" />
       <div>
-        <div className="text-[16px] font-semibold leading-6 text-ink">Access</div>
-        <div className="text-[14px] leading-5 text-ink2">What this staff member can do.</div>
+        <div className="mb-1 text-[11px] font-bold text-ink2">Role</div>
+        <div className="flex flex-wrap gap-1.5">
+          <button onClick={() => onRole(null)}
+            className={`rounded-full border px-3 py-1 text-[12px] font-semibold ${customRoleId === null ? "border-primary bg-cream" : "border-border bg-surface hover:bg-ivory"}`}>
+            No role
+          </button>
+          {roles.map((r) => (
+            <button key={r._id} onClick={() => onRole(r._id)}
+              className={`rounded-full border px-3 py-1 text-[12px] font-semibold ${customRoleId === r._id ? "border-primary bg-cream" : "border-border bg-surface hover:bg-ivory"}`}>
+              {r.name}
+            </button>
+          ))}
+        </div>
+        {role && <div className="mt-1.5 text-[11px] text-ink3">{role.name} grants {rolePerms.size} permission{rolePerms.size === 1 ? "" : "s"}. {role.description}</div>}
+        {!role && <div className="mt-1.5 text-[11px] text-ink3">With no role, this account can only do what you grant directly below.</div>}
       </div>
-      <Field label="Role"
-        hint={role
-          ? `${role.name} grants ${rolePerms.size} permission${rolePerms.size === 1 ? "" : "s"}. ${role.description ?? ""}`
-          : "With no role, this account can only do what you grant directly below."}>
-        <ChoicePills<string | null> value={customRoleId} onChange={onRole}
-          options={[{ value: null, label: "No role" }, ...roles.map((r) => ({ value: r._id as string, label: r.name }))]} />
-      </Field>
 
-      <StudioBtn kind="link" small onClick={() => setShowExtra((v) => !v)} className="justify-self-start">
-        {showExtra ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-        {showExtra ? "Hide extra permissions" : "Add extra permissions on top of the role"}
+      <button onClick={() => setShowExtra((v) => !v)} className="text-left text-[11.5px] font-bold text-gold-dark hover:underline">
+        {showExtra ? <><ChevronDown size={13} /> Hide extra permissions</> : <><ChevronRight size={13} /> Add extra permissions on top of the role</>}
         {permissions.size > 0 ? ` (${permissions.size})` : ""}
-      </StudioBtn>
+      </button>
       {showExtra && (
         <>
-          <Note>
+          <Note className="my-0">
             Ticks already covered by the role are shown for context; add extras here for just this person.
             Effective total: <B>{effective.size}</B> permissions.
           </Note>
@@ -144,17 +160,17 @@ const ROLE_COLORS: Record<string, string> = {
   blue: "bg-info-bg text-info",
   amber: "bg-warn-bg text-warn",
   red: "bg-err-bg text-err",
-  gray: "bg-dis-bg text-ink2",
+  gray: "bg-dis-bg text-dis",
 };
 export function RoleChip({ role }: { role: Pick<Role, "name" | "color"> }) {
   const cls = ROLE_COLORS[role.color ?? "green"] ?? ROLE_COLORS.green;
-  return <span className={`inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-0.5 text-[14px] font-semibold ${cls}`}>{role.name}</span>;
+  return <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-bold ${cls}`}>{role.name}</span>;
 }
 
 /**
  * Create, edit and delete custom staff roles, and pick which granular
  * permissions each one grants. This is the heart of the RBAC screen; assigning
- * a role to a person happens on the Staff section.
+ * a role to a person happens on the Staff tab.
  */
 export function RolesManager() {
   const { toast, audit, can } = useStore();
@@ -168,44 +184,47 @@ export function RolesManager() {
   const [del, setDel] = useState<Role | null>(null);
 
   return (
-    <Section title="Roles & permissions"
-      blurb="A role is a named bundle of permissions. Assign one to a staff account on the Staff section."
-      right={canManage ? <StudioBtn onClick={() => setCreating(true)}>New role</StudioBtn> : undefined}>
-      {!canManage && <Note kind="warn">You can view roles, but only someone with the “manage roles” permission can change them.</Note>}
+    <>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="text-[12.5px] text-ink3">
+          A role is a named bundle of permissions. Assign one to a staff account on the Staff tab.
+        </div>
+        {canManage && <Btn onClick={() => setCreating(true)}>+ New role</Btn>}
+      </div>
 
-      <div className="col-span-full">
-        <Async q={rolesQ} label="Loading roles…" rows={4}>
-          {() => roles.length === 0 ? (
-            <StudioEmpty title="No roles yet" hint="Create your first role and choose what it can do."
-              action={canManage ? <StudioBtn onClick={() => setCreating(true)}>New role</StudioBtn> : undefined} />
-          ) : (
-            <div className="grid gap-3">
-              {roles.map((r) => (
-                <div key={r._id} className="flex flex-wrap items-center gap-4 rounded-[12px] border border-border bg-surface px-4 py-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <RoleChip role={r} />
-                      {r.isSystem && <StatusTag kind="mute">starter</StatusTag>}
-                      {r.isActive === false && <StatusTag kind="mute">disabled</StatusTag>}
-                    </div>
-                    {r.description && <div className="mt-1.5 text-[14px] leading-5 text-ink2">{r.description}</div>}
-                    <div className="mt-1 text-[14px] leading-5 text-ink3">
-                      {r.permissions.length} permission{r.permissions.length === 1 ? "" : "s"}
-                      {typeof r.staffCount === "number" ? ` · ${r.staffCount} staff` : ""}
-                    </div>
+      {!canManage && <Note kind="crit">You can view roles, but only someone with the “manage roles” permission can change them.</Note>}
+
+      <Async q={rolesQ} label="Loading roles…" rows={4}>
+        {() => roles.length === 0 ? (
+          <Empty title="No roles yet" hint="Create your first role and choose what it can do."
+            action={canManage ? <Btn onClick={() => setCreating(true)}>+ New role</Btn> : undefined} />
+        ) : (
+          <div className="grid gap-2.5">
+            {roles.map((r) => (
+              <Card key={r._id} className="flex items-center justify-between gap-3 p-3.5">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <RoleChip role={r} />
+                    {r.isSystem && <Tag kind="mute">starter</Tag>}
+                    {r.isActive === false && <Tag kind="mute">disabled</Tag>}
                   </div>
-                  <div className="flex shrink-0 gap-2">
-                    <StudioBtn kind="ghost" onClick={() => setEditing(r)}>{canManage ? "Edit" : "View"}</StudioBtn>
-                    {canManage && !r.isSystem && (
-                      <StudioBtn kind="danger" onClick={() => setDel(r)}>Delete</StudioBtn>
-                    )}
+                  {r.description && <div className="mt-1 truncate text-[12px] text-ink3">{r.description}</div>}
+                  <div className="mt-1 font-mono text-[10.5px] text-ink3">
+                    {r.permissions.length} permission{r.permissions.length === 1 ? "" : "s"}
+                    {typeof r.staffCount === "number" ? ` · ${r.staffCount} staff` : ""}
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
-        </Async>
-      </div>
+                <div className="flex shrink-0 gap-1.5">
+                  <Btn kind="ghost" onClick={() => setEditing(r)}>{canManage ? "Edit" : "View"}</Btn>
+                  {canManage && !r.isSystem && (
+                    <Btn kind="danger" onClick={() => setDel(r)}>Delete</Btn>
+                  )}
+                </div>
+              </Card>
+            ))}
+          </div>
+        )}
+      </Async>
 
       {(creating || editing) && (
         <RoleEditor
@@ -226,12 +245,11 @@ export function RolesManager() {
             toast("Role deleted"); setDel(null); rolesQ.reload();
           } catch (e) { toast((e as Error).message); }
         }} />
-    </Section>
+    </>
   );
 }
 
 const COLOR_OPTIONS = ["green", "blue", "amber", "red", "gray"];
-const COLOR_LABEL: Record<string, string> = { green: "Green", blue: "Blue", amber: "Amber", red: "Red", gray: "Grey" };
 
 function RoleEditor({ role, groups, canManage, onClose, onSaved }: {
   role: Role | null;
@@ -270,33 +288,31 @@ function RoleEditor({ role, groups, canManage, onClose, onSaved }: {
 
   return (
     <Modal open onClose={onClose} xl title={role ? `Edit role — ${role.name}` : "New role"}>
-      <div className="@container/fields grid gap-5">
-        <div className="grid gap-5 @lg/fields:grid-cols-2">
-          <Field label="Role name">
-            <Input value={name} onChange={setName} placeholder="e.g. Front desk" readOnly={!canManage} />
-          </Field>
-          <Field label="Colour" hint="How the role's chip looks on the staff list.">
-            <div className="flex min-h-[44px] flex-wrap items-center gap-2">
+      <div className="grid gap-3">
+        <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+          <In label="Role name" value={name} onChange={setName} placeholder="e.g. Front desk" readOnly={!canManage} />
+          <div>
+            <div className="mb-1 text-[11px] font-bold text-ink2">Colour</div>
+            <div className="flex gap-1.5 pt-1">
               {COLOR_OPTIONS.map((c) => (
-                <button key={c} type="button" disabled={!canManage} onClick={() => setColor(c)} title={COLOR_LABEL[c]} aria-label={COLOR_LABEL[c]} aria-pressed={color === c}
-                  className={`grid h-11 w-11 place-items-center rounded-full border-2 transition-colors disabled:cursor-default ${color === c ? "border-primary" : "border-transparent"}`}>
-                  <span className={`block h-7 w-7 rounded-full ${ROLE_COLORS[c]}`} />
-                </button>
+                <button key={c} disabled={!canManage} onClick={() => setColor(c)}
+                  className={`h-7 w-7 rounded-full border-2 ${color === c ? "border-primary" : "border-transparent"} ${ROLE_COLORS[c]}`}
+                  title={c} />
               ))}
             </div>
-          </Field>
-          <Field label="Description" full>
-            <Textarea value={description} onChange={setDescription} rows={2} placeholder="What is this role for?" />
-          </Field>
+          </div>
         </div>
+        <Area label="Description" value={description} onChange={setDescription} rows={2} placeholder="What is this role for?" />
 
-        <SubHeading title="Permissions" blurb={`${perms.size} of ${total} selected.`} />
+        <div className="flex items-center justify-between">
+          <SecH t="Permissions" em={`· ${perms.size}/${total} selected`} />
+        </div>
         <PermissionMatrix groups={groups} value={perms} onChange={canManage ? setPerms : undefined} />
 
-        {err && <Note kind="err">{err}</Note>}
-        <div className="sticky bottom-0 -mx-5 -mb-5 flex justify-end gap-2 border-t border-border bg-surface px-5 py-3">
-          <StudioBtn kind="ghost" onClick={onClose}>{canManage ? "Cancel" : "Close"}</StudioBtn>
-          {canManage && <StudioBtn disabled={busy} onClick={save}>{busy ? "Saving…" : role ? "Save role" : "Create role"}</StudioBtn>}
+        {err && <Note kind="crit">{err}</Note>}
+        <div className="sticky bottom-0 flex justify-end gap-2 border-t border-border bg-surface pt-3">
+          <Btn kind="ghost" onClick={onClose}>{canManage ? "Cancel" : "Close"}</Btn>
+          {canManage && <Btn disabled={busy} onClick={save}>{busy ? "Saving…" : role ? "Save role" : "Create role"}</Btn>}
         </div>
       </div>
     </Modal>
@@ -332,42 +348,33 @@ export function CentreRolesEditor({ value, onChange, roles, branches, disabled }
   const day = (v?: string | null) => (v ? String(v).slice(0, 10) : "");
 
   return (
-    <div className="col-span-full grid gap-4 rounded-[12px] border border-border bg-ivory p-4">
-      <div>
-        <div className="text-[16px] font-semibold leading-6 text-ink">Centres & roles</div>
-        <div className="text-[14px] leading-5 text-ink2">What they do at each centre.</div>
-      </div>
-      {value.length === 0 && <div className="text-[14px] leading-6 text-ink3">No centre assignments yet. The role above applies everywhere; add rows to give a different role per centre or a temporary posting.</div>}
+    <div className="grid gap-2 rounded-xl border border-border bg-ivory/60 p-3">
+      <SecH t="Centres & roles" em="· what they do at each centre" />
+      {value.length === 0 && <div className="text-[11.5px] text-ink3">No centre assignments yet. The role above applies everywhere; add rows to give a different role per centre or a temporary posting.</div>}
       {value.map((a, i) => (
-        <div key={i} className={`grid gap-4 rounded-[12px] border p-4 ${a.kind === "deputation" ? "border-primary/30 bg-primary/[0.03]" : "border-border bg-surface"}`}>
-          <div className="grid gap-4 @lg/fields:grid-cols-3">
-            <Field label="Centre">
-              <Select value={branchName(a.branchId)} options={["— choose a centre —", ...branches.map((b) => b.name)]}
-                onChange={(v) => set(i, { branchId: branches.find((b) => b.name === v)?._id ?? "" })} />
-            </Field>
-            <Field label="Role at this centre">
-              <Select value={roleName(a.roleId)} options={["— no role at this centre —", ...roles.map((r) => r.name)]}
-                onChange={(v) => set(i, { roleId: roles.find((r) => r.name === v)?._id ?? null })} />
-            </Field>
-            <Field label="Kind">
-              <Select value={KIND_LABEL[a.kind || "primary"]} options={Object.values(KIND_LABEL)}
-                onChange={(v) => set(i, { kind: v === KIND_LABEL.deputation ? "deputation" : "primary", ...(v === KIND_LABEL.deputation ? {} : { from: null, to: null }) })} />
-            </Field>
+        <div key={i} className={`grid gap-2 rounded-lg border p-2.5 ${a.kind === "deputation" ? "border-gold-dark/60 bg-cream/40" : "border-border bg-surface"}`}>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <Sel label="Centre" value={branchName(a.branchId)} options={["— choose a centre —", ...branches.map((b) => b.name)]}
+              onChange={(v) => set(i, { branchId: branches.find((b) => b.name === v)?._id ?? "" })} />
+            <Sel label="Role at this centre" value={roleName(a.roleId)} options={["— no role at this centre —", ...roles.map((r) => r.name)]}
+              onChange={(v) => set(i, { roleId: roles.find((r) => r.name === v)?._id ?? null })} />
+            <Sel label="Kind" value={KIND_LABEL[a.kind || "primary"]} options={Object.values(KIND_LABEL)}
+              onChange={(v) => set(i, { kind: v === KIND_LABEL.deputation ? "deputation" : "primary", ...(v === KIND_LABEL.deputation ? {} : { from: null, to: null }) })} />
           </div>
           {a.kind === "deputation" && (
-            <div className="grid gap-4 @lg/fields:grid-cols-3">
-              <Field label="From"><Input type="date" value={day(a.from)} onChange={(v) => set(i, { from: v || null })} /></Field>
-              <Field label="To"><Input type="date" value={day(a.to)} onChange={(v) => set(i, { to: v || null })} /></Field>
-              <Field label="Note"><Input value={a.note ?? ""} onChange={(v) => set(i, { note: v })} placeholder="Covering for…" /></Field>
+            <div className="grid gap-2 sm:grid-cols-3">
+              <In label="From" type="date" value={day(a.from)} onChange={(v) => set(i, { from: v || null })} />
+              <In label="To" type="date" value={day(a.to)} onChange={(v) => set(i, { to: v || null })} />
+              <In label="Note" value={a.note ?? ""} onChange={(v) => set(i, { note: v })} placeholder="Covering for…" />
             </div>
           )}
-          {!disabled && <StudioBtn kind="link" small className="justify-self-end !text-err" onClick={() => remove(i)}>Remove</StudioBtn>}
+          {!disabled && <button onClick={() => remove(i)} className="justify-self-end text-[11px] font-bold text-err hover:underline">Remove</button>}
         </div>
       ))}
       {!disabled && (
-        <div className="flex flex-wrap gap-2">
-          <StudioBtn kind="ghost" onClick={() => add("primary")}>Add a role at a centre</StudioBtn>
-          <StudioBtn kind="ghost" onClick={() => add("deputation")}>Add a deputation</StudioBtn>
+        <div className="flex gap-2">
+          <Btn kind="ghost" onClick={() => add("primary")}>+ Role at a centre</Btn>
+          <Btn kind="ghost" onClick={() => add("deputation")}>+ Deputation</Btn>
         </div>
       )}
     </div>
@@ -413,56 +420,58 @@ export function SignInControls({ accountId, email, phone, hasPassword, onChanged
   };
 
   return (
-    <div className="grid gap-3">
-      <div className="flex flex-wrap items-center gap-2 text-[14px] leading-5 text-ink2">
-        <StatusTag kind={hasPassword ? "ok" : "info"}>{hasPassword ? "password set" : "code only"}</StatusTag>
+    <div className="grid gap-2">
+      <div className="flex flex-wrap items-center gap-2 text-[11.5px] text-ink3">
+        <Tag kind={hasPassword ? "ok" : "info"}>{hasPassword ? "password set" : "code only"}</Tag>
         <span>Signs in with <B>{email}</B>{hasPassword ? " and a password, or an emailed code." : " and a 6-digit code emailed at sign-in."}</span>
       </div>
       <div className="flex flex-wrap gap-2">
-        <StudioBtn kind="ghost" onClick={() => { setMode("set"); setGenerate(true); setChannel("email"); }}>{hasPassword ? "Update password" : "Set a password"}</StudioBtn>
-        <StudioBtn kind="ghost" onClick={() => { setMode("send"); setChannel(phone ? "both" : "email"); }}>Send sign-in details</StudioBtn>
+        <Btn kind="ghost" onClick={() => { setMode("set"); setGenerate(true); setChannel("email"); }}>{hasPassword ? "Update password" : "Set a password"}</Btn>
+        <Btn kind="ghost" onClick={() => { setMode("send"); setChannel(phone ? "both" : "email"); }}>Send sign-in details</Btn>
       </div>
 
       <Modal open={mode !== null} onClose={close} title={mode === "send" ? "Send sign-in details" : hasPassword ? "Update password" : "Set a password"}>
         {issued ? (
-          <div className="grid gap-4">
-            <Note>This temporary password is shown once. They will be asked to choose their own at first sign-in.</Note>
-            <div className="rounded-[12px] border border-border bg-ivory px-4 py-4 text-center font-mono text-[22px] font-bold tracking-wide tabular-nums text-ink">{issued}</div>
+          <div className="grid gap-3">
+            <Note kind="gold">This temporary password is shown once. They will be asked to choose their own at first sign-in.</Note>
+            <div className="rounded-xl border border-border bg-ivory px-4 py-3 text-center font-mono text-[20px] font-bold tracking-wide">{issued}</div>
             {delivery && (
-              <div className="text-[14px] leading-6 text-ink2">
+              <div className="text-[11.5px] text-ink3">
                 {delivery.email && <div>Email: {delivery.email}</div>}
                 {delivery.whatsapp && <div>WhatsApp: {delivery.whatsapp}</div>}
               </div>
             )}
-            <div className="flex justify-end"><StudioBtn onClick={close}>Done</StudioBtn></div>
+            <div className="flex justify-end"><Btn onClick={close}>Done</Btn></div>
           </div>
         ) : (
-          <div className="grid gap-4">
+          <div className="grid gap-3">
             {mode === "send" ? (
-              <Note>A new temporary password is issued and sent. Their previous password (if any) stops working.</Note>
+              <Note className="my-0">A new temporary password is issued and sent. Their previous password (if any) stops working.</Note>
             ) : (
               <>
-                <Field label="Password">
-                  <ChoicePills<string> value={generate ? "generate" : "typed"} onChange={(v) => setGenerate(v === "generate")}
-                    options={[{ value: "generate", label: "Generate a temporary password" }, { value: "typed", label: "Type one" }]} />
-                </Field>
-                {!generate && (
-                  <Field label="New password" hint="At least 8 characters. Stored as a hash — it cannot be shown again.">
-                    <Input type="password" value={pw} onChange={setPw} />
-                  </Field>
-                )}
+                <div className="flex gap-2">
+                  <button onClick={() => setGenerate(true)} className={`rounded-full border px-3 py-1 text-[12px] font-semibold ${generate ? "border-primary bg-cream" : "border-border bg-surface"}`}>Generate a temporary password</button>
+                  <button onClick={() => setGenerate(false)} className={`rounded-full border px-3 py-1 text-[12px] font-semibold ${!generate ? "border-primary bg-cream" : "border-border bg-surface"}`}>Type one</button>
+                </div>
+                {!generate && <In label="New password" type="password" value={pw} onChange={setPw} hint="At least 8 characters. Stored as a hash — it cannot be shown again." />}
               </>
             )}
-            <Field label="Send to them by" hint={!phone ? "Add a phone number to the account to send by WhatsApp." : undefined}>
-              <ChoicePills<string> value={channel} onChange={(v) => setChannel(v as typeof channel)}
-                options={(mode === "set" ? (["email", "whatsapp", "both", "none"] as const) : (["email", "whatsapp", "both"] as const)).map((c) => ({
-                  value: c, label: chLabel[c], disabled: (c === "whatsapp" || c === "both") && !phone,
-                }))} />
-            </Field>
-            {err && <Note kind="err">{err}</Note>}
+            <div>
+              <div className="mb-1 text-[11px] font-bold text-ink2">Send to them by</div>
+              <div className="flex flex-wrap gap-1.5">
+                {(mode === "set" ? (["email", "whatsapp", "both", "none"] as const) : (["email", "whatsapp", "both"] as const)).map((c) => (
+                  <button key={c} onClick={() => setChannel(c)} disabled={(c === "whatsapp" || c === "both") && !phone}
+                    className={`rounded-full border px-3 py-1 text-[12px] font-semibold disabled:opacity-40 ${channel === c ? "border-primary bg-cream" : "border-border bg-surface"}`}>
+                    {chLabel[c]}
+                  </button>
+                ))}
+              </div>
+              {!phone && <div className="mt-1 text-[10.5px] text-ink3">Add a phone number to the account to send by WhatsApp.</div>}
+            </div>
+            {err && <Note kind="crit">{err}</Note>}
             <div className="flex justify-end gap-2">
-              <StudioBtn kind="ghost" onClick={close}>Cancel</StudioBtn>
-              <StudioBtn disabled={busy || (mode === "set" && !generate && pw.length < 8)} onClick={run}>{busy ? "Working…" : mode === "send" ? "Send" : "Set password"}</StudioBtn>
+              <Btn kind="ghost" onClick={close}>Cancel</Btn>
+              <Btn disabled={busy || (mode === "set" && !generate && pw.length < 8)} onClick={run}>{busy ? "Working…" : mode === "send" ? "Send" : "Set password"}</Btn>
             </div>
           </div>
         )}
@@ -489,12 +498,12 @@ export function ChangePasswordForm({ requireCurrent, onDone }: { requireCurrent:
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
   return (
-    <div className="grid gap-4">
-      {requireCurrent && <Field label="Current password"><Input type="password" value={current} onChange={setCurrent} /></Field>}
-      <Field label="New password" hint="At least 8 characters."><Input type="password" value={next} onChange={setNext} /></Field>
-      <Field label="New password again"><Input type="password" value={again} onChange={setAgain} /></Field>
-      {err && <Note kind="err">{err}</Note>}
-      <div className="flex justify-end"><StudioBtn disabled={busy} onClick={submit}>{busy ? "Saving…" : "Save password"}</StudioBtn></div>
+    <div className="grid gap-3">
+      {requireCurrent && <In label="Current password" type="password" value={current} onChange={setCurrent} />}
+      <In label="New password" type="password" value={next} onChange={setNext} hint="At least 8 characters." />
+      <In label="New password again" type="password" value={again} onChange={setAgain} />
+      {err && <Note kind="crit">{err}</Note>}
+      <div className="flex justify-end"><Btn disabled={busy} onClick={submit}>{busy ? "Saving…" : "Save password"}</Btn></div>
     </div>
   );
 }
@@ -543,80 +552,77 @@ export function SignInSecurityTab() {
   };
 
   return (
-    <Section title="Sign-in security" blurb="Brute-force protection for every panel sign-in, and the way to un-stick a locked-out colleague.">
-      <div className="col-span-full">
-        <Async q={settings} label="Reading the security settings…" rows={3}>
-          {(s) => {
-            const rl = s.loginRateLimit;
-            return (
-              <div className="grid gap-5 rounded-[12px] border border-border bg-surface p-5">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <h3 className="text-[16px] font-semibold leading-6 text-ink">Sign-in throttling</h3>
-                  <StatusTag kind={rl.active ? "ok" : "err"}>{rl.active ? "On" : "Paused"}</StatusTag>
-                </div>
+    <div className="grid gap-3.5">
+      <Async q={settings} label="Reading the security settings…" rows={3}>
+        {(s) => {
+          const rl = s.loginRateLimit;
+          return (
+            <Card className="p-4">
+              <SecH t="Sign-in throttling"
+                right={<Tag kind={rl.active ? "ok" : "err"}>{rl.active ? "On" : "Paused"}</Tag>} />
 
-                {rl.active ? (
-                  <p className="m-0 max-w-[640px] text-[14px] leading-6 text-ink2">
-                    After <B>10 failed</B> sign-in attempts in 15 minutes, that email is asked to wait.
-                    Successful sign-ins are never counted, and each account has its own budget — one
-                    person mistyping a password cannot lock out the centre.
-                  </p>
-                ) : (
-                  <Note kind="err">
-                    <B>Throttling is off.</B> Anyone can guess staff passwords as fast as they like until{" "}
-                    <B>{fmtDateTime(rl.pausedUntil)}</B> ({rl.minutesRemaining} min left).
-                    {rl.pausedByName ? <> Paused by {rl.pausedByName}.</> : null}
-                    {rl.pausedReason ? <> Reason: “{rl.pausedReason}”.</> : null}
-                  </Note>
-                )}
+              {rl.active ? (
+                <p className="mb-3 text-[12.5px] text-ink2">
+                  After <B>10 failed</B> sign-in attempts in 15 minutes, that email is asked to wait.
+                  Successful sign-ins are never counted, and each account has its own budget — one
+                  person mistyping a password cannot lock out the centre.
+                </p>
+              ) : (
+                <Note kind="crit" className="mb-3">
+                  <B>Throttling is off.</B> Anyone can guess staff passwords as fast as they like until{" "}
+                  <B>{fmtDateTime(rl.pausedUntil)}</B> ({rl.minutesRemaining} min left).
+                  {rl.pausedByName ? <> Paused by {rl.pausedByName}.</> : null}
+                  {rl.pausedReason ? <> Reason: “{rl.pausedReason}”.</> : null}
+                </Note>
+              )}
 
-                {rl.active ? (
-                  <div className="grid gap-4 rounded-[12px] border border-border bg-ivory p-4">
-                    <div>
-                      <div className="text-[15px] font-semibold leading-6 text-ink">Pause it while testing</div>
-                      <div className="text-[14px] leading-5 text-ink2">A bounded window that turns itself back on — there is no permanent off.</div>
-                    </div>
-                    <Field label="For how long">
-                      <ChoicePills<string> value={String(minutes)} onChange={(v) => setMinutes(Number(v))}
-                        options={PAUSE_CHOICES.filter(([m]) => m <= rl.maxPauseMinutes).map(([m, label]) => ({ value: String(m), label }))} />
-                    </Field>
-                    <Field label="Why (goes in the audit log)">
-                      <Input value={reason} onChange={setReason} placeholder="Testing the dermatologist panel sign-in" />
-                    </Field>
-                    <div className="flex justify-end">
-                      <StudioBtn disabled={busy || reason.trim().length < 3} onClick={() => apply(true)}>
-                        {busy ? "Pausing…" : "Pause throttling"}
-                      </StudioBtn>
-                    </div>
+              {rl.active ? (
+                <div className="rounded-xl border border-border bg-ivory p-3">
+                  <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-ink3">Pause it while testing</div>
+                  <div className="mb-2 flex flex-wrap gap-1.5">
+                    {PAUSE_CHOICES.filter(([m]) => m <= rl.maxPauseMinutes).map(([m, label]) => (
+                      <button key={m} onClick={() => setMinutes(m)}
+                        className={`rounded-lg px-2.5 py-1.5 text-[12px] font-semibold ${minutes === m ? "bg-primary text-white" : "border border-border bg-surface text-ink2"}`}>
+                        {label}
+                      </button>
+                    ))}
                   </div>
-                ) : (
-                  <div><StudioBtn disabled={busy} onClick={() => apply(false)}>{busy ? "Turning it on…" : "Turn throttling back on now"}</StudioBtn></div>
-                )}
-              </div>
-            );
-          }}
-        </Async>
-      </div>
+                  <In label="Why (goes in the audit log)" value={reason} onChange={setReason}
+                    placeholder="Testing the dermatologist panel sign-in" full />
+                  <div className="mt-2.5 flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-ink3">It turns itself back on — there is no permanent off.</span>
+                    <Btn kind="gold" disabled={busy || reason.trim().length < 3} onClick={() => apply(true)}>
+                      {busy ? "Pausing…" : "Pause throttling"}
+                    </Btn>
+                  </div>
+                </div>
+              ) : (
+                <Btn disabled={busy} onClick={() => apply(false)}>{busy ? "Turning it on…" : "Turn throttling back on now"}</Btn>
+              )}
+            </Card>
+          );
+        }}
+      </Async>
 
-      <SubHeading title="Locked out" blurb="10 wrong passwords locks an account for an hour." />
-      <div className="col-span-full">
+      <Card className="p-4">
+        <SecH t="Locked out" em="· 10 wrong passwords locks an account for an hour" />
         <Async q={locked} label="" rows={2}>
           {(rows) => rows.length === 0 ? (
-            <div className="text-[14px] leading-6 text-ink3">Nobody is locked out, and nobody has a failed attempt on record.</div>
+            <div className="text-[12px] text-ink3">Nobody is locked out, and nobody has a failed attempt on record.</div>
           ) : (
-            <StudioTable cols={["Who", "Role", { label: "Failed attempts", align: "right" }, "Status", ""]} minWidth={560}
+            <DataTable cols={["Who", "Role", "Failed attempts", "Status", ""]}
               rows={rows.map((a) => [
-                <span key={a._id} className="block"><span className="block font-semibold text-ink">{a.name ?? "—"}</span><span className="block text-[12.5px] leading-5 text-ink3">{a.email}</span></span>,
+                <span key={a._id}><B>{a.name ?? "—"}</B><br /><span className="text-[11px] text-ink3">{a.email}</span></span>,
                 a.role,
                 <span key={`${a._id}f`} className="tabular-nums">{a.failedLoginAttempts}</span>,
                 a.lockedUntil
-                  ? <StatusTag key={`${a._id}s`} kind="err">Locked until {fmtTime(a.lockedUntil)}</StatusTag>
-                  : <StatusTag key={`${a._id}s`} kind="warn">Can still sign in</StatusTag>,
-                <StudioBtn key={`${a._id}b`} kind="ghost" small onClick={() => unlock(a)}>Clear</StudioBtn>,
+                  ? <Tag key={`${a._id}s`} kind="err">Locked until {fmtTime(a.lockedUntil)}</Tag>
+                  : <Tag key={`${a._id}s`} kind="warn">Can still sign in</Tag>,
+                <Btn key={`${a._id}b`} kind="ghost" className="!py-1 !text-[11.5px]" onClick={() => unlock(a)}>Clear</Btn>,
               ])} />
           )}
         </Async>
-      </div>
-    </Section>
+      </Card>
+    </div>
   );
 }

@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Star } from "lucide-react";
-import { AreaChart, Async, B, Btn, Card, ChartCard, DataTable, DateRange, DeleteModal, Empty, ErrorState, GBars, HBars, Loading, Menu, MenuButton, Modal, Page, RatingValue, SecH, StaleBanner, Stars, Stats, Tabs, Tag, Toggle, exportCsv } from "../ui";
 import {
-  CellStack, ChoicePills, DateInput, DetailList, Field, FilterBar, ImageInput, Input, Note, NumberInput, RemoveButton, Row,
-  SearchInput, Section, Segmented, Select, StatGrid, StatusTag, StudioBtn, StudioEmpty, StudioHint, StudioPage, StudioSheet, StudioStale,
-  StudioTable, SubHeading, Textarea, ToggleRow, useStudioSection, type StudioSection,
+  Area, AreaChart, Async, B, Btn, Card, ChartCard, DataTable, DateRange, DeleteModal, Drawer, Empty, ErrorState, GBars, HBars, Hint, In,
+  Loading, Menu, MenuButton, Modal, Note as UiNote, Page, RatingValue, SecH, Sel, StaleBanner, Stars, Stats, Tabs, Tag, Toggle, exportCsv,
+} from "../ui";
+import {
+  DateInput, DetailList, Field, ImageInput, Input, Note, NumberInput, RemoveButton, Row, Section, Select, StatusTag,
+  StudioBtn, StudioEmpty, StudioPage, StudioSheet, StudioStale, SubHeading, ToggleRow, useStudioSection, type StudioSection,
 } from "../studio-ui";
 import { useStore, ROLE_LABEL } from "../store";
 import { DEFAULT_METRIC_RANGE, customWindow, isMetricRange, metricWindow, type MetricRange } from "../lib/ranges";
@@ -21,11 +23,15 @@ import { SESSION_SLOT_MINUTES } from "../lib/scheduling";
 import { RolesManager, SignInSecurityTab, StaffAccessFields, RoleChip, useCatalog, CentreRolesEditor, SignInControls } from "./access";
 
 /*
- * The Organisation pages — Branches, Reviews, Analytics, Staff & roles and
- * the Audit log — share App Studio's layout (src/studio-ui.tsx): a 24px title
- * and intro on the left, one section on screen at a time, everything at 14px
- * or above. The data hooks, API calls, permissions and state are unchanged
- * from the dense version; only the presentation moved.
+ * The Organisation pages.
+ *
+ * Branches and Analytics use App Studio's layout (src/studio-ui.tsx) — a rail
+ * of sections for Branches, top tabs for Analytics. Reviews, Staff & roles and
+ * the Audit log were moved onto it too and the user asked for them back as
+ * they were, so those three stay on the original primitives from src/ui.tsx
+ * (Page/Card/DataTable/Drawer/Tabs). That is why this file imports both sets,
+ * and why ui's Note arrives as `UiNote`: both modules export a `Note` and the
+ * two halves of the file want different ones.
  */
 
 /* ================= BRANCHES ================= */
@@ -550,20 +556,6 @@ function BranchEditor({ open, branch, onClose, onSaved, onDelete }: {
 /* ================= REVIEWS ================= */
 type ReviewKind = "products" | "consultations" | "services";
 
-const REVIEW_SECTIONS: (StudioSection & { id: ReviewKind; heading: string })[] = [
-  { id: "consultations", title: "Consultations", heading: "Consultation reviews", blurb: "What guests said after a consultation." },
-  { id: "products", title: "Products", heading: "Product reviews", blurb: "What guests said after a delivered order." },
-  { id: "services", title: "Package services", heading: "Package service reviews", blurb: "What guests said after a package session." },
-];
-
-function BigStars({ n }: { n: number }) {
-  return (
-    <span className="inline-flex items-center gap-1 text-gold-dark" aria-label={`${n} out of 5`}>
-      {[1, 2, 3, 4, 5].map((i) => <Star key={i} size={20} strokeWidth={2} className={i <= n ? "fill-current" : "text-border"} />)}
-    </span>
-  );
-}
-
 export function Reviews() {
   const { toast, audit, can } = useStore();
   // The page is revealed by `reviews.view`; moderating is `reviews.manage`.
@@ -612,97 +604,91 @@ export function Reviews() {
     } catch (e) { toast((e as Error).message); }
   };
 
-  const sec = REVIEW_SECTIONS.find((s) => s.id === kind) ?? REVIEW_SECTIONS[0];
-
   return (
-    <StudioPage title="Reviews" intro="Guest reviews from the app — moderate what shows publicly."
-      sections={REVIEW_SECTIONS} active={kind} onSection={(id) => setKind(id as ReviewKind)}
-      actions={
-        <StudioBtn kind="ghost" disabled={!rows.length} onClick={() => exportCsv(`zennara-${kind}-reviews`,
+    <Page title="Reviews" sub="Guest reviews from the app — moderate what shows publicly"
+      actions={<>
+        <Menu button={<MenuButton kind="ghost">{pending ? "Awaiting approval" : "All reviews"}</MenuButton>}
+          items={[
+            { label: "All reviews", onClick: () => setPending(false) },
+            { label: "Awaiting approval", onClick: () => setPending(true) },
+          ]} />
+        <Btn kind="ghost" disabled={!rows.length} onClick={() => exportCsv(`zennara-${kind}-reviews`,
           ["Date", "Guest", "Subject", "Rating", "Review", "Approved"],
           rows.map((r) => [fmtDate(r.createdAt), nameOf(r.userId, "Anonymous"), subjectOf(r), r.rating, r.reviewText, r.isApproved ? "yes" : "no"]))}>
           Export CSV
-        </StudioBtn>
-      }>
-      <StudioStale error={q.data ? q.error : null} onRetry={q.reload} />
-      <Section title={sec.heading} blurb={sec.blurb}
-        right={<Segmented value={pending ? "pending" : "all"} onChange={(v) => setPending(v === "pending")}
-          options={[{ value: "all", label: "All reviews" }, { value: "pending", label: "Awaiting approval" }]} />}>
-        <StatGrid items={[
-          { k: "Reviews", v: rows.length },
-          { k: "Average rating", v: avg ? avg.toFixed(1) : "—", hot: avg >= 4.5 },
-          { k: "5 star", v: rows.filter((r) => r.rating === 5).length, tone: "up" },
-          { k: "2 star or less", v: lowScores.length, tone: lowScores.length ? "dn" : undefined },
-          { k: "Awaiting approval", v: rows.filter((r) => !r.isApproved).length },
-        ]} />
+        </Btn>
+      </>}>
+      <Tabs active={["consultations", "products", "services"].indexOf(kind)}
+        onChange={(i) => setKind((["consultations", "products", "services"] as ReviewKind[])[i])}
+        items={[["Consultations"], ["Products"], ["Package services"]]} />
 
-        <div className="col-span-full">
-          <Async q={q} label="Loading reviews…" rows={6}>
-            {() => rows.length === 0 ? (
-              <StudioEmpty title={pending ? "Nothing awaiting approval" : "No reviews yet"}
-                hint="Guests are asked for a review after a completed visit or a delivered order." />
-            ) : (
-              <StudioTable cols={[{ label: "Date", nowrap: true }, "Guest", "Subject", { label: "Rating", nowrap: true }, { label: "Review", width: "36%" }, "Status"]}
-                onRow={(i) => setSel(rows[i]._id)}
-                rows={rows.map((r) => [
-                  fmtDate(r.createdAt),
-                  <span key={`${r._id}g`} className="font-semibold text-ink">{nameOf(r.userId, "Anonymous")}</span>,
-                  subjectOf(r),
-                  <Stars key={`${r._id}s`} n={r.rating} />,
-                  <span key={`${r._id}t`} className="line-clamp-2">{r.reviewText}</span>,
-                  r.isApproved ? <StatusTag key={`${r._id}a`} kind="ok">Published</StatusTag> : <StatusTag key={`${r._id}a`} kind="warn">Hidden</StatusTag>,
-                ])} />
-            )}
-          </Async>
-        </div>
+      <Stats items={[
+        { k: "Reviews", v: rows.length },
+        { k: "Average rating", v: avg ? avg.toFixed(1) : "—", hot: avg >= 4.5 },
+        { k: "5 star", v: rows.filter((r) => r.rating === 5).length, tone: "up" },
+        { k: "2 star or less", v: lowScores.length, tone: lowScores.length ? "dn" : undefined },
+        { k: "Awaiting approval", v: rows.filter((r) => !r.isApproved).length },
+      ]} />
 
-        <Note>
-          Approving publishes a review to the app and feeds the service or product's star rating. Hiding keeps it on
-          record without showing it — nothing is silently edited.
-        </Note>
-      </Section>
+      <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
+      <Async q={q} label="Loading reviews…" rows={6}>
+        {() => rows.length === 0 ? (
+          <Empty title={pending ? "Nothing awaiting approval" : "No reviews yet"}
+            hint="Guests are asked for a review after a completed visit or a delivered order." />
+        ) : (
+          <DataTable cols={["Date", "Guest", "Subject", "Rating", "Review", "Status"]}
+            onRow={(i) => setSel(rows[i]._id)}
+            rows={rows.map((r) => [
+              fmtDate(r.createdAt),
+              nameOf(r.userId, "Anonymous"),
+              subjectOf(r),
+              <Stars key={`${r._id}s`} n={r.rating} />,
+              <span key={`${r._id}t`} className="line-clamp-2 text-[11.5px]">{r.reviewText}</span>,
+              r.isApproved ? <Tag key={`${r._id}a`} kind="ok">Published</Tag> : <Tag key={`${r._id}a`} kind="warn">Hidden</Tag>,
+            ])} />
+        )}
+      </Async>
 
-      <StudioSheet open={!!selected} onClose={() => setSel(null)} title={selected ? nameOf(selected.userId, "Anonymous") : ""}
-        sub={selected ? `${subjectOf(selected)} · ${fmtDateFull(selected.createdAt)}` : undefined}
-        footer={selected && canModerate ? <>
-          <StudioBtn kind="danger" className="mr-auto" onClick={() => remove(selected._id)}>Delete review</StudioBtn>
-          {selected.isApproved
-            ? <StudioBtn kind="ghost" onClick={() => approve(selected._id, false)}>Hide from the app</StudioBtn>
-            : <StudioBtn onClick={() => approve(selected._id, true)}>Publish to the app</StudioBtn>}
-        </> : undefined}>
+      <Drawer open={!!selected} onClose={() => setSel(null)} title={selected ? nameOf(selected.userId, "Anonymous") : ""}>
         {selected && (
-          <div className="grid gap-5">
-            <div className="rounded-[12px] border border-border bg-surface p-5">
-              <BigStars n={selected.rating} />
-              <p className="m-0 mt-3 text-[15px] leading-7 text-ink">{selected.reviewText}</p>
+          <div className="grid gap-3">
+            <Card className="p-3.5">
+              <Stars n={selected.rating} />
+              <div className="mt-1.5 text-[13px] leading-relaxed text-ink2">{selected.reviewText}</div>
+              <div className="mt-2 text-[11px] text-ink3">{subjectOf(selected)} · {fmtDateFull(selected.createdAt)}</div>
               {"images" in selected && !!selected.images?.length && (
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {selected.images.map((img, i) => <img key={i} src={img} alt="" className="h-20 w-20 rounded-[10px] border border-border object-cover" />)}
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {selected.images.map((img, i) => <img key={i} src={img} alt="" className="h-16 w-16 rounded-lg border border-border object-cover" />)}
                 </div>
               )}
-            </div>
-            <DetailList items={[
-              ["Guest", nameOf(selected.userId, "Anonymous")],
-              ["Subject", subjectOf(selected)],
-              ["Rating", `${selected.rating} of 5`],
-              ["Written", fmtDateFull(selected.createdAt)],
-              ["Status", selected.isApproved ? <StatusTag kind="ok">Published</StatusTag> : <StatusTag kind="warn">Hidden</StatusTag>],
-            ]} />
+            </Card>
 
             {selected.rating <= 2 && (
-              <Note kind="err">
+              <UiNote kind="crit" className="my-0">
                 A low score usually needs a call, not a reply. Open the guest's record and have the branch manager
                 reach out before anything is published.
-              </Note>
+              </UiNote>
             )}
 
-            {!canModerate && (
-              <Note>You can read reviews, but only someone with the “moderate reviews” permission can publish, hide or delete them.</Note>
+            {canModerate ? (
+              <>
+                {selected.isApproved
+                  ? <Btn kind="ghost" onClick={() => approve(selected._id, false)}>Hide from the app</Btn>
+                  : <Btn onClick={() => approve(selected._id, true)}>Publish to the app</Btn>}
+                <Btn kind="danger" onClick={() => remove(selected._id)}>Delete review</Btn>
+              </>
+            ) : (
+              <UiNote className="my-0">You can read reviews, but only someone with the “moderate reviews” permission can publish, hide or delete them.</UiNote>
             )}
           </div>
         )}
-      </StudioSheet>
-    </StudioPage>
+      </Drawer>
+
+      <UiNote>
+        Approving publishes a review to the app and feeds the service or product's star rating. Hiding keeps it on
+        record without showing it — nothing is silently edited.
+      </UiNote>
+    </Page>
   );
 }
 
@@ -1336,6 +1322,8 @@ export function Roles() {
   const { can, isSuperAdmin } = useStore();
   const canViewStaff = can("staff.view");
   const canViewRoles = can("roles.view");
+  // Land on whichever tab the account can actually see.
+  const [tab, setTab] = useState(canViewStaff ? 0 : 1);
 
   const rolesQ = useApi(() => (canViewRoles || canViewStaff ? api.roles.list() : Promise.resolve([] as Role[])), []);
   const roleCount = rolesQ.data?.length;
@@ -1346,27 +1334,25 @@ export function Roles() {
    * grantable through a custom role someone assembles later. The server
    * enforces the same rule.
    */
-  const sections: StudioSection[] = [];
-  if (canViewStaff) sections.push({ id: "staff", title: "Staff" });
-  if (canViewRoles) sections.push({ id: "roles", title: "Roles & permissions", count: roleCount });
-  if (isSuperAdmin) sections.push({ id: "security", title: "Sign-in security" });
+  const panels: { label: string; count?: number | string; render: () => ReactNode }[] = [];
+  if (canViewStaff) panels.push({ label: "Staff", render: () => <StaffTab roles={rolesQ.data ?? []} /> });
+  if (canViewRoles) panels.push({ label: "Roles & permissions", count: roleCount, render: () => <RolesManager /> });
+  if (isSuperAdmin) panels.push({ label: "Sign-in security", render: () => <SignInSecurityTab /> });
 
-  // Lands on whichever section the account can actually see.
-  const [active, setActive] = useStudioSection("roles", sections);
+  const showTabs = panels.length > 1;
+  const active = Math.min(tab, panels.length - 1);
 
   return (
-    <StudioPage title="Staff & roles" intro="Who signs into the panel, and exactly what each person can do."
-      sections={sections} active={active} onSection={setActive}>
-      {active === "staff" && canViewStaff && <StaffTab roles={rolesQ.data ?? []} />}
-      {active === "roles" && canViewRoles && <RolesManager />}
-      {active === "security" && isSuperAdmin && <SignInSecurityTab />}
-    </StudioPage>
+    <Page title="Staff & roles" sub="Who signs into the panel, and exactly what each person can do">
+      {showTabs && <Tabs items={panels.map((p) => [p.label, p.count] as [string, (number | string)?])} active={active} onChange={setTab} />}
+      {panels[active]?.render() ?? null}
+    </Page>
   );
 }
 
 function StaffTab({ roles }: { roles: Role[] }) {
   // Staff are posted to clinics; stock locations have no roster.
-  const { toast, audit, canManageStaff, admin, clinics: branches } = useStore();
+  const { toast, audit, canManageStaff, admin, can, clinics: branches } = useStore();
   const [invOpen, setInvOpen] = useState(false);
   const [sel, setSel] = useState<StaffRow | null>(null);
   const [del, setDel] = useState<StaffRow | null>(null);
@@ -1380,121 +1366,98 @@ function StaffTab({ roles }: { roles: Role[] }) {
   const stats = q.data?.stats as { total?: number; active?: number; byRole?: Record<string, number> } | undefined;
   const catalog = useCatalog();
   const roleName = (id?: string | null) => roles.find((r) => r._id === id)?.name ?? null;
-  const branchName = (id?: string | null) => branches.find((b) => b._id === id)?.name ?? null;
-  // Dermatologist profiles, for linking a `doctor` login to the profile it edits.
+  // Doctor profiles, for linking a `doctor` login to the profile it edits.
   const doctors = useApi(() => api.doctors.list({ includeInactive: "true" }).then((r) => r.data ?? []), []);
   const doctorOptions = ["— not linked —", ...(doctors.data ?? []).map((d) => `${d.name} (${d.email || "no email"})`)];
   const doctorByLabel = (label: string) => (doctors.data ?? []).find((d) => `${d.name} (${d.email || "no email"})` === label)?._id ?? null;
   const doctorLabel = (id?: string | null) => { const d = (doctors.data ?? []).find((x) => x._id === id); return d ? `${d.name} (${d.email || "no email"})` : "— not linked —"; };
 
   const ROLES: AdminRole[] = ["super_admin", "staff", "doctor", "therapist"];
-  const panelOf = (s: StaffRow) => (s.role === "doctor" ? "Dermatologist panel" : s.role === "therapist" ? "Floor panel" : "Admin panel");
-  const centresOf = (s: StaffRow) => {
-    const names = (s.assignments ?? []).map((a) => branchName(a.branchId)).filter(Boolean) as string[];
-    return names.length ? Array.from(new Set(names)).join(", ") : "—";
-  };
-
-  const save = async () => {
-    if (!sel) return;
-    try {
-      await api.staff.update(sel._id, {
-        name: sel.name,
-        jobTitle: sel.jobTitle ?? null,
-        assignments: sel.assignments ?? [],
-        doctorId: sel.role === "doctor" ? (sel.doctorId ?? null) : null,
-        ...(sel.role === "staff" ? { customRoleId: sel.customRoleId ?? null, permissions: sel.permissions ?? [] } : {}),
-      });
-      audit("SETTINGS_UPDATED", `Staff ${sel.email} updated`, { staffId: sel._id });
-      toast("Staff account updated"); q.reload(); setSel(null);
-    } catch (e) { toast((e as Error).message); }
-  };
 
   return (
-    <Section title="Staff" blurb="Every panel account — super admins, staff, dermatologists and therapists."
-      right={canManageStaff ? <StudioBtn onClick={() => setInvOpen(true)}>Add staff member</StudioBtn> : undefined}>
-      <StudioHint id="roles-live" steps={[
+    <>
+      {canManageStaff && <div className="mb-3 flex justify-end"><Btn onClick={() => setInvOpen(true)}>+ Add staff</Btn></div>}
+      <Hint id="roles-live" steps={[
         "Every panel account lives here — super admins, staff, dermatologists and therapists.",
-        "A Staff account gets a custom role (a bundle of permissions) — build roles under Roles & permissions.",
+        "A Staff account gets a custom role (a bundle of permissions) — build roles on the Roles & permissions tab.",
         "Super admins hold every permission; dermatologists and therapists sign into their own panels.",
         "Deactivating blocks sign-in immediately but keeps every audit entry that person created.",
       ]} />
 
       {!canManageStaff && (
-        <Note kind="warn">You can see the team, but only someone with the “manage staff” permission can add, change or remove accounts.</Note>
+        <UiNote kind="crit">You can see the team, but only someone with the “manage staff” permission can add, change or remove accounts.</UiNote>
       )}
 
       {stats && (
-        <StatGrid items={[
+        <Stats items={[
           { k: "Staff accounts", v: stats.total ?? rows.length },
           { k: "Active", v: stats.active ?? rows.filter((r) => r.isActive).length },
           ...ROLES.slice(0, 4).map((r) => ({ k: ROLE_LABEL[r], v: stats.byRole?.[r] ?? rows.filter((x) => x.role === r).length })),
         ]} />
       )}
 
-      <SearchInput value={search} onChange={setSearch} placeholder="Search by name or email…" className="col-span-full max-w-[420px]" />
-
-      <div className="col-span-full">
-        <StudioStale error={q.data ? q.error : null} onRetry={q.reload} />
-        <Async q={q} label="Loading staff…" rows={5}>
-          {() => rows.length === 0 ? (
-            <StudioEmpty title="No staff accounts" hint="Add the people who need to sign into the panel."
-              action={canManageStaff ? <StudioBtn onClick={() => setInvOpen(true)}>Add staff member</StudioBtn> : undefined} />
-          ) : (
-            <StudioTable minWidth={900} stickyFirst
-              cols={["Name", "Email", "Role", "Centres", { label: "Sign-in", nowrap: true }, { label: "Last sign-in", nowrap: true }, "Status"]}
-              onRow={(i) => setSel(rows[i])}
-              rows={rows.map((s) => [
-                <span key={s._id} className="flex items-center gap-3">
-                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-secondary text-[12.5px] font-bold text-white">
-                    {initials(s.name || s.email)}
-                  </span>
-                  <CellStack primary={s.name || s.email.split("@")[0]} secondary={s.jobTitle || undefined} />
-                </span>,
-                <span key={`${s._id}e`} className="break-all">{s.email}</span>,
-                <span key={`${s._id}r`} className="block">
-                  {s.role === "staff"
-                    ? (roleName(s.customRoleId) ? <RoleChip role={{ name: roleName(s.customRoleId)!, color: roles.find((r) => r._id === s.customRoleId)?.color }} /> : <StatusTag kind="warn">no role</StatusTag>)
-                    : <StatusTag kind={s.role === "super_admin" ? "primary" : "info"}>{ROLE_LABEL[s.role]}</StatusTag>}
-                  <span className="mt-1 block text-[12.5px] leading-5 text-ink3">{panelOf(s)}</span>
-                </span>,
-                centresOf(s),
-                <StatusTag key={`${s._id}m`} kind={s.hasPassword ? "ok" : "info"}>{s.hasPassword ? "password" : "code"}</StatusTag>,
-                s.lastLogin ? fmtWhen(s.lastLogin) : "Never",
-                s.terminatedAt
-                  ? <StatusTag key={`${s._id}s`} kind="mute">Left {fmtWhen(s.terminatedAt)}</StatusTag>
-                  : !s.isActive
-                  ? <StatusTag key={`${s._id}s`} kind="mute">Deactivated</StatusTag>
-                  : s.canSignIn === false
-                    ? <StatusTag key={`${s._id}s`} kind="warn">Not on allow-list</StatusTag>
-                    : <StatusTag key={`${s._id}s`} kind="ok">Active</StatusTag>,
-              ])} />
-          )}
-        </Async>
+      <div className="mb-3">
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name or email…"
+          className="w-full max-w-[380px] rounded-(--radius-btn) border border-border bg-surface px-3.5 py-2 text-[13px] outline-none focus:border-gold-dark" />
       </div>
 
-      <StudioSheet open={!!sel} onClose={() => setSel(null)} title={sel?.name || sel?.email || ""} width={640}
-        sub={sel ? `${sel.email} · ${ROLE_LABEL[sel.role]} · ${sel.isActive ? "active" : "deactivated"} · ${sel.lastLogin ? `last signed in ${fmtDateFull(sel.lastLogin)}` : "has never signed in"}` : undefined}
-        footer={sel && canManageStaff ? <>
-          <StudioBtn kind="ghost" onClick={() => setSel(null)}>Cancel</StudioBtn>
-          <StudioBtn onClick={save}>Save changes</StudioBtn>
-        </> : undefined}>
+      <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
+      <Async q={q} label="Loading staff…" rows={5}>
+        {() => rows.length === 0 ? (
+          <Empty title="No staff accounts" hint="Add the people who need to sign into the panel."
+            action={canManageStaff ? <Btn onClick={() => setInvOpen(true)}>+ Add staff</Btn> : undefined} />
+        ) : (
+          <DataTable cols={["Name", "Email", "Job", "Role", "Panel", "Sign-in", "Last sign-in", "Status"]}
+            onRow={(i) => setSel(rows[i])}
+            rows={rows.map((s) => [
+              <span key={s._id} className="flex items-center gap-2">
+                <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-secondary text-[9px] font-bold text-white">
+                  {initials(s.name || s.email)}
+                </span>
+                <B>{s.name || s.email.split("@")[0]}</B>
+              </span>,
+              <span key={`${s._id}e`} className="text-[11.5px]">{s.email}</span>,
+              <span key={`${s._id}j`} className="text-[11.5px] text-ink2">{s.jobTitle || "—"}</span>,
+              s.role === "staff"
+                ? (roleName(s.customRoleId) ? <RoleChip key={`${s._id}r`} role={{ name: roleName(s.customRoleId)!, color: roles.find((r) => r._id === s.customRoleId)?.color }} /> : <Tag key={`${s._id}r`} kind="warn">no role</Tag>)
+                : <Tag key={`${s._id}r`} kind={s.role === "super_admin" ? "gold" : "info"}>{ROLE_LABEL[s.role]}</Tag>,
+              s.role === "doctor" ? "Dermatologist panel" : s.role === "therapist" ? "Floor panel" : "Admin panel",
+              <Tag key={`${s._id}m`} kind={s.hasPassword ? "ok" : "info"}>{s.hasPassword ? "password" : "code"}</Tag>,
+              s.lastLogin ? fmtWhen(s.lastLogin) : "Never",
+              s.terminatedAt
+                ? <Tag key={`${s._id}s`} kind="mute">Left {fmtWhen(s.terminatedAt)}</Tag>
+                : !s.isActive
+                ? <Tag key={`${s._id}s`} kind="mute">Deactivated</Tag>
+                : s.canSignIn === false
+                  ? <Tag key={`${s._id}s`} kind="warn">Not on allow-list</Tag>
+                  : <Tag key={`${s._id}s`} kind="ok">Active</Tag>,
+            ])} />
+        )}
+      </Async>
+
+      <Drawer open={!!sel} onClose={() => setSel(null)} title={sel?.name || sel?.email || ""}>
         {sel && (
-          <div className="grid gap-6">
+          <div className="grid gap-3">
+            <div className="rounded-xl bg-ivory px-3.5 py-2.5 text-[12.5px] text-ink2">
+              {sel.email}<br />
+              {ROLE_LABEL[sel.role]} · {sel.isActive ? "active" : "deactivated"}<br />
+              {sel.lastLogin ? `Last signed in ${fmtDateFull(sel.lastLogin)}` : "Has never signed in"}
+            </div>
+
             {canManageStaff ? (
               <SignInControls accountId={sel._id} email={sel.email} phone={sel.phone} hasPassword={!!sel.hasPassword}
                 onChanged={() => { q.reload(); }} />
             ) : (
-              <Note>
+              <UiNote className="my-0 text-[11.5px]">
                 Signs into the {sel.role === "doctor" ? "dermatologist" : sel.role === "therapist" ? "therapist" : "admin"} panel with <B>{sel.email}</B> and {sel.hasPassword ? "a password or " : ""}a 6-digit code emailed at sign-in.
-              </Note>
+              </UiNote>
             )}
 
             {canManageStaff ? (
-              <div className="grid gap-5 @lg/fields:grid-cols-2">
-                <Field label="Display name"><Input value={sel.name ?? ""} onChange={(v) => setSel({ ...sel, name: v })} /></Field>
-                <Field label="Job title" hint="For display and reports. What they can do is the role below.">
-                  <Input value={sel.jobTitle ?? ""} onChange={(v) => setSel({ ...sel, jobTitle: v })} placeholder="Clinic Manager, Front desk, Accountant…" />
-                </Field>
+              <>
+                <In label="Display name" value={sel.name ?? ""} onChange={(v) => setSel({ ...sel, name: v })} />
+                <In label="Job title" value={sel.jobTitle ?? ""} onChange={(v) => setSel({ ...sel, jobTitle: v })}
+                  placeholder="Clinic Manager, Front desk, Accountant…" hint="For display and reports. What they can do is the role below." />
                 {/*
                   * Account type is shown, not chosen. Each kind is created and
                   * retired where it belongs — super admins in ADMIN_EMAILS,
@@ -1502,10 +1465,11 @@ function StaffTab({ roles }: { roles: Role[] }) {
                   * dropdown here would be a second, contradictory way to mint
                   * one. What a Staff account may do is the role below.
                   */}
-                <Field label="Account type" full>
-                  <div className="flex min-h-[44px] flex-wrap items-center gap-2 rounded-[10px] border border-border bg-ivory px-3.5 py-2 text-[14px] leading-5 text-ink3">
-                    <StatusTag kind={sel.role === "super_admin" ? "primary" : sel.role === "staff" ? "ok" : "info"}>{ROLE_LABEL[sel.role]}</StatusTag>
-                    <span>
+                <div>
+                  <div className="mb-1.5 text-[11px] font-bold text-ink2">Account type</div>
+                  <div className="flex items-center gap-2 rounded-(--radius-btn) border border-border bg-ivory px-3 py-2.5">
+                    <Tag kind={sel.role === "super_admin" ? "gold" : sel.role === "staff" ? "ok" : "info"}>{ROLE_LABEL[sel.role]}</Tag>
+                    <span className="text-[11.5px] text-ink3">
                       {sel.role === "super_admin"
                         ? <>Set by the server's <code>ADMIN_EMAILS</code> list</>
                         : sel.role === "doctor" ? "Managed on the Dermatologists page"
@@ -1513,12 +1477,14 @@ function StaffTab({ roles }: { roles: Role[] }) {
                         : "Admin panel access, defined by the role below"}
                     </span>
                   </div>
-                </Field>
+                </div>
                 {sel.role === "doctor" && (
-                  <Field label="Dermatologist profile" full
-                    hint={!sel.doctorId ? "Without a link the dermatologist panel matches on email; linking here is explicit and survives an email change." : undefined}>
-                    <Select value={doctorLabel(sel.doctorId)} onChange={(v) => setSel({ ...sel, doctorId: doctorByLabel(v) })} options={doctorOptions} />
-                  </Field>
+                  <Sel label="Dermatologist profile" value={doctorLabel(sel.doctorId)}
+                    onChange={(v) => setSel({ ...sel, doctorId: doctorByLabel(v) })}
+                    options={doctorOptions} />
+                )}
+                {sel.role === "doctor" && !sel.doctorId && (
+                  <div className="-mt-2 text-[10.5px] text-ink3">Without a link the dermatologist panel matches on email; linking here is explicit and survives an email change.</div>
                 )}
 
                 {sel.role === "staff" && (
@@ -1536,32 +1502,50 @@ function StaffTab({ roles }: { roles: Role[] }) {
                     onChange={(next) => setSel({ ...sel, assignments: next })} />
                 )}
 
+                <Btn onClick={async () => {
+                  try {
+                    await api.staff.update(sel._id, {
+                      name: sel.name,
+                      jobTitle: sel.jobTitle ?? null,
+                      assignments: sel.assignments ?? [],
+                      doctorId: sel.role === "doctor" ? (sel.doctorId ?? null) : null,
+                      ...(sel.role === "staff" ? { customRoleId: sel.customRoleId ?? null, permissions: sel.permissions ?? [] } : {}),
+                    });
+                    audit("SETTINGS_UPDATED", `Staff ${sel.email} updated`, { staffId: sel._id });
+                    toast("Staff account updated"); q.reload(); setSel(null);
+                  } catch (e) { toast((e as Error).message); }
+                }}>Save changes</Btn>
+
                 {sel._id !== admin?._id && (
                   <>
-                    <SubHeading title="Account" blurb="Deactivating blocks the next sign-in immediately. Removing the account keeps their audit history — actions never disappear with the person." />
-                    <div className="col-span-full flex flex-wrap gap-2">
-                      <StudioBtn kind="ghost" onClick={async () => {
+                    <div className="grid grid-cols-2 gap-2">
+                      <Btn kind="ghost" onClick={async () => {
                         try {
                           await api.staff.toggle(sel._id);
                           toast(sel.isActive ? "Sign-in blocked" : "Account reactivated");
                           q.reload(); setSel(null);
                         } catch (e) { toast((e as Error).message); }
-                      }}>{sel.isActive ? "Deactivate login" : "Reactivate login"}</StudioBtn>
+                      }}>{sel.isActive ? "Deactivate login" : "Reactivate login"}</Btn>
                       {(sel.role === "staff" || sel.role === "therapist") && (
-                        <StudioBtn kind="ghost" onClick={() => { setCloneOf(sel); setSel(null); }}>Clone access</StudioBtn>
+                        <Btn kind="ghost" onClick={() => { setCloneOf(sel); setSel(null); }}>Clone access</Btn>
                       )}
-                      {!sel.terminatedAt && <StudioBtn kind="ghost" onClick={() => { setEndOf(sel); setSel(null); }}>End employment…</StudioBtn>}
-                      <StudioBtn kind="danger" onClick={() => { setSel(null); setDel(sel); }}>Remove staff</StudioBtn>
                     </div>
+                    {!sel.terminatedAt && <Btn kind="ghost" onClick={() => { setEndOf(sel); setSel(null); }}>End employment…</Btn>}
+                    <Btn kind="danger" onClick={() => { setSel(null); setDel(sel); }}>Remove staff</Btn>
                   </>
                 )}
-              </div>
+              </>
             ) : (
-              <Note>Only someone with the “manage staff” permission can change staff accounts.</Note>
+              <UiNote>Only someone with the “manage staff” permission can change staff accounts.</UiNote>
             )}
+
+            <UiNote className="text-[11.5px]">
+              Deactivating blocks the next sign-in immediately. Removing the account keeps their audit history —
+              actions never disappear with the person.
+            </UiNote>
           </div>
         )}
-      </StudioSheet>
+      </Drawer>
 
       <Modal open={invOpen} onClose={() => setInvOpen(false)} title="Add staff account" wide>
         <AddStaffForm roles={roles} groups={catalog.data ?? []} branches={branches} onDone={() => { setInvOpen(false); q.reload(); }} />
@@ -1579,7 +1563,7 @@ function StaffTab({ roles }: { roles: Role[] }) {
             toast("Staff account removed"); q.reload();
           } catch (e) { toast((e as Error).message); }
         }} />
-    </Section>
+    </>
   );
 }
 
@@ -1631,70 +1615,76 @@ function AddStaffForm({ roles, groups, branches, onDone }: { roles: Role[]; grou
 
   if (issued) {
     return (
-      <div className="grid gap-4">
-        <Note>Account created. This temporary password is shown once; they choose their own at first sign-in.</Note>
-        <div className="text-[14px] leading-6 text-ink2">Sign-in email: <B>{issued.email}</B></div>
-        <div className="rounded-[12px] border border-border bg-ivory px-4 py-4 text-center font-mono text-[22px] font-bold tracking-wide tabular-nums text-ink">{issued.password}</div>
+      <div className="grid gap-3">
+        <UiNote kind="gold">Account created. This temporary password is shown once; they choose their own at first sign-in.</UiNote>
+        <div className="text-[12.5px]">Sign-in email: <B>{issued.email}</B></div>
+        <div className="rounded-xl border border-border bg-ivory px-4 py-3 text-center font-mono text-[20px] font-bold tracking-wide">{issued.password}</div>
         {issued.delivery && (
-          <div className="text-[14px] leading-6 text-ink2">
+          <div className="text-[11.5px] text-ink3">
             {issued.delivery.email && <div>Email: {issued.delivery.email}</div>}
             {issued.delivery.whatsapp && <div>WhatsApp: {issued.delivery.whatsapp}</div>}
           </div>
         )}
-        <div className="flex justify-end"><StudioBtn onClick={onDone}>Done</StudioBtn></div>
+        <div className="flex justify-end"><Btn onClick={onDone}>Done</Btn></div>
       </div>
     );
   }
 
+  const pill = (on: boolean) => `rounded-full border px-3 py-1 text-[12px] font-semibold ${on ? "border-primary bg-cream" : "border-border bg-surface hover:bg-ivory"}`;
+
   return (
-    <div className="@container/fields grid gap-5">
-      <div className="grid gap-5 @lg/fields:grid-cols-2">
-        <Field label="Work email" hint="Their sign-in address."><Input type="email" value={email} onChange={setEmail} placeholder="name@zennara.in" /></Field>
-        <Field label="Display name"><Input value={name} onChange={setName} placeholder="Leave blank to use the email prefix" /></Field>
-        <Field label="Phone" hint="Needed to send sign-in details by WhatsApp."><Input value={phone} onChange={setPhone} placeholder="10-digit mobile" /></Field>
-        <Field label="Job title"><Input value={jobTitle} onChange={setJobTitle} placeholder="Front desk, Clinic Manager, Accountant…" /></Field>
-      </div>
-      <StaffAccessFields
-        roles={roles} groups={groups}
-        customRoleId={customRoleId} permissions={perms}
-        onRole={setCustomRoleId} onPermissions={setPerms}
-      />
-      <CentreRolesEditor roles={roles} branches={branches} value={assignments} onChange={setAssignments} />
-
-      <div className="grid gap-4 rounded-[12px] border border-border bg-ivory p-4">
-        <div>
-          <div className="text-[16px] font-semibold leading-6 text-ink">Sign-in</div>
-          <div className="text-[14px] leading-5 text-ink2">How they get into the panel.</div>
+    <>
+      <div className="grid gap-3">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <In label="Work email" type="email" value={email} onChange={setEmail} placeholder="name@zennara.in" hint="Their sign-in address." />
+          <In label="Display name" value={name} onChange={setName} placeholder="Leave blank to use the email prefix" />
+          <In label="Phone" value={phone} onChange={setPhone} placeholder="10-digit mobile" hint="Needed to send sign-in details by WhatsApp." />
+          <In label="Job title" value={jobTitle} onChange={setJobTitle} placeholder="Front desk, Clinic Manager, Accountant…" />
         </div>
-        <Field label="Password"
-          hint={signIn === "code" ? "They sign in with a 6-digit code emailed at every sign-in. A password can be set later." : "A temporary password must be changed at first sign-in. The emailed code keeps working too."}>
-          <ChoicePills<string> value={signIn} onChange={(v) => setSignIn(v as typeof signIn)}
-            options={[{ value: "generate", label: "Generate a temporary password" }, { value: "typed", label: "Set a password now" }, { value: "code", label: "Emailed code only" }]} />
-        </Field>
-        {signIn === "typed" && (
-          <Field label="Password" hint="At least 8 characters. Stored as a hash."><Input type="password" value={password} onChange={setPassword} /></Field>
-        )}
-        {signIn !== "code" && (
-          <Field label="Send the details by" hint={!phone.trim() ? "Add a phone number to send by WhatsApp." : undefined}>
-            <ChoicePills<string> value={notify} onChange={(v) => setNotify(v as typeof notify)}
-              options={(["email", "whatsapp", "both"] as const).map((c) => ({
-                value: c, label: c === "email" ? "Email" : c === "whatsapp" ? "WhatsApp" : "Email and WhatsApp", disabled: c !== "email" && !phone.trim(),
-              }))} />
-          </Field>
-        )}
+        <StaffAccessFields
+          roles={roles} groups={groups}
+          customRoleId={customRoleId} permissions={perms}
+          onRole={setCustomRoleId} onPermissions={setPerms}
+        />
+        <CentreRolesEditor roles={roles} branches={branches} value={assignments} onChange={setAssignments} />
+
+        <div className="grid gap-2 rounded-xl border border-border bg-ivory/60 p-3">
+          <SecH t="Sign-in" em="· how they get into the panel" />
+          <div className="flex flex-wrap gap-1.5">
+            <button onClick={() => setSignIn("generate")} className={pill(signIn === "generate")}>Generate a temporary password</button>
+            <button onClick={() => setSignIn("typed")} className={pill(signIn === "typed")}>Set a password now</button>
+            <button onClick={() => setSignIn("code")} className={pill(signIn === "code")}>Emailed code only</button>
+          </div>
+          {signIn === "typed" && <In label="Password" type="password" value={password} onChange={setPassword} hint="At least 8 characters. Stored as a hash." />}
+          {signIn !== "code" && (
+            <div>
+              <div className="mb-1 text-[11px] font-bold text-ink2">Send the details by</div>
+              <div className="flex flex-wrap gap-1.5">
+                {(["email", "whatsapp", "both"] as const).map((c) => (
+                  <button key={c} onClick={() => setNotify(c)} disabled={c !== "email" && !phone.trim()} className={`${pill(notify === c)} disabled:opacity-40`}>
+                    {c === "email" ? "Email" : c === "whatsapp" ? "WhatsApp" : "Email and WhatsApp"}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="text-[11px] text-ink3">
+            {signIn === "code" ? "They sign in with a 6-digit code emailed at every sign-in. A password can be set later." : "A temporary password must be changed at first sign-in. The emailed code keeps working too."}
+          </div>
+        </div>
       </div>
 
-      <Note>
+      <UiNote className="text-[11.5px]">
         Adding a <B>dermatologist</B> or <B>therapist</B>? Create them on their own page instead — that is where their
         profile and centres live. <B>Super admins</B> come from the server's <code>ADMIN_EMAILS</code> list
         and appear here once they first sign in.
-      </Note>
-      {err && <Note kind="err">{err}</Note>}
-      <div className="flex justify-end gap-2">
-        <StudioBtn kind="ghost" onClick={onDone}>Cancel</StudioBtn>
-        <StudioBtn disabled={busy || !/^\S+@\S+\.\S+$/.test(email) || (signIn === "typed" && password.length < 8)} onClick={submit}>{busy ? "Adding…" : "Add staff member"}</StudioBtn>
+      </UiNote>
+      {err && <UiNote kind="crit">{err}</UiNote>}
+      <div className="mt-3 flex justify-end gap-2">
+        <Btn kind="ghost" onClick={onDone}>Cancel</Btn>
+        <Btn disabled={busy || !/^\S+@\S+\.\S+$/.test(email) || (signIn === "typed" && password.length < 8)} onClick={submit}>{busy ? "Adding…" : "Add staff"}</Btn>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -1709,15 +1699,15 @@ function CloneStaffModal({ source, onClose, onDone }: { source: StaffRow | null;
   useEffect(() => { setEmail(""); setName(""); setPhone(""); setErr(null); }, [source?._id]);
   return (
     <Modal open={!!source} onClose={onClose} title={source ? `Clone ${source.name || source.email}'s access` : ""}>
-      <div className="grid gap-4">
-        <Note>Copies the role, job title, centres and centre roles onto a new account. The password and any dermatologist link are not copied.</Note>
-        <Field label="New person's work email"><Input type="email" value={email} onChange={setEmail} placeholder="name@zennara.in" /></Field>
-        <Field label="Display name"><Input value={name} onChange={setName} /></Field>
-        <Field label="Phone"><Input value={phone} onChange={setPhone} placeholder="10-digit mobile" /></Field>
-        {err && <Note kind="err">{err}</Note>}
+      <div className="grid gap-3">
+        <UiNote className="my-0">Copies the role, job title, centres and centre roles onto a new account. The password and any doctor link are not copied.</UiNote>
+        <In label="New person's work email" type="email" value={email} onChange={setEmail} placeholder="name@zennara.in" />
+        <In label="Display name" value={name} onChange={setName} />
+        <In label="Phone" value={phone} onChange={setPhone} placeholder="10-digit mobile" />
+        {err && <UiNote kind="crit">{err}</UiNote>}
         <div className="flex justify-end gap-2">
-          <StudioBtn kind="ghost" onClick={onClose}>Cancel</StudioBtn>
-          <StudioBtn disabled={busy || !/^\S+@\S+\.\S+$/.test(email)} onClick={async () => {
+          <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
+          <Btn disabled={busy || !/^\S+@\S+\.\S+$/.test(email)} onClick={async () => {
             if (!source) return;
             setBusy(true); setErr(null);
             try {
@@ -1725,7 +1715,7 @@ function CloneStaffModal({ source, onClose, onDone }: { source: StaffRow | null;
               audit("SETTINGS_UPDATED", `Cloned ${source.email} onto ${email}`, { staffId: (res.data as Admin)?._id });
               toast(res.message || "Cloned"); onDone();
             } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
-          }}>{busy ? "Cloning…" : "Create account"}</StudioBtn>
+          }}>{busy ? "Cloning…" : "Create account"}</Btn>
         </div>
       </div>
     </Modal>
@@ -1742,14 +1732,14 @@ function EndEmploymentModal({ target, onClose, onDone }: { target: StaffRow | nu
   useEffect(() => { setReason(""); setDate(new Date().toISOString().slice(0, 10)); setErr(null); }, [target?._id]);
   return (
     <Modal open={!!target} onClose={onClose} title={target ? `End employment — ${target.name || target.email}` : ""}>
-      <div className="grid gap-4">
-        <Note kind="err">Their sign-in stops on the date below and every open session is ended. Audit history is kept. A dermatologist is also removed from the app.</Note>
-        <Field label="Last working day"><DateInput value={date} onChange={setDate} /></Field>
-        <Field label="Reason"><Textarea value={reason} onChange={setReason} placeholder="Resigned, contract ended, …" /></Field>
-        {err && <Note kind="err">{err}</Note>}
+      <div className="grid gap-3">
+        <UiNote className="my-0" kind="crit">Their sign-in stops on the date below and every open session is ended. Audit history is kept. A dermatologist is also removed from the app.</UiNote>
+        <In label="Last working day" type="date" value={date} onChange={setDate} />
+        <Area label="Reason" value={reason} onChange={setReason} placeholder="Resigned, contract ended, …" />
+        {err && <UiNote kind="crit">{err}</UiNote>}
         <div className="flex justify-end gap-2">
-          <StudioBtn kind="ghost" onClick={onClose}>Cancel</StudioBtn>
-          <StudioBtn kind="danger" disabled={busy || reason.trim().length < 3} onClick={async () => {
+          <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
+          <Btn kind="danger" disabled={busy || reason.trim().length < 3} onClick={async () => {
             if (!target) return;
             setBusy(true); setErr(null);
             try {
@@ -1757,7 +1747,7 @@ function EndEmploymentModal({ target, onClose, onDone }: { target: StaffRow | nu
               audit("SETTINGS_UPDATED", `Ended employment for ${target.email} · ${reason.trim()}`, { staffId: target._id });
               toast(res.message || "Employment ended"); onDone();
             } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
-          }}>{busy ? "Saving…" : "End employment"}</StudioBtn>
+          }}>{busy ? "Saving…" : "End employment"}</Btn>
         </div>
       </div>
     </Modal>
@@ -1765,11 +1755,6 @@ function EndEmploymentModal({ target, onClose, onDone }: { target: StaffRow | nu
 }
 
 /* ================= AUDIT LOG ================= */
-const AUDIT_SECTIONS: StudioSection[] = [
-  { id: "all", title: "All entries" },
-  { id: "suspicious", title: "Suspicious activity" },
-];
-
 export function AuditLog() {
   const [page, setPage] = useQueryPage();
   const [action, setAction] = useQueryString("action");
@@ -1800,8 +1785,6 @@ export function AuditLog() {
   const rows = q.data?.data ?? [];
   const pagination = q.data?.pagination;
   const f = filters.data as { actions?: string[]; resources?: string[]; admins?: string[] } | undefined;
-  const filtersActive = !!(action || resource || status || who || from || to || search);
-  const clearFilters = () => { setSearch(""); setAction(""); setResource(""); setWho(""); setStatus(""); setFrom(""); setTo(""); };
 
   const detailOf = (d?: Record<string, unknown>) => {
     if (!d) return "—";
@@ -1830,97 +1813,91 @@ export function AuditLog() {
     } finally { setExporting(false); }
   };
 
-  const table = (
-    <StudioTable minWidth={960}
-      cols={[{ label: "When", nowrap: true }, "Who", { label: "Action", nowrap: true }, "Resource", { label: "Detail", width: "30%" }, { label: "IP", nowrap: true }, "Status"]}
-      onRow={(i) => setSel(rows[i])}
-      empty={view === "suspicious" ? "Nothing suspicious in the last 72 hours." : "No entries match."}
-      {...(view === "all" && pagination ? { page: pagination.currentPage ?? page, pageSize: 15, total: pagination.total ?? rows.length, onPage: (p: number) => setPage(p) } : {})}
-      rows={rows.map((a) => [
-        fmtWhen(a.timestamp),
-        <span key={`${a._id}w`} className="break-all font-semibold text-ink">{a.adminEmail}</span>,
-        a.action,
-        <StatusTag key={`${a._id}r`} kind="mute">{a.resource}</StatusTag>,
-        <span key={`${a._id}d`} className="line-clamp-2 text-ink3">{detailOf(a.details)}</span>,
-        <span key={`${a._id}i`} className="text-ink3">{a.ipAddress ?? "—"}</span>,
-        a.status === "SUCCESS"
-          ? <StatusTag key={`${a._id}s`} kind="ok">ok</StatusTag>
-          : <StatusTag key={`${a._id}s`} kind="err">{a.status}</StatusTag>,
-      ])} />
-  );
-
   return (
-    <StudioPage title="Audit log" wide intro="Every administrative change, with who, when and from where. Entries are written by the server and kept for 90 days."
-      sections={AUDIT_SECTIONS} active={view} onSection={(id) => setView(id)}
-      actions={<StudioBtn kind="ghost" disabled={!rows.length || exporting} onClick={exportAll}>{exporting ? "Exporting…" : "Export CSV (all matching)"}</StudioBtn>}>
-      <StudioStale error={q.data ? q.error : null} onRetry={q.reload} />
+    <Page title="Audit log" sub="Every administrative change, with who, when and from where"
+      actions={<>
+        <Btn kind="ghost" onClick={() => setView(view === "all" ? "suspicious" : "all")}>{view === "all" ? "Suspicious activity (72h)" : "← All entries"}</Btn>
+        <Btn kind="ghost" disabled={!rows.length || exporting} onClick={exportAll}>{exporting ? "Exporting…" : "Export CSV (all matching)"}</Btn>
+      </>}>
+      <Hint id="audit-live">Sensitive routes write here automatically, and the panel adds an entry for decisions the route can't see — a cancellation reason, a stock adjustment, a role change. Entries are kept for 90 days.</Hint>
 
-      {view === "all" ? (
-        <Section title="All entries" blurb="Sensitive routes write here automatically, and the panel adds an entry for decisions the route can't see — a cancellation reason, a stock adjustment, a role change.">
-          <FilterBar onClear={filtersActive ? clearFilters : undefined}>
-            <Field label="Search" className="min-w-[240px] flex-1">
-              <SearchInput value={search} onChange={setSearch} placeholder="Email, action or record id…" />
-            </Field>
-            <Field label="Action" className="w-[200px]">
-              <Select value={action} onChange={setAction} options={[{ value: "", label: "All actions" }, ...(f?.actions ?? []).map((a) => ({ value: a, label: a }))]} />
-            </Field>
-            <Field label="Resource" className="w-[180px]">
-              <Select value={resource} onChange={setResource} options={[{ value: "", label: "All resources" }, ...(f?.resources ?? []).map((r) => ({ value: r, label: r }))]} />
-            </Field>
-            <Field label="Who" className="w-[220px]">
-              <Select value={who} onChange={setWho} options={[{ value: "", label: "Everyone" }, ...(f?.admins ?? []).map((a) => ({ value: a, label: a }))]} />
-            </Field>
-            <Field label="Outcome" className="w-[160px]">
-              <Select value={status} onChange={setStatus} options={[{ value: "", label: "Any outcome" }, { value: "SUCCESS", label: "SUCCESS" }, { value: "FAILED", label: "FAILED" }, { value: "WARNING", label: "WARNING" }]} />
-            </Field>
-            <Field label="From" className="w-[170px]"><DateInput value={from} onChange={setFrom} max={to || undefined} /></Field>
-            <Field label="To" className="w-[170px]"><DateInput value={to} onChange={setTo} min={from || undefined} /></Field>
-          </FilterBar>
-          <div className="col-span-full">
-            <Async q={q} label="Loading the audit trail…" rows={10}>
-              {() => rows.length === 0 ? (
-                <StudioEmpty title="No entries match" hint="Try clearing the filters, or make a change in the panel and come back." />
-              ) : table}
-            </Async>
-          </div>
-          <Note>
-            A failed or denied action is recorded too — that is often the more interesting row.
-          </Note>
-        </Section>
-      ) : (
-        <Section title="Suspicious activity" blurb="Repeated failures, denied access and off-hours changes from the last 72 hours.">
-          <div className="col-span-full">
-            <Async q={q} label="Loading the audit trail…" rows={10}>
-              {() => rows.length === 0 ? (
-                <StudioEmpty title="Nothing suspicious in the last 72 hours" hint="Repeated failures, denied access and off-hours changes show up here." />
-              ) : table}
-            </Async>
-          </div>
-        </Section>
+      {view === "all" && (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by email, action or record id…"
+            className="w-64 rounded-(--radius-btn) border border-border bg-surface px-3.5 py-2 text-[13px] outline-none focus:border-gold-dark" />
+          <Menu button={<MenuButton kind="ghost">{action || "All actions"}</MenuButton>}
+            items={[{ label: "All actions", onClick: () => setAction("") },
+              ...(f?.actions ?? []).map((a) => ({ label: a, onClick: () => setAction(a) }))]} />
+          <Menu button={<MenuButton kind="ghost">{resource || "All resources"}</MenuButton>}
+            items={[{ label: "All resources", onClick: () => setResource("") },
+              ...(f?.resources ?? []).map((r) => ({ label: r, onClick: () => setResource(r) }))]} />
+          <Menu button={<MenuButton kind="ghost">{who || "Everyone"}</MenuButton>}
+            items={[{ label: "Everyone", onClick: () => setWho("") },
+              ...(f?.admins ?? []).map((a) => ({ label: a, onClick: () => setWho(a) }))]} />
+          <Menu button={<MenuButton kind="ghost">{status || "Any outcome"}</MenuButton>}
+            items={[{ label: "Any outcome", onClick: () => setStatus("") },
+              { label: "SUCCESS", onClick: () => setStatus("SUCCESS") },
+              { label: "FAILED", onClick: () => setStatus("FAILED") },
+              { label: "WARNING", onClick: () => setStatus("WARNING") }]} />
+          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="rounded-(--radius-btn) border border-border bg-surface px-3 py-1.5 text-[12.5px] outline-none" />
+          <span className="text-[12px] text-ink3">to</span>
+          <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="rounded-(--radius-btn) border border-border bg-surface px-3 py-1.5 text-[12.5px] outline-none" />
+        </div>
       )}
 
-      <StudioSheet open={!!sel} onClose={() => setSel(null)} title={sel ? sel.action : "Entry"}
-        sub={sel ? `${fmtDateFull(sel.timestamp)} · ${sel.adminEmail}` : undefined} width={600}
-        footer={<StudioBtn kind="ghost" onClick={() => setSel(null)}>Close</StudioBtn>}>
+      <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
+      <Async q={q} label="Loading the audit trail…" rows={10}>
+        {() => rows.length === 0 ? (
+          <Empty title={view === "suspicious" ? "Nothing suspicious in the last 72 hours" : "No entries match"}
+            hint={view === "suspicious" ? "Repeated failures, denied access and off-hours changes show up here." : "Try clearing the filters, or make a change in the panel and come back."} />
+        ) : (
+          <>
+            <DataTable cols={["When", "Who", "Action", "Resource", "Detail", "IP", "Status"]}
+              onRow={(i) => setSel(rows[i])}
+              rows={rows.map((a) => [
+                <span key={a._id} className="whitespace-nowrap font-mono text-[11.5px]">{fmtWhen(a.timestamp)}</span>,
+                <B key={`${a._id}w`}>{a.adminEmail}</B>,
+                <span key={`${a._id}a`} className="font-mono text-[11px]">{a.action}</span>,
+                <Tag key={`${a._id}r`} kind="mute">{a.resource}</Tag>,
+                <span key={`${a._id}d`} className="line-clamp-2 text-[11.5px] text-ink3">{detailOf(a.details)}</span>,
+                <span key={`${a._id}i`} className="font-mono text-[10.5px] text-ink3">{a.ipAddress ?? "—"}</span>,
+                a.status === "SUCCESS"
+                  ? <Tag key={`${a._id}s`} kind="ok">ok</Tag>
+                  : <Tag key={`${a._id}s`} kind="err">{a.status}</Tag>,
+              ])} />
+            {view === "all" && pagination && pagination.totalPages > 1 && (
+              <div className="mt-3 flex items-center justify-between text-[12.5px] text-ink3">
+                <span>Page {pagination.currentPage} of {pagination.totalPages} · {(pagination.total ?? 0).toLocaleString("en-IN")} entries</span>
+                <div className="flex gap-2">
+                  <Btn kind="ghost" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>← Previous</Btn>
+                  <Btn kind="ghost" disabled={page >= pagination.totalPages} onClick={() => setPage((p) => p + 1)}>Next →</Btn>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </Async>
+
+      <Drawer open={!!sel} onClose={() => setSel(null)} title={sel ? sel.action : "Entry"}>
         {sel && (
-          <div className="grid gap-5">
-            <DetailList items={[
-              ["When", fmtDateFull(sel.timestamp)],
-              ["Who", <B key="who">{sel.adminEmail}</B>],
-              ["Resource", <span key="res">{sel.resource}{sel.resourceId ? <span className="ml-2 break-all text-ink3">{sel.resourceId}</span> : null}</span>],
-              ["Outcome", sel.status === "SUCCESS" ? <StatusTag key="st" kind="ok">ok</StatusTag> : <StatusTag key="st" kind="err">{sel.status}</StatusTag>],
-              ["IP", sel.ipAddress ?? "—"],
-              !!sel.userAgent && ["Browser", <span key="ua" className="break-all text-ink2">{sel.userAgent}</span>],
-            ]} />
-            {sel.errorMessage && <Note kind="err">{sel.errorMessage}</Note>}
-            <div className="grid gap-3">
-              <SubHeading title="Details" blurb="The record exactly as the server wrote it." />
-              <pre className="st-json m-0 max-h-[50vh] overflow-auto rounded-[10px] border border-border bg-ivory p-4 text-ink">{JSON.stringify(sel.details ?? {}, null, 2)}</pre>
-            </div>
+          <div className="grid gap-2 text-[12.5px]">
+            <div className="flex justify-between"><span className="text-ink3">When</span><span className="font-mono">{fmtDateFull(sel.timestamp)}</span></div>
+            <div className="flex justify-between"><span className="text-ink3">Who</span><B>{sel.adminEmail}</B></div>
+            <div className="flex justify-between"><span className="text-ink3">Resource</span><span>{sel.resource}{sel.resourceId ? <span className="ml-1 font-mono text-[10.5px] text-ink3">{sel.resourceId}</span> : null}</span></div>
+            <div className="flex justify-between"><span className="text-ink3">Outcome</span>{sel.status === "SUCCESS" ? <Tag kind="ok">ok</Tag> : <Tag kind="err">{sel.status}</Tag>}</div>
+            {sel.errorMessage && <UiNote kind="crit" className="my-0">{sel.errorMessage}</UiNote>}
+            <div className="flex justify-between"><span className="text-ink3">IP</span><span className="font-mono text-[11px]">{sel.ipAddress ?? "—"}</span></div>
+            {sel.userAgent && <div><span className="text-ink3">Browser</span><div className="break-all text-[11px] text-ink3">{sel.userAgent}</div></div>}
+            <SecH t="Details" />
+            <pre className="max-h-[50vh] overflow-auto rounded-lg bg-ivory p-2.5 font-mono text-[11px] leading-relaxed">{JSON.stringify(sel.details ?? {}, null, 2)}</pre>
           </div>
         )}
-      </StudioSheet>
-    </StudioPage>
+      </Drawer>
+
+      <UiNote>
+        Entries are written by the server, not the browser, and are kept for 90 days before they age out. A failed
+        or denied action is recorded too — that is often the more interesting row.
+      </UiNote>
+    </Page>
   );
 }
-
