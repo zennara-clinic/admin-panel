@@ -482,10 +482,11 @@ export const orders = {
     readyForPickupOrders?: number; collectedOrders?: number; pickupOrders?: number; openPickupOrders?: number;
   }>("/admin/product-orders/stats", { query: q }),
   /**
-   * `extra` is for the pickup handover: the code the guest read out, or
-   * `skipCode` with the note saying how they were identified instead.
+   * `extra` is for the handover — Delivered and Collected both need it: the
+   * code the guest read out, or `skipCode` with the note saying how they were
+   * identified instead.
    */
-  setStatus: (id: Id, orderStatus: string, note?: string, extra?: { pickupCode?: string; skipCode?: boolean }) =>
+  setStatus: (id: Id, orderStatus: string, note?: string, extra?: { handoverCode?: string; skipCode?: boolean }) =>
     request<ProductOrder>(`/admin/product-orders/${id}/status`, { method: "PUT", body: { status: orderStatus, note, ...(extra ?? {}) } }),
   approveReturn: (id: Id) => request<ProductOrder>(`/admin/product-orders/${id}/approve-return`, { method: "PUT" }),
   completeReturn: (id: Id, note?: string) =>

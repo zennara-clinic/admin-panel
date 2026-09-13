@@ -763,6 +763,12 @@ const PICKUP_STEPS: OrderStatus[] = [
   "Order Placed", "Confirmed", "Processing", "Packed", "Ready for Pickup", "Collected",
 ];
 const isPickup = (o: Pick<ProductOrder, "fulfilment"> | null | undefined) => o?.fulfilment?.type === "pickup";
+/** The code while it is still to be used — spent and cancelled orders show none. */
+const liveCode = (o: ProductOrder | null | undefined) =>
+  (o?.handover?.code && !o.handover.verifiedAt && !["Cancelled", "Returned"].includes(o.orderStatus) ? o.handover.code : null);
+/** The step this order's code protects: Collected for pickup, Delivered for delivery. */
+const isHandoverStep = (o: Pick<ProductOrder, "fulfilment"> | null | undefined, status: string) =>
+  status === (isPickup(o) ? "Collected" : "Delivered");
 const stepsFor = (o: Pick<ProductOrder, "fulfilment"> | null | undefined) => (isPickup(o) ? PICKUP_STEPS : DELIVERY_STEPS);
 const FULFILLED: string[] = ["Delivered", "Collected"];
 
@@ -856,7 +862,7 @@ export function Orders() {
     finally { setBusy(false); }
   };
 
-  const setStatus = (o: ProductOrder, to: string, note?: string, extra?: { pickupCode?: string; skipCode?: boolean }) =>
+  const setStatus = (o: ProductOrder, to: string, note?: string, extra?: { handoverCode?: string; skipCode?: boolean }) =>
     act(
       () => api.orders.setStatus(o._id, to, note, extra).then(() => audit("ORDER_STATUS_UPDATED", `${o.orderNumber} → ${to}${note ? ` · ${note}` : ""}`, { orderId: o._id })),
       `${o.orderNumber} → ${to}`,
@@ -968,9 +974,12 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
                 </Tag>,
                 o.source === "zenoti"
                   ? <Tag key={`${o._id}src`} kind="mute">Clinic counter</Tag>
-                  : isPickup(o)
-                    ? <span key={`${o._id}src`} className="inline-flex flex-wrap items-center gap-1"><Tag kind="gold">Pickup</Tag><span className="text-[11px] text-ink3">{o.fulfilment?.branchName ?? ""}</span>{o.orderStatus === "Ready for Pickup" && o.fulfilment?.pickupCode ? <span className="font-mono text-[11px] font-bold tracking-widest">{o.fulfilment.pickupCode}</span> : null}</span>
-                    : <Tag key={`${o._id}src`} kind="info">Delivery</Tag>,
+                  : <span key={`${o._id}src`} className="inline-flex flex-wrap items-center gap-1">
+                      {isPickup(o) ? <Tag kind="gold">Pickup</Tag> : <Tag kind="info">Delivery</Tag>}
+                      {isPickup(o) && <span className="text-[11px] text-ink3">{o.fulfilment?.branchName ?? ""}</span>}
+                      {/* The code is only useful while it is still to be used. */}
+                      {liveCode(o) && <span className="font-mono text-[11px] font-bold tracking-widest">{liveCode(o)}</span>}
+                    </span>,
                 <Tag key={`${o._id}s`} kind={statusTone(o.orderStatus)}>{o.orderStatus}</Tag>,
                 fmtDate(o.createdAt),
               ])} />
@@ -1017,6 +1026,35 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
               </div>
             </Card>
 
+            {/* The handover code — both flows, wherever one has been issued. */}
+            {(liveCode(selOrder) || selOrder.handover?.verifiedAt) && (
+              <Card className="p-3.5">
+                <SecH t={isPickup(selOrder) ? "Pickup code" : "Delivery code"}
+                  em={selOrder.handover?.verifiedAt ? "· used" : selOrder.handover?.sentChannels?.length ? `· sent by ${selOrder.handover.sentChannels.join(" and ")}` : "· not yet sent"} />
+                {liveCode(selOrder) ? (
+                  <>
+                    <div className="rounded-lg bg-primary px-3 py-2.5 text-white">
+                      <div className="text-[10px] uppercase tracking-wider opacity-80">The guest reads this out — type it below to hand over</div>
+                      <div className="font-mono text-[24px] font-bold tracking-[0.3em]">{liveCode(selOrder)}</div>
+                    </div>
+                    <div className="mt-2 text-[11.5px] text-ink3">
+                      Issued {selOrder.handover?.issuedAt ? fmtDateFull(selOrder.handover.issuedAt) : "—"}
+                      {selOrder.handover?.sentChannels?.length
+                        ? ` · sent to the guest by ${selOrder.handover.sentChannels.join(" and ")}`
+                        : " · not delivered to the guest yet — read it out to them if they ask"}
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-[12px] text-ink2">
+                    <B>Handed over {selOrder.handover?.verifiedAt ? fmtDateFull(selOrder.handover.verifiedAt) : ""}</B>
+                    {selOrder.handover?.method === "override"
+                      ? <> · without the code — {selOrder.handover?.note}</>
+                      : <> · code checked at the {isPickup(selOrder) ? "desk" : "door"}</>}
+                  </div>
+                )}
+              </Card>
+            )}
+
             {isPickup(selOrder) && (
               <Card className="p-3.5">
                 <SecH t="Collect at" em={selOrder.fulfilment?.branchName ? `· ${selOrder.fulfilment.branchName}` : undefined} />
@@ -1025,12 +1063,6 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
                   {selOrder.fulfilment?.pickupAddress?.addressLine1 ? <>{selOrder.fulfilment.pickupAddress.addressLine1}<br /></> : null}
                   {[selOrder.fulfilment?.pickupAddress?.city, selOrder.fulfilment?.pickupAddress?.pincode].filter(Boolean).join(" ")}
                 </div>
-                {selOrder.fulfilment?.pickupCode && !["Collected", "Cancelled", "Returned"].includes(selOrder.orderStatus) && (
-                  <div className="mt-2 rounded-lg bg-primary px-3 py-2 text-white">
-                    <div className="text-[10px] uppercase tracking-wider opacity-80">Pickup code — the guest shows this</div>
-                    <div className="font-mono text-[22px] font-bold tracking-[0.3em]">{selOrder.fulfilment.pickupCode}</div>
-                  </div>
-                )}
                 <div className="mt-2 grid gap-0.5 text-[11.5px] text-ink3">
                   {selOrder.fulfilment?.readyAt && <div>Ready since {fmtDateFull(selOrder.fulfilment.readyAt)}</div>}
                   {selOrder.fulfilment?.collectedAt && <div>Collected {fmtDateFull(selOrder.fulfilment.collectedAt)}{selOrder.fulfilment.collectedNote ? ` · ${selOrder.fulfilment.collectedNote}` : ""}</div>}
@@ -1090,13 +1122,15 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
 
             {can("orders.manage") && (
               <>
-                {nextStatus && nextStatus !== "Out for Delivery" && nextStatus !== "Collected" && (
+                {nextStatus && nextStatus !== "Out for Delivery" && !isHandoverStep(selOrder, nextStatus) && (
                   <Btn className="w-full" disabled={busy} onClick={() => setStatus(selOrder, nextStatus)}>
                     {nextStatus === "Ready for Pickup" ? "Mark ready to collect — messages the guest their code" : `Mark ${nextStatus}`}
                   </Btn>
                 )}
-                {nextStatus === "Collected" && (
-                  <Btn className="w-full" disabled={busy} onClick={() => { setCollectCode(""); setCollectSkip(false); setCollectNote(""); setCollectOpen(true); }}>Hand over — mark collected…</Btn>
+                {nextStatus && isHandoverStep(selOrder, nextStatus) && (
+                  <Btn className="w-full" disabled={busy} onClick={() => { setCollectCode(""); setCollectSkip(false); setCollectNote(""); setCollectOpen(true); }}>
+                    {isPickup(selOrder) ? "Hand over — mark collected…" : "Confirm delivery — enter the guest's code…"}
+                  </Btn>
                 )}
                 {selOrder.orderStatus === "Shipped" && (
                   <Btn disabled={busy} onClick={() => {
@@ -1170,23 +1204,30 @@ ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><t
         )}
       </Drawer>
 
-      <Modal open={collectOpen} onClose={() => setCollectOpen(false)} title="Hand over the order">
-        <Note>Ask the guest for the pickup code from their app or message and type it here. It has to match this order. The order is already paid — nothing to collect.</Note>
+      <Modal open={collectOpen} onClose={() => setCollectOpen(false)}
+        title={selOrder && isPickup(selOrder) ? "Hand over the order" : "Confirm the delivery"}>
+        <Note>
+          {selOrder && isPickup(selOrder)
+            ? "Ask the guest for the pickup code from their app, message or email and type it here. It has to match this order. The order is already paid — nothing to collect."
+            : "The delivery partner asks the guest for their code at the door and reads it back to you. It has to match this order. The order is already paid — nothing to collect."}
+        </Note>
         {!collectSkip ? (
-          <In label="Pickup code" value={collectCode} onChange={(v) => setCollectCode(v.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6))} placeholder="6 characters" />
+          <In label={selOrder && isPickup(selOrder) ? "Pickup code" : "Delivery code"} value={collectCode}
+            onChange={(v) => setCollectCode(v.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6))} placeholder="6 characters" />
         ) : (
           <Area label="How was the guest identified? (kept on the order)" value={collectNote} onChange={setCollectNote} rows={2} placeholder="e.g. phone number matched, showed the order in the app" />
         )}
         <button type="button" onClick={() => setCollectSkip(!collectSkip)} className="mt-2 text-[12px] font-bold text-ink3 underline">
-          {collectSkip ? "Enter the code instead" : "Guest cannot show the code…"}
+          {collectSkip ? "Enter the code instead" : "Guest cannot give the code…"}
         </button>
         <div className="mt-4 flex justify-end gap-2">
           <Btn kind="ghost" onClick={() => setCollectOpen(false)}>Back</Btn>
           <Btn disabled={busy || (collectSkip ? collectNote.trim().length < 4 : collectCode.length < 6)} onClick={async () => {
             if (!selOrder) return;
-            const ok = await setStatus(selOrder, "Collected", collectSkip ? collectNote.trim() : undefined, collectSkip ? { skipCode: true } : { pickupCode: collectCode });
+            const to = isPickup(selOrder) ? "Collected" : "Delivered";
+            const ok = await setStatus(selOrder, to, collectSkip ? collectNote.trim() : undefined, collectSkip ? { skipCode: true } : { handoverCode: collectCode });
             if (ok) setCollectOpen(false);
-          }}>Mark collected</Btn>
+          }}>{selOrder && isPickup(selOrder) ? "Mark collected" : "Mark delivered"}</Btn>
         </div>
       </Modal>
 

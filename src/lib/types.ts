@@ -1106,11 +1106,26 @@ export type ProductOrder = {
     type?: FulfilmentType;
     branchId?: Id | null;
     branchName?: string | null;
-    pickupCode?: string | null;
     pickupAddress?: { addressLine1?: string | null; city?: string | null; state?: string | null; pincode?: string | null; phone?: string | null };
     readyAt?: string | null;
     collectedAt?: string | null;
     collectedNote?: string | null;
+  };
+  /**
+   * The handover code the guest reads out when they receive the order — at
+   * the desk for store pickup, at the door for delivery. Pickup gets it when
+   * the order is placed, delivery when a rider is assigned; `sentChannels`
+   * says where it actually reached them.
+   */
+  handover?: {
+    code?: string | null;
+    issuedFor?: FulfilmentType | null;
+    issuedAt?: string | null;
+    sentAt?: string | null;
+    sentChannels?: string[];
+    verifiedAt?: string | null;
+    method?: "code" | "override" | null;
+    note?: string | null;
   };
   shippingAddress?: {
     addressId?: Id; fullName?: string; phone?: string; addressLine1?: string; addressLine2?: string;
