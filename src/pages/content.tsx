@@ -1,20 +1,25 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  Page, Btn, Tag, Card, DataTable, B, Note, Hint, In, Sel, Area, Switch, SecH, Modal, Drawer,
-  DeleteModal, Async, Empty, StaleBanner, exportCsv, Stats, Tabs,
+  Page, Btn, Tag, DataTable, B, Note, Hint, SecH, Modal, Drawer,
+  DeleteModal, Async, Empty, StaleBanner, exportCsv, Stats, Toggle,
 } from "../ui";
+import {
+  StudioPage, Section, Field, Input, Textarea, Select, ToggleRow, PublishBar, StudioBtn, StatusTag,
+  Note as StudioNote, OrderButtons, StudioEmpty, StudioStale, useStudioSection, type StudioSection,
+} from "../studio-ui";
 import { useStore } from "../store";
 import api from "../lib/api";
 import { useApi, useDebounced } from "../lib/useApi";
 import { useQueryPage, useQueryString } from "../lib/useListState";
-import { fmtDate, fmtWhen, fmtAgo, guestCodeOf } from "../lib/format";
+import { fmtDate, fmtDateFull, fmtWhen, fmtAgo, guestCodeOf } from "../lib/format";
 import type { Banner, DeletedAccount, StockMovement } from "../lib/types";
 
 /* =====================================================================
  * BANNERS — the app home carousel (Banner model, /api/banners)
  * =================================================================== */
 const SCREENS = ["", "consultations", "treatments", "appointments", "orders", "profile", "offers"];
+const BANNER_SECTIONS: StudioSection[] = [{ id: "carousel", title: "Carousel" }];
 
 export function Banners() {
   const { toast, audit, can } = useStore();
@@ -24,6 +29,7 @@ export function Banners() {
 
   const q = useApi(() => api.banners.list(), []);
   const list = [...(q.data?.data ?? [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const [active, setActive] = useStudioSection("banners", BANNER_SECTIONS);
 
   const move = async (i: number, dir: -1 | 1) => {
     const j = i + dir; if (j < 0 || j >= list.length) return;
@@ -34,46 +40,59 @@ export function Banners() {
     } catch (e) { toast((e as Error).message); }
   };
 
+  const addButton = can("banners.manage") ? <StudioBtn onClick={() => { setCreating(true); setEdit(null); }}>+ Add banner</StudioBtn> : undefined;
+
   return (
-    <Page title="Banners" sub="The carousel at the top of the app's home screen — images or short videos, each with an optional link"
-      actions={can("banners.manage") ? <Btn onClick={() => { setCreating(true); setEdit(null); }}>+ New banner</Btn> : undefined}>
-      <Hint id="banners-live">Banners publish the moment they are saved. Order here is the order in the app; only active banners are shown.</Hint>
-      <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
+    <StudioPage title="Banners" intro="The carousel at the top of the app's home screen — images or short videos, each with an optional link. Banners publish the moment they are saved; only active ones are shown, in this order."
+      sections={BANNER_SECTIONS} active={active} onSection={setActive} actions={addButton}>
+      <StudioStale error={q.data ? q.error : null} onRetry={q.reload} />
       <Async q={q} label="Loading banners…" rows={4}>
-        {() => list.length === 0 ? (
-          <Empty title="No banners yet" hint="Add an image or a short video for the home carousel."
-            action={can("banners.manage") ? <Btn onClick={() => setCreating(true)}>+ New banner</Btn> : undefined} />
-        ) : (
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {list.map((b, i) => (
-              <Card key={b._id} className="overflow-hidden">
-                {b.mediaType === "video"
-                  ? <video src={b.videoFile ?? b.videoUrl ?? undefined} muted playsInline className="h-36 w-full bg-black object-cover" />
-                  : b.image ? <img src={b.image} alt="" className="h-36 w-full object-cover" /> : <div className="h-36 bg-sage" />}
-                <div className="p-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <b className="text-[13.5px] font-bold leading-tight">{b.title || "Untitled"}</b>
-                    <Tag kind={b.isActive ? "ok" : "mute"}>{b.isActive ? "Live" : "Hidden"}</Tag>
-                  </div>
-                  <div className="mt-1 text-[11px] text-ink3">
-                    {b.mediaType} · {b.linkType === "internal" ? `opens ${b.internalScreen}` : b.linkType === "external" ? "opens a link" : "no link"}
-                  </div>
-                  {can("banners.manage") && (
-                    <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                      <button onClick={() => move(i, -1)} disabled={i === 0} className="rounded border border-border px-2 py-0.5 text-[11px] disabled:opacity-30">↑</button>
-                      <button onClick={() => move(i, 1)} disabled={i === list.length - 1} className="rounded border border-border px-2 py-0.5 text-[11px] disabled:opacity-30">↓</button>
-                      <Btn kind="ghost" className="!px-2.5 !py-1 !text-[11.5px]" onClick={() => setEdit(b)}>Edit</Btn>
-                      <Btn kind="ghost" className="!px-2.5 !py-1 !text-[11.5px]" onClick={async () => {
-                        try { await api.banners.toggle(b._id); audit("APP_CUSTOMIZATION_UPDATED", `Banner ${b.title} ${b.isActive ? "hidden" : "shown"}`); q.reload(); }
-                        catch (e) { toast((e as Error).message); }
-                      }}>{b.isActive ? "Hide" : "Show"}</Btn>
-                      <button onClick={() => setDel(b)} className="ml-auto text-[12px] font-bold text-err">Delete</button>
+        {() => (
+          <Section title={list.length ? `${list.length} banner${list.length === 1 ? "" : "s"}` : "Carousel"}
+            blurb={list.length ? "Top to bottom here is left to right in the app." : undefined}>
+            {list.length === 0 ? (
+              <StudioEmpty title="No banners yet" hint="Add an image or a short video and it appears in the app's home carousel straight away." action={addButton} />
+            ) : (
+              <div className="col-span-full grid gap-4 @lg/fields:grid-cols-2">
+                {list.map((b, i) => (
+                  <div key={b._id} className="overflow-hidden rounded-[12px] border border-border bg-surface">
+                    <div className="bg-sage" style={{ aspectRatio: "16/9" }}>
+                      {b.mediaType === "video"
+                        ? <video src={b.videoFile ?? b.videoUrl ?? undefined} muted playsInline className="h-full w-full bg-black object-cover" />
+                        : b.image ? <img src={b.image} alt="" className="h-full w-full object-cover" /> : null}
                     </div>
-                  )}
-                </div>
-              </Card>
-            ))}
-          </div>
+                    <div className="grid gap-3 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-[15px] font-semibold leading-6 text-ink">{b.title || "Untitled"}</div>
+                          <div className="text-[14px] leading-5 text-ink3">
+                            {b.mediaType} · {b.linkType === "internal" ? `opens ${b.internalScreen}` : b.linkType === "external" ? "opens a link" : "no link"}
+                          </div>
+                        </div>
+                        <StatusTag kind={b.isActive ? "ok" : "mute"}>{b.isActive ? "Live" : "Hidden"}</StatusTag>
+                      </div>
+                      {can("banners.manage") && (
+                        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
+                          <OrderButtons onUp={() => move(i, -1)} onDown={() => move(i, 1)} upDisabled={i === 0} downDisabled={i === list.length - 1} />
+                          <label className="ml-1 flex cursor-pointer items-center gap-2 text-[14px] font-semibold text-ink2">
+                            <Toggle on={!!b.isActive} onChange={async () => {
+                              try { await api.banners.toggle(b._id); audit("APP_CUSTOMIZATION_UPDATED", `Banner ${b.title} ${b.isActive ? "hidden" : "shown"}`); q.reload(); }
+                              catch (e) { toast((e as Error).message); }
+                            }} />
+                            {b.isActive ? "Live" : "Hidden"}
+                          </label>
+                          <span className="ml-auto flex items-center gap-1">
+                            <StudioBtn kind="ghost" small onClick={() => setEdit(b)}>Edit</StudioBtn>
+                            <StudioBtn kind="danger" small onClick={() => setDel(b)}>Delete</StudioBtn>
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Section>
         )}
       </Async>
 
@@ -89,7 +108,7 @@ export function Banners() {
             toast("Banner removed"); q.reload();
           } catch (e) { toast((e as Error).message); }
         }} />
-    </Page>
+    </StudioPage>
   );
 }
 
@@ -143,27 +162,27 @@ function BannerEditor({ open, banner, onClose, onSaved }: {
 
   return (
     <Modal open={open} onClose={onClose} title={banner ? `Edit banner` : "New banner"}>
-      <div className="grid gap-3">
-        <In label="Title (for staff)" value={f.title ?? ""} onChange={set("title")} />
-        <Sel label="Media" value={f.mediaType ?? "image"} onChange={(v) => set("mediaType")(v as Banner["mediaType"])} options={["image", "video"]} />
-        <div>
-          <label className="text-[11px] font-bold text-ink2">{f.mediaType === "video" ? "Video file (MP4, under 50 MB)" : "Image (1600×900 recommended)"}</label>
+      <div className="grid gap-5">
+        <Field label="Title (for staff)" hint="Not shown in the app."><Input value={f.title ?? ""} onChange={set("title")} /></Field>
+        <Field label="Media"><Select value={f.mediaType ?? "image"} onChange={(v) => set("mediaType")(v as Banner["mediaType"])} options={["image", "video"]} /></Field>
+        <Field label={f.mediaType === "video" ? "Video file (MP4, under 50 MB)" : "Image (1600×900 recommended)"}
+          hint={banner && !file && (banner.image || banner.videoFile) ? "Leave empty to keep the current file." : undefined}>
           <input type="file" accept={f.mediaType === "video" ? "video/mp4,video/quicktime,video/webm" : "image/*"}
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)} className="mt-1 block w-full text-[12px]" />
-          {banner && !file && (banner.image || banner.videoFile) && <div className="mt-1 text-[10.5px] text-ink3">Leave empty to keep the current file.</div>}
-        </div>
-        {f.mediaType === "video" && <In label="…or a video URL" value={f.videoUrl ?? ""} onChange={set("videoUrl")} placeholder="https://…/clip.mp4" />}
-        <Sel label="Tapping the banner" value={f.linkType ?? "none"} onChange={(v) => set("linkType")(v as Banner["linkType"])} options={["none", "internal", "external"]} />
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            className="block w-full rounded-[10px] border border-dashed border-border bg-ivory px-3.5 py-2.5 text-[14px] text-ink2 file:mr-3 file:rounded-[8px] file:border-0 file:bg-primary file:px-3 file:py-1.5 file:text-[14px] file:font-semibold file:text-white" />
+        </Field>
+        {f.mediaType === "video" && <Field label="…or a video URL"><Input value={f.videoUrl ?? ""} onChange={set("videoUrl")} placeholder="https://…/clip.mp4" /></Field>}
+        <Field label="Tapping the banner"><Select value={f.linkType ?? "none"} onChange={(v) => set("linkType")(v as Banner["linkType"])} options={["none", "internal", "external"]} /></Field>
         {f.linkType === "internal" && (
-          <Sel label="Opens the app screen" value={f.internalScreen ?? ""} onChange={set("internalScreen")} options={SCREENS} />
+          <Field label="Opens the app screen"><Select value={f.internalScreen ?? ""} onChange={set("internalScreen")} options={SCREENS.map((s) => ({ value: s, label: s || "— pick a screen —" }))} /></Field>
         )}
-        {f.linkType === "external" && <In label="Opens the link" value={f.externalUrl ?? ""} onChange={set("externalUrl")} placeholder="https://" />}
-        {banner && <Switch on={!!f.isActive} onChange={set("isActive")} label="Live in the app" />}
+        {f.linkType === "external" && <Field label="Opens the link"><Input value={f.externalUrl ?? ""} onChange={set("externalUrl")} placeholder="https://" /></Field>}
+        {banner && <ToggleRow label="Live in the app" description="Hidden banners stay here but are not shown to guests." on={!!f.isActive} onChange={set("isActive")} />}
       </div>
-      {err && <Note kind="crit">{err}</Note>}
-      <div className="mt-4 flex justify-end gap-2">
-        <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn disabled={busy} onClick={save}>{busy ? "Uploading…" : banner ? "Save" : "Publish"}</Btn>
+      {err && <StudioNote kind="err" className="mt-4">{err}</StudioNote>}
+      <div className="mt-5 flex justify-end gap-2">
+        <StudioBtn kind="ghost" onClick={onClose}>Cancel</StudioBtn>
+        <StudioBtn disabled={busy} onClick={save}>{busy ? "Uploading…" : banner ? "Save" : "Publish"}</StudioBtn>
       </div>
     </Modal>
   );
@@ -172,14 +191,21 @@ function BannerEditor({ open, banner, onClose, onSaved }: {
 /* =====================================================================
  * LEGAL — terms of service & privacy policy (AppCustomization root fields)
  * =================================================================== */
+const LEGAL_SECTIONS: StudioSection[] = [
+  { id: "terms", title: "Terms of service", blurb: "Shown under Profile and at sign-up." },
+  { id: "privacy", title: "Privacy policy", blurb: "Shown under Profile and at sign-up." },
+];
+const LEGAL_FORMAT = "Plain text. Start a section with a numbered heading on its own line (\"1. INFORMATION WE COLLECT\"), sub-sections as \"1.1 Personal Information\", and keep a \"Last Updated:\" line at the top — the app formats those.";
+
 export function LegalEditor() {
   const { toast, audit, can } = useStore();
   const q = useApi(() => api.appStudio.get(), []);
   const [terms, setTerms] = useState("");
   const [privacy, setPrivacy] = useState("");
-  const [tab, setTab] = useState(0);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [active, setActive] = useStudioSection("legal", LEGAL_SECTIONS);
+  const tab = active === "privacy" ? 1 : 0;
 
   useEffect(() => {
     if (!q.data) return;
@@ -200,26 +226,34 @@ export function LegalEditor() {
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
 
+  const text = tab === 0 ? terms : privacy;
+  // The document's own "Last Updated:" line, if the admin keeps one at the top.
+  const lastUpdatedLine = text.split("\n").map((l) => l.trim()).find((l) => /^last updated/i.test(l));
+
   return (
-    <Page title="Terms & privacy" sub="The legal documents the app shows under Profile and at sign-up"
-      actions={can("appContent.manage") ? <Btn kind="gold" disabled={!dirty || busy} onClick={save}>{busy ? "Publishing…" : "Publish"}</Btn> : undefined}>
-      <Hint id="legal-live">Plain text. Start a section with a numbered heading on its own line ("1. INFORMATION WE COLLECT"), sub-sections as "1.1 Personal Information", and keep a "Last Updated:" line at the top — the app formats those.</Hint>
-      <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
+    <StudioPage title="Terms & privacy" intro="The legal documents the app shows under Profile and at sign-up. Plain text, published to every install on its next open."
+      sections={LEGAL_SECTIONS} active={active} onSection={setActive}
+      footer={<PublishBar canEdit={can("appContent.manage")} dirty={dirty} busy={busy} err={err}
+        lastSavedAt={q.data?.lastUpdatedAt ? fmtDateFull(q.data.lastUpdatedAt) : undefined}
+        permissionNote="You can read the documents, but publishing changes needs the “edit app content” permission."
+        onPublish={save} onDiscard={() => { setTerms(q.data?.termsOfService ?? ""); setPrivacy(q.data?.privacyPolicy ?? ""); setErr(null); }} />}>
+      <StudioStale error={q.data ? q.error : null} onRetry={q.reload} />
       <Async q={q} label="Loading documents…" rows={6}>
         {() => (
-          <>
-            <Tabs active={tab} onChange={setTab} items={[["Terms of service"], ["Privacy policy"]]} />
-            <Card className="p-4">
+          <Section key={active} title={LEGAL_SECTIONS[tab].title} blurb={LEGAL_FORMAT}>
+            <div className="col-span-full flex flex-wrap items-center justify-between gap-2 text-[14px] text-ink2">
+              <span>{lastUpdatedLine ? lastUpdatedLine : "No “Last Updated:” line at the top yet."}</span>
+              <span className="text-ink3">{text.length.toLocaleString("en-IN")} characters{q.data?.lastUpdatedAt ? ` · published ${fmtDateFull(q.data.lastUpdatedAt)}` : ""}</span>
+            </div>
+            <Field label={LEGAL_SECTIONS[tab].title} full>
               {tab === 0
-                ? <Area label="Terms of service" value={terms} onChange={setTerms} rows={28} />
-                : <Area label="Privacy policy" value={privacy} onChange={setPrivacy} rows={28} />}
-              <div className="mt-2 text-[11px] text-ink3">{(tab === 0 ? terms : privacy).length.toLocaleString("en-IN")} characters</div>
-            </Card>
-            {err && <Note kind="crit">{err}</Note>}
-          </>
+                ? <Textarea large rows={26} value={terms} onChange={setTerms} />
+                : <Textarea large rows={26} value={privacy} onChange={setPrivacy} />}
+            </Field>
+          </Section>
         )}
       </Async>
-    </Page>
+    </StudioPage>
   );
 }
 

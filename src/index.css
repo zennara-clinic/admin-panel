@@ -163,3 +163,13 @@ body {
   body { background: white !important; }
   table { font-size: 11px; }
 }
+
+/* App Studio controls (src/studio-ui.tsx): a soft primary ring instead of the
+   panel-wide gold outline, so an active field reads as "typing here", not
+   "keyboard focus". Keyboard users still get the ring. */
+.st-control:focus,
+.st-control:focus-visible {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 15%, transparent);
+}

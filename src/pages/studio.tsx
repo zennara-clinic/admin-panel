@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { Loader2 } from "lucide-react";
+import { Btn, B, Note as UiNote, In, Modal, Async, Loading, DeleteModal, Toggle } from "../ui";
 import {
-  Page, Btn, Tag, Card, DataTable, B, Note, Hint, In, Sel, Area, SecH, Modal, Tabs,
-  Async, Empty, Loading, StaleBanner, Spinner, DeleteModal, Toggle,
-} from "../ui";
+  StudioPage, Section, SubHeading, Field, Input, NumberInput, Textarea, Select, Segmented, ToggleRow, ImageInput,
+  PublishBar, PhonePreview, StudioBtn, StatusTag, Note, Row, OrderButtons, RemoveButton, StudioEmpty, StudioStale,
+  useStudioSection, APP, type StudioSection,
+} from "../studio-ui";
 import { useStore } from "../store";
 import api from "../lib/api";
 import { ADVANCED_COLOR_TOKENS, COLOR_TOKENS, CONTROL_COLOR_TOKENS, COPY_GROUPS, FONT_SIZE_TOKENS } from "../lib/appDesignCatalog";
 import { useApi } from "../lib/useApi";
-import { useQueryNumber } from "../lib/useListState";
 import { fmtAgo, fmtDateFull, fmtINR } from "../lib/format";
 import type { AppCustomization } from "../lib/types";
 
@@ -104,58 +106,14 @@ function useCustomization() {
   return { q, draft, setDraft, dirty, save, busy, err, section, get, canEdit };
 }
 
-function SaveBar({ dirty, busy, err, onSave, onReset, canEdit = true }: {
-  dirty: boolean; busy: boolean; err: string | null; onSave: () => void; onReset: () => void; canEdit?: boolean;
-}) {
-  if (err) return <Note kind="crit">{err}</Note>;
-  if (!canEdit) {
-    return <Note className="mb-3">You can see what the app is showing, but publishing changes needs the “edit app home, control &amp; content” permission.</Note>;
-  }
-  if (!dirty) return null;
+/** The publish bar every AppCustomization editor shares. */
+function DraftPublishBar({ c, what, toastText = "Published" }: { c: ReturnType<typeof useCustomization>; what: string; toastText?: string }) {
+  const { toast, audit } = useStore();
   return (
-    <div className="sticky top-[52px] z-30 mb-3 flex flex-wrap items-center justify-between gap-3 rounded-(--radius-card) border border-gold-dark bg-cream px-4 py-2.5">
-      <span className="text-[12.5px] font-semibold text-ink2">You have unsaved changes — the app won’t see them until you publish.</span>
-      <div className="flex gap-2">
-        <Btn kind="ghost" onClick={onReset}>Discard</Btn>
-        <Btn kind="gold" disabled={busy} onClick={onSave}>{busy ? "Publishing…" : "Publish to app"}</Btn>
-      </div>
-    </div>
-  );
-}
-
-/* ---------- image field with upload ---------- */
-function ImageField({ label, value, onChange, uploadAs, onUploaded, hint }: {
-  label: string; value: string; onChange: (v: string) => void;
-  uploadAs?: "appLogo" | "heroBanner" | "zenMembershipCard";
-  onUploaded?: () => void; hint?: string;
-}) {
-  const { toast } = useStore();
-  const ref = useRef<HTMLInputElement>(null);
-  const [busy, setBusy] = useState(false);
-
-  return (
-    <div className="grid gap-2">
-      <In label={label} value={value} onChange={onChange} hint={hint} />
-      {value && <img src={value} alt="" className="h-28 w-full rounded-xl border border-border object-cover" />}
-      {uploadAs && (
-        <>
-          <Btn kind="ghost" disabled={busy} onClick={() => ref.current?.click()}>
-            {busy ? "Uploading…" : "Upload a new image"}
-          </Btn>
-          <input ref={ref} type="file" accept="image/*" className="hidden" onChange={async (e) => {
-            const file = e.target.files?.[0];
-            if (!file) return;
-            setBusy(true);
-            try {
-              await api.appStudio.uploadImage(uploadAs, file);
-              toast("Image uploaded and published");
-              onUploaded?.();
-            } catch (err) { toast((err as Error).message); } finally { setBusy(false); e.target.value = ""; }
-          }} />
-          <div className="text-[10.5px] text-ink3">Uploading replaces the image and publishes it immediately.</div>
-        </>
-      )}
-    </div>
+    <PublishBar canEdit={c.canEdit} dirty={c.dirty} busy={c.busy} err={c.err}
+      lastSavedAt={c.draft?.lastUpdatedAt ? fmtDateFull(c.draft.lastUpdatedAt) : undefined}
+      onPublish={() => c.save(() => { audit("APP_CUSTOMIZATION_UPDATED", what); toast(toastText); })}
+      onDiscard={() => c.setDraft(c.q.data ?? null)} />
   );
 }
 
@@ -189,15 +147,16 @@ function ReelUploader({ onAdded }: { onAdded: () => void }) {
   };
 
   return (
-    <div className="grid gap-2 rounded-lg border border-dashed border-border p-3">
-      <div className="grid gap-2 md:grid-cols-2">
-        <In label="Title (optional)" value={title} onChange={setTitle} />
-        <In label="Instagram link (optional)" value={permalink} onChange={setPermalink} placeholder="https://www.instagram.com/reel/…" />
+    <div className="col-span-full grid gap-4 rounded-[12px] border border-dashed border-border bg-ivory p-4">
+      <div className="text-[14px] font-semibold text-ink">Upload a reel</div>
+      <div className="grid gap-4 @lg/fields:grid-cols-2">
+        <Field label="Title (optional)"><Input value={title} onChange={setTitle} /></Field>
+        <Field label="Instagram link (optional)"><Input value={permalink} onChange={setPermalink} placeholder="https://www.instagram.com/reel/…" /></Field>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <Btn kind="ghost" onClick={() => videoRef.current?.click()}>{video ? `Video: ${video.name}` : "Choose video (MP4)"}</Btn>
-        <Btn kind="ghost" onClick={() => posterRef.current?.click()}>{poster ? `Poster: ${poster.name}` : "Poster image (optional)"}</Btn>
-        <Btn kind="gold" disabled={!video || busy} onClick={submit}>{busy ? "Uploading…" : "Upload reel"}</Btn>
+        <StudioBtn kind="ghost" onClick={() => videoRef.current?.click()}>{video ? `Video: ${video.name}` : "Choose video (MP4)"}</StudioBtn>
+        <StudioBtn kind="ghost" onClick={() => posterRef.current?.click()}>{poster ? `Poster: ${poster.name}` : "Poster image (optional)"}</StudioBtn>
+        <StudioBtn disabled={!video || busy} onClick={submit}>{busy ? <><Loader2 className="h-4 w-4 animate-spin" /> Uploading…</> : "Upload reel"}</StudioBtn>
       </div>
       <input ref={videoRef} type="file" accept="video/mp4,video/quicktime,video/webm" className="hidden"
         onChange={(e) => { setVideo(e.target.files?.[0] ?? null); e.target.value = ""; }} />
@@ -208,6 +167,16 @@ function ReelUploader({ onAdded }: { onAdded: () => void }) {
 }
 
 /* ================= APP HOME ================= */
+const HOME_SECTIONS: StudioSection[] = [
+  { id: "branding", title: "Branding", blurb: "The logo the app shows in its header." },
+  { id: "hero", title: "Hero banner", blurb: "The tappable artwork under the greeting, and where it takes the guest." },
+  { id: "sections", title: "Home sections", blurb: "The home page is built from these blocks, top to bottom. Hide or reorder any of them — the greeting always stays on top." },
+  { id: "quick", title: "Quick actions", blurb: "The four tiles under the banner. Destinations are a validated list — a tile can only open a real page." },
+  { id: "reels", title: "Clinic reels", blurb: "Upload the reel's video file (MP4, under 50 MB) and the app plays it natively — an Instagram embed cannot be relied on to play on iPhone. Newest first." },
+  { id: "reviews", title: "Reviews", blurb: "Celebrity and press quotes in the reviews carousel, shown with five gold stars. Leave empty to keep the bundled set." },
+  { id: "instagram", title: "Instagram", blurb: "The \"Follow us\" rail and every \"View on Instagram\" link use these." },
+];
+
 export function AppHome() {
   const { toast, audit } = useStore();
   const c = useCustomization();
@@ -234,118 +203,115 @@ export function AppHome() {
       c.q.reload();
     } catch (e) { toast((e as Error).message); }
   };
+  void moveCard;
+
+  const sections = HOME_SECTIONS.map((s) => {
+    if (s.id === "reels") return { ...s, count: reelVideos.length || undefined };
+    if (s.id === "reviews") return { ...s, count: ((home().testimonials as unknown[] | undefined) ?? []).length || undefined };
+    return s;
+  });
+  const [active, setActive] = useStudioSection("home", sections);
+  const sec = sections.find((s) => s.id === active) ?? sections[0];
+
+  const quickActions = (home().quickActions as { label: string; image?: string; route?: string; visible?: boolean }[] | undefined) ?? [];
+  const homeSections = (home().sections as { id: string; visible?: boolean }[] | undefined) ?? [];
 
   return (
-    <Page title="App home" sub="The mobile app's home screen — published without an app release"
-      actions={
-        <Btn kind="gold" disabled={!c.dirty || c.busy}
-          onClick={() => c.save(() => { audit("APP_CUSTOMIZATION_UPDATED", "App home"); toast("Published — live in the app now"); })}>
-          {c.busy ? "Publishing…" : "Publish"}
-        </Btn>
-      }>
-      <Hint id="studio-live">Every field here writes to the app-customization record the mobile app reads on launch.</Hint>
-      <StaleBanner error={c.q.data ? c.q.error : null} onRetry={c.q.reload} />
+    <StudioPage title="App home" intro="The mobile app's home screen — every change here reaches guests on their next launch, without an app release."
+      sections={sections} active={active} onSection={setActive}
+      footer={<DraftPublishBar c={c} what="App home" toastText="Published — live in the app now" />}>
+      <StudioStale error={c.q.data ? c.q.error : null} onRetry={c.q.reload} />
 
       <Async q={c.q} label="Loading app settings…" rows={6}>
         {() => !c.draft ? <Loading /> : (
           <>
-            <SaveBar canEdit={c.canEdit} dirty={c.dirty} busy={c.busy} err={c.err}
-              onSave={() => c.save(() => { audit("APP_CUSTOMIZATION_UPDATED", "App home"); toast("Published"); })}
-              onReset={() => c.setDraft(c.q.data ?? null)} />
-
-            <div className="grid items-start gap-4">
-              <div className="grid gap-3">
-                <Card className="p-4">
-                  <SecH t="Branding" />
-                  <ImageField label="App logo URL" value={c.draft.appLogo ?? ""}
+            {active === "branding" && (
+              <Section title={sec.title} blurb={sec.blurb}>
+                <Field label="App logo" full hint="Paste an image URL, or upload a file — uploads replace the logo straight away.">
+                  <ImageInput value={c.draft.appLogo ?? ""} contain emptyLabel="No logo yet"
                     onChange={(v) => c.setDraft((d) => (d ? { ...d, appLogo: v } : d))}
                     uploadAs="appLogo" onUploaded={c.q.reload} />
-                </Card>
+                </Field>
+              </Section>
+            )}
 
+            {active === "hero" && (
+              <Section title={sec.title} blurb={sec.blurb}
+                aside={<PhonePreview caption="How the top of the home screen will look">
+                  <HomeMock logo={c.draft.appLogo ?? ""} hero={String(home().heroBannerImage ?? "")} quickActions={quickActions} sections={homeSections} />
+                </PhonePreview>}>
+                <Field label="Hero banner image" full>
+                  <ImageInput value={String(home().heroBannerImage ?? "")} onChange={setHome("heroBannerImage")} uploadAs="heroBanner" onUploaded={c.q.reload} />
+                </Field>
+                <Field label="Tapping the banner opens" full hint="Destinations are a validated list, not free text — the banner cannot point at a page that does not exist.">
+                  <Select value={String(home().heroBannerRoute ?? "consultations")} onChange={setHome("heroBannerRoute")}
+                    options={["consultations", "products", "appointments", "profile"]} />
+                </Field>
+              </Section>
+            )}
 
-                <Card className="p-4">
-                  <SecH t="Home sections" em="· order & visibility" />
-                  <Note className="text-[11.5px]">The home page is built from these sections, top to bottom, exactly as the new layout renders them. Hide or reorder any of them — the greeting always stays on top.</Note>
-                  <HomeSectionsEditor value={(home().sections as { id: string; visible?: boolean }[] | undefined) ?? []} onChange={setHome("sections")} />
-                </Card>
+            {active === "sections" && (
+              <Section title={sec.title} blurb={sec.blurb}>
+                <div className="col-span-full">
+                  <HomeSectionsEditor value={homeSections} onChange={setHome("sections")} />
+                </div>
+              </Section>
+            )}
 
-                <Card className="p-4">
-                  <SecH t="Hero banner" />
-                  <ImageField label="Hero banner image URL" value={String(home().heroBannerImage ?? "")}
-                    onChange={setHome("heroBannerImage")} uploadAs="heroBanner" onUploaded={c.q.reload} />
-                  <div className="mt-3">
-                    <Sel label="Tapping the banner opens" value={String(home().heroBannerRoute ?? "consultations")}
-                      onChange={setHome("heroBannerRoute")}
-                      options={["consultations", "products", "appointments", "profile"]} />
-                  </div>
-                  <Note className="mb-0 text-[11.5px]">
-                    <B>Destinations are a validated list, not free-text.</B> An admin cannot point the banner at a page that does not exist.
-                  </Note>
-                </Card>
+            {active === "quick" && (
+              <Section title={sec.title} blurb={sec.blurb}>
+                <div className="col-span-full">
+                  <QuickActionsEditor value={quickActions} onChange={setHome("quickActions")} />
+                </div>
+              </Section>
+            )}
 
-                <Card className="p-4">
-                  <SecH t="Clinic reels" em={`· ${reelVideos.length} uploaded`} />
-                  <Note className="text-[11.5px]">
-                    <B>Upload the reel's video file</B> (MP4, under 50 MB) and the app plays it natively — an
-                    Instagram embed inside the app cannot be relied on to play on iPhone. Paste the reel's
-                    Instagram link too so "View on Instagram" still works. Newest first.
-                  </Note>
-                  {c.canEdit && <ReelUploader onAdded={c.q.reload} />}
-                  {reelVideos.length > 0 && (
-                    <div className="mt-3 grid gap-2">
-                      {reelVideos.map((r, i) => (
-                        <div key={r._id ?? i} className="flex items-center gap-2.5 rounded-lg border border-border bg-ivory px-3 py-2">
-                          {r.poster
-                            ? <img src={r.poster} alt="" className="h-[42px] w-[30px] shrink-0 rounded object-cover" />
-                            : <video src={r.url} muted playsInline className="h-[42px] w-[30px] shrink-0 rounded bg-black object-cover" />}
-                          <div className="min-w-0 flex-1">
-                            <b className="truncate text-[12.5px]">{r.title || `Reel ${reelVideos.length - i}`}</b>
-                            <div className={`truncate text-[10.5px] ${r.permalink ? "text-ink3" : "font-semibold text-warn"}`}>{r.permalink || "No Instagram link — 'View on Instagram' hidden for this reel"}</div>
-                          </div>
-                          {c.canEdit && (
-                            <button onClick={() => { const link = window.prompt("Instagram link for this reel (instagram.com URL, empty to remove):", r.permalink ?? ""); if (link === null || !r._id) return; api.appStudio.updateReelVideo(r._id, { permalink: link.trim() }).then(() => { toast("Reel link saved"); c.q.reload(); }).catch((e) => toast((e as Error).message)); }}
-                              className="text-[11.5px] font-semibold text-primary">{r.permalink ? "Edit link" : "Add link"}</button>
-                          )}
-                          {c.canEdit && <button onClick={() => setDelReel(r)} className="text-[12px] font-bold text-err">×</button>}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div className="mt-4">
-                    <Area label="Instagram reel links (fallback, one per line)" rows={3}
-                      value={((home().reels as string[] | undefined) ?? []).join("\n")}
-                      onChange={(v) => setHome("reels")(v.split(/\n+/).map((x) => x.trim()).filter(Boolean))} />
-                    <div className="mt-1 text-[10.5px] text-ink3">
-                      Used only when no video has been uploaded. Embeds may not play on iPhone.
-                    </div>
-                  </div>
-                </Card>
+            {active === "reels" && (
+              <Section title={sec.title} blurb={sec.blurb}>
+                {c.canEdit && <ReelUploader onAdded={c.q.reload} />}
+                <div className="col-span-full grid gap-2">
+                  <div className="text-[14px] font-semibold text-ink">{reelVideos.length ? `${reelVideos.length} uploaded` : "No reels uploaded yet"}</div>
+                  {reelVideos.map((r, i) => (
+                    <Row key={r._id ?? i}>
+                      {r.poster
+                        ? <img src={r.poster} alt="" className="h-14 w-10 shrink-0 rounded-[6px] object-cover" />
+                        : <video src={r.url} muted playsInline className="h-14 w-10 shrink-0 rounded-[6px] bg-black object-cover" />}
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-[15px] font-semibold text-ink">{r.title || `Reel ${reelVideos.length - i}`}</div>
+                        <div className={`truncate text-[14px] ${r.permalink ? "text-ink3" : "font-semibold text-warn"}`}>{r.permalink || "No Instagram link — “View on Instagram” hidden for this reel"}</div>
+                      </div>
+                      {c.canEdit && (
+                        <StudioBtn kind="link" small onClick={() => { const link = window.prompt("Instagram link for this reel (instagram.com URL, empty to remove):", r.permalink ?? ""); if (link === null || !r._id) return; api.appStudio.updateReelVideo(r._id, { permalink: link.trim() }).then(() => { toast("Reel link saved"); c.q.reload(); }).catch((e) => toast((e as Error).message)); }}>
+                          {r.permalink ? "Edit link" : "Add link"}
+                        </StudioBtn>
+                      )}
+                      {c.canEdit && <RemoveButton onClick={() => setDelReel(r)} label="Remove reel" />}
+                    </Row>
+                  ))}
+                </div>
+                <Field label="Instagram reel links (fallback, one per line)" full hint="Used only when no video has been uploaded. Embeds may not play on iPhone.">
+                  <Textarea rows={3} value={((home().reels as string[] | undefined) ?? []).join("\n")}
+                    onChange={(v) => setHome("reels")(v.split(/\n+/).map((x) => x.trim()).filter(Boolean))} />
+                </Field>
+              </Section>
+            )}
 
-                <Card className="p-4">
-                  <SecH t="Quick actions" em="· the four tiles under the banner" />
-                  <QuickActionsEditor value={(home().quickActions as { label: string; image?: string; route?: string; visible?: boolean }[] | undefined) ?? []} onChange={setHome("quickActions")} />
-                </Card>
-
-                <Card className="p-4">
-                  <SecH t="Reviews — celebrity & press quotes" em={`· ${((home().testimonials as unknown[] | undefined) ?? []).length || "bundled"}`} />
-                  <Note className="text-[11.5px]">Shown in the reviews carousel with the five gold stars. Leave empty to keep the bundled celebrity set. Headings for this section live under <B>App control → Copy → Home</B>.</Note>
+            {active === "reviews" && (
+              <Section title={sec.title} blurb={sec.blurb}>
+                <div className="col-span-full">
                   <TestimonialsEditor value={(home().testimonials as { name: string; role?: string; quote: string; image?: string }[] | undefined) ?? []} onChange={setHome("testimonials")} />
-                </Card>
+                </div>
+                <Note>Headings for this section live under <B>App control → Copy → Home</B>.</Note>
+              </Section>
+            )}
 
-                <Card className="p-4">
-                  <SecH t="Instagram" />
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <In label="Handle" value={String(home().instagramHandle ?? "")} onChange={setHome("instagramHandle")} placeholder="@zennaraclinics" />
-                    <In label="Profile URL" value={String(home().instagramUrl ?? "")} onChange={setHome("instagramUrl")} placeholder="https://www.instagram.com/zennaraclinics/" />
-                  </div>
-                  <Note className="mb-0 text-[11.5px]">The "Follow us" rail and every "View on Instagram" link use these. Wording lives under <B>App control → Copy → Home</B>.</Note>
-                </Card>
-
-                <Note>
-                  Every heading, subtitle and button on the home page — the greeting, the booking prompt, the products rail, the reviews headings and the Instagram card — is editable under <B>App studio → App control → Copy</B>. Colours and type sizes live in <B>App control</B> too.
-                </Note>
-              </div>
-            </div>
+            {active === "instagram" && (
+              <Section title={sec.title} blurb={sec.blurb}>
+                <Field label="Handle"><Input value={String(home().instagramHandle ?? "")} onChange={setHome("instagramHandle")} placeholder="@zennaraclinics" /></Field>
+                <Field label="Profile URL"><Input value={String(home().instagramUrl ?? "")} onChange={setHome("instagramUrl")} placeholder="https://www.instagram.com/zennaraclinics/" /></Field>
+                <Note>Wording for the rail lives under <B>App control → Copy → Home</B>. Every heading, subtitle and button on the home page is editable there; colours and type sizes live in <B>App control</B> too.</Note>
+              </Section>
+            )}
           </>
         )}
       </Async>
@@ -373,7 +339,100 @@ export function AppHome() {
             toast("Reel removed"); setDelReel(null); c.q.reload();
           } catch (e) { toast((e as Error).message); }
         }} />
-    </Page>
+    </StudioPage>
+  );
+}
+
+/**
+ * A simple, honest mock of the home screen drawn from the draft: greeting,
+ * hero, the quick-action tiles and the remaining sections in their saved
+ * order. The panel shares no code with the app, so this is a sketch, not a
+ * render.
+ */
+function HomeMock({ logo, hero, quickActions, sections }: {
+  logo: string; hero: string;
+  quickActions: { label: string; image?: string; route?: string; visible?: boolean }[];
+  sections: { id: string; visible?: boolean }[];
+}) {
+  const tiles: { label: string; image?: string; route?: string; visible?: boolean }[] =
+    (quickActions.length ? quickActions : DEFAULT_QUICK.map((d) => ({ ...d, visible: true }))).filter((a) => a.visible !== false);
+  const savedIds = sections.map((s) => s.id);
+  const order = [
+    ...sections.filter((s) => HOME_SECTIONS_META.some((m) => m.id === s.id)),
+    ...HOME_SECTIONS_META.filter((m) => !savedIds.includes(m.id)).map((m) => ({ id: m.id, visible: true })),
+  ].filter((s) => s.visible !== false);
+  const label = (id: string) => HOME_SECTIONS_META.find((m) => m.id === id)?.label ?? id;
+  const block = (id: string) => {
+    switch (id) {
+      case "hero":
+        return hero
+          ? <img src={hero} alt="" className="w-full rounded-[14px] object-cover" style={{ aspectRatio: "16/9" }} />
+          : <div className="grid w-full place-items-center rounded-[14px] text-[11px] font-semibold" style={{ aspectRatio: "16/9", background: APP.cream, color: APP.ink3 }}>Hero banner</div>;
+      case "appointment":
+        return (
+          <div className="rounded-[14px] p-3" style={{ background: APP.surface, border: `1px solid ${APP.border}` }}>
+            <div className="text-[11px] font-bold" style={{ color: APP.ink }}>Ready when you are</div>
+            <div className="mt-0.5 text-[9.5px]" style={{ color: APP.ink2 }}>Your next visit will appear here.</div>
+            <div className="mt-2 rounded-[10px] py-1.5 text-center text-[10px] font-bold text-white" style={{ background: APP.primary }}>Book an appointment</div>
+          </div>
+        );
+      case "quickActions":
+        return (
+          <div className="grid grid-cols-4 gap-2">
+            {tiles.slice(0, 8).map((a, i) => (
+              <div key={i} className="grid justify-items-center gap-1 text-center">
+                <span className="grid h-11 w-11 place-items-center overflow-hidden rounded-[14px]" style={{ background: "#eff3ee" }}>
+                  {a.image ? <img src={a.image} alt="" className="h-6 w-6 object-contain" /> : <span className="text-[14px] font-extrabold" style={{ color: APP.primary }}>{(a.label || "?").slice(0, 1)}</span>}
+                </span>
+                <span className="w-full truncate text-[8.5px] font-semibold" style={{ color: APP.ink2 }}>{a.label || "Tile"}</span>
+              </div>
+            ))}
+          </div>
+        );
+      case "products":
+        return (
+          <div>
+            <div className="mb-1.5 text-[11px] font-bold" style={{ color: APP.ink }}>Popular products</div>
+            <div className="flex gap-2">{[0, 1, 2].map((i) => <div key={i} className="h-16 flex-1 rounded-[10px]" style={{ background: APP.cream }} />)}</div>
+          </div>
+        );
+      case "testimonials":
+        return (
+          <div className="rounded-[14px] p-3" style={{ background: APP.cream }}>
+            <div className="text-[10px] tracking-[0.15em]" style={{ color: APP.gold }}>★★★★★</div>
+            <div className="mt-1 text-[9.5px] italic" style={{ color: APP.ink2 }}>“Reviews rotate here.”</div>
+          </div>
+        );
+      case "reels":
+        return (
+          <div>
+            <div className="mb-1.5 text-[11px] font-bold" style={{ color: APP.ink }}>From the clinic</div>
+            <div className="flex gap-2">{[0, 1, 2].map((i) => <div key={i} className="h-20 flex-1 rounded-[10px]" style={{ background: "#1b1f1d" }} />)}</div>
+          </div>
+        );
+      case "membership":
+        return (
+          <div className="rounded-[14px] p-3 text-white" style={{ background: APP.primary }}>
+            <div className="font-logo text-[12px] tracking-[0.18em]" style={{ color: APP.gold }}>ZEN MEMBERSHIP</div>
+            <div className="mt-1 text-[9.5px] opacity-80">Hidden automatically for members.</div>
+          </div>
+        );
+      default:
+        return <div className="rounded-[10px] px-3 py-2 text-[9.5px]" style={{ background: APP.cream, color: APP.ink3 }}>{label(id)}</div>;
+    }
+  };
+  return (
+    <div className="grid gap-3 px-3.5 py-3" style={{ background: APP.surface }}>
+      <div className="flex items-center justify-between">
+        {logo ? <img src={logo} alt="" className="h-6 max-w-[110px] object-contain" /> : <span className="font-logo text-[15px] tracking-[0.12em]" style={{ color: APP.primary }}>Zennara</span>}
+        <span className="h-7 w-7 rounded-full" style={{ background: APP.cream }} />
+      </div>
+      <div>
+        <div className="text-[15px] font-extrabold leading-tight" style={{ color: APP.ink }}>Good morning, Sana</div>
+        <div className="text-[9.5px]" style={{ color: APP.ink2 }}>Skin. Aesthetics. Wellness.</div>
+      </div>
+      {order.map((s) => <div key={s.id}>{block(s.id)}</div>)}
+    </div>
   );
 }
 
@@ -413,7 +472,7 @@ function AddCardModal({ open, card, onClose, onAdded }: {
             onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
         </div>
       </div>
-      {err && <Note kind="crit">{err}</Note>}
+      {err && <UiNote kind="crit">{err}</UiNote>}
       <div className="mt-4 flex justify-end gap-2">
         <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
         <Btn disabled={busy || !name.trim() || !term.trim() || (!file && !card)} onClick={async () => {
@@ -442,96 +501,101 @@ function AddCardModal({ open, card, onClose, onAdded }: {
 }
 
 /* ================= CONSULTATION PAGE ================= */
+const CONSULT_SECTIONS: StudioSection[] = [
+  { id: "copy", title: "Screen copy", blurb: "The heading, sub-heading and search placeholder a guest sees when they tap Consultation." },
+  { id: "tiers", title: "Consultation tiers", blurb: "The fees the app charges per tier. Tiers come from the Dermatologists module, so there is one source of truth." },
+  { id: "doctors", title: "Dermatologists listed in the app", blurb: "Fees, centres and visibility flow from the Dermatologists module — nothing is duplicated here." },
+];
+
 export function ConsultPage() {
   const nav = useNavigate();
-  const { toast, audit } = useStore();
   const c = useCustomization();
   const setScreen = c.section("consultationsScreen");
   const screen = () => ((c.draft?.consultationsScreen ?? {}) as Record<string, unknown>);
 
   const doctors = useApi(() => api.doctors.list(), []);
   const tiers = useApi(() => api.doctors.tiers().catch(() => []), []);
+  const [active, setActive] = useStudioSection("consultation", CONSULT_SECTIONS);
+  const sec = CONSULT_SECTIONS.find((s) => s.id === active) ?? CONSULT_SECTIONS[0];
 
   return (
-    <Page title="Consultation page" sub="The app's consultation screen — copy, tiers and the dermatologists it lists"
-      actions={
-        <Btn kind="gold" disabled={!c.dirty || c.busy}
-          onClick={() => c.save(() => { audit("APP_CUSTOMIZATION_UPDATED", "Consultation screen"); toast("Published"); })}>
-          {c.busy ? "Publishing…" : "Publish"}
-        </Btn>
-      }>
-      <Hint id="consultpage-live">A guest taps <B>Consultation</B> → picks a tier → picks a dermatologist → picks a slot. The copy on this screen is editable here; the tiers and doctors come from the Dermatologists module, so there is one source of truth.</Hint>
-
+    <StudioPage title="Consultation page" intro="A guest taps Consultation, picks a tier, picks a dermatologist, then picks a slot. The copy is editable here; tiers and dermatologists come from the Dermatologists module."
+      sections={CONSULT_SECTIONS} active={active} onSection={setActive}
+      footer={<DraftPublishBar c={c} what="Consultation screen" />}>
       <Async q={c.q} label="Loading screen settings…" rows={4}>
         {() => !c.draft ? <Loading /> : (
           <>
-            <SaveBar canEdit={c.canEdit} dirty={c.dirty} busy={c.busy} err={c.err}
-              onSave={() => c.save(() => { audit("APP_CUSTOMIZATION_UPDATED", "Consultation screen"); toast("Published"); })}
-              onReset={() => c.setDraft(c.q.data ?? null)} />
+            {active === "copy" && (
+              <Section title={sec.title} blurb={sec.blurb}>
+                <Field label="Heading" full><Input value={String(screen().heading ?? "")} onChange={setScreen("heading")} /></Field>
+                <Field label="Sub-heading" full><Textarea value={String(screen().subHeading ?? "")} onChange={setScreen("subHeading")} rows={2} /></Field>
+                <Field label="Search bar placeholder" full><Input value={String(screen().searchbarPlaceholder ?? "")} onChange={setScreen("searchbarPlaceholder")} /></Field>
+              </Section>
+            )}
 
-            <div className="grid gap-3 xl:grid-cols-2">
-              <Card className="p-4">
-                <SecH t="Screen copy" />
-                <div className="grid gap-3">
-                  <In label="Heading" value={String(screen().heading ?? "")} onChange={setScreen("heading")} />
-                  <Area label="Sub-heading" value={String(screen().subHeading ?? "")} onChange={setScreen("subHeading")} rows={2} />
-                  <In label="Search bar placeholder" value={String(screen().searchbarPlaceholder ?? "")} onChange={setScreen("searchbarPlaceholder")} />
-                </div>
-              </Card>
-
-              <Card className="p-4">
-                <SecH t="Consultation tiers" em="· fees the app charges" right={
-                  <Btn kind="ghost" className="!py-1 !text-[12px]" onClick={() => nav("/doctors")}>Edit in Doctors ↗</Btn>} />
-                <Async q={tiers} label="Loading tiers…" rows={2}>
-                  {(list) => list.length === 0 ? (
-                    <Empty title="No tiers configured" hint="Seed them with `node scripts/seedDoctors.js` in the Backend folder." />
-                  ) : (
-                    <DataTable cols={["Tier", "Fee", "Dermatologists"]} rows={list.map((t) => [
-                      <B key={t.id}>{t.title}</B>,
-                      fmtINR(t.fee),
-                      (doctors.data?.data ?? []).filter((d) => d.tier === t.id).map((d) => d.name).join(", ") || "—",
-                    ])} />
-                  )}
-                </Async>
-              </Card>
-
-              <Card className="p-4 xl:col-span-2">
-                <SecH t="Dermatologists listed in the app" em="· inherited from the Dermatologists module" right={
-                  <Btn kind="ghost" className="!py-1 !text-[12px]" onClick={() => nav("/doctors")}>Manage doctors ↗</Btn>} />
-                <Async q={doctors} label="Loading doctors…" rows={4}>
-                  {(res) => (res.data ?? []).length === 0 ? (
-                    <Empty title="No dermatologists listed" hint="Add the team under Care → Dermatologists." />
-                  ) : (
-                    <div className="grid gap-1.5 md:grid-cols-2">
-                      {(res.data ?? []).map((d) => (
-                        <div key={d._id} className="flex items-center gap-3 rounded-lg border border-border bg-ivory px-3 py-2">
-                          {d.photo
-                            ? <img src={d.photo} alt="" className="h-8 w-8 shrink-0 rounded-full object-cover" />
-                            : <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-sage text-[11px] font-extrabold text-primary">
-                                {d.name.split(" ").map((w) => w[0]).slice(0, 2).join("")}
-                              </span>}
-                          <div className="min-w-0 flex-1">
-                            <b className="block truncate text-[12.5px]">{d.name}</b>
-                            <div className="truncate text-[10.5px] text-ink3">
-                              {d.designation ?? d.tier}
-                              {d.availableCentres?.length ? ` · ${d.availableCentres.join(", ")}` : ""}
+            {active === "tiers" && (
+              <Section title={sec.title} blurb={sec.blurb}
+                right={<StudioBtn kind="ghost" onClick={() => nav("/doctors")}>Edit in Dermatologists ↗</StudioBtn>}>
+                <div className="col-span-full">
+                  <Async q={tiers} label="Loading tiers…" rows={2}>
+                    {(list) => list.length === 0 ? (
+                      <StudioEmpty title="No tiers configured" hint="Seed them with `node scripts/seedDoctors.js` in the Backend folder." />
+                    ) : (
+                      <div className="grid gap-2">
+                        {list.map((t) => (
+                          <Row key={t.id}>
+                            <div className="min-w-0 flex-1">
+                              <div className="text-[15px] font-semibold text-ink">{t.title}</div>
+                              <div className="truncate text-[14px] text-ink3">
+                                {(doctors.data?.data ?? []).filter((d) => d.tier === t.id).map((d) => d.name).join(", ") || "No dermatologists on this tier"}
+                              </div>
                             </div>
-                          </div>
-                          <Tag kind={d.isActive ? "ok" : "mute"}>{d.isActive ? "Live" : "Hidden"}</Tag>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </Async>
-                <Note className="mb-0 text-[11.5px]">
-                  Fees, centres and visibility flow from the <B>Dermatologists</B> module — one source of truth, nothing duplicated here.
-                </Note>
-              </Card>
-            </div>
+                            <div className="shrink-0 text-[15px] font-semibold tabular-nums text-ink">{fmtINR(t.fee)}</div>
+                          </Row>
+                        ))}
+                      </div>
+                    )}
+                  </Async>
+                </div>
+              </Section>
+            )}
+
+            {active === "doctors" && (
+              <Section title={sec.title} blurb={sec.blurb}
+                right={<StudioBtn kind="ghost" onClick={() => nav("/doctors")}>Manage dermatologists ↗</StudioBtn>}>
+                <div className="col-span-full">
+                  <Async q={doctors} label="Loading dermatologists…" rows={4}>
+                    {(res) => (res.data ?? []).length === 0 ? (
+                      <StudioEmpty title="No dermatologists listed" hint="Add the team under Care → Dermatologists." />
+                    ) : (
+                      <div className="grid gap-2 @lg/fields:grid-cols-2">
+                        {(res.data ?? []).map((d) => (
+                          <Row key={d._id}>
+                            {d.photo
+                              ? <img src={d.photo} alt="" className="h-10 w-10 shrink-0 rounded-full object-cover" />
+                              : <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-sage text-[14px] font-extrabold text-primary">
+                                  {d.name.split(" ").map((w) => w[0]).slice(0, 2).join("")}
+                                </span>}
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-[15px] font-semibold text-ink">{d.name}</div>
+                              <div className="truncate text-[14px] text-ink3">
+                                {d.designation ?? d.tier}
+                                {d.availableCentres?.length ? ` · ${d.availableCentres.join(", ")}` : ""}
+                              </div>
+                            </div>
+                            <StatusTag kind={d.isActive ? "ok" : "mute"}>{d.isActive ? "Live" : "Hidden"}</StatusTag>
+                          </Row>
+                        ))}
+                      </div>
+                    )}
+                  </Async>
+                </div>
+              </Section>
+            )}
           </>
         )}
       </Async>
-    </Page>
+    </StudioPage>
   );
 }
 
@@ -558,34 +622,45 @@ function ZenotiMembershipPick({ value, onChange, onRow }: { value: string; onCha
   const options = current && !rows.some((m) => pickKey(m) === value) ? [current, ...rows] : rows;
   useEffect(() => { onRow?.(current); }, [current?.id, current?.price, current?.isActive]);
   return (
-    <div className="grid gap-1">
-      <select value={value} onChange={(e) => { const m = all.find((r) => pickKey(r) === e.target.value); onChange(e.target.value, m?.name ?? ""); }}
-        className="rounded-lg border border-border bg-ivory px-2.5 py-2 text-[12.5px] text-ink outline-none focus:border-gold-dark">
-        <option value="">— not linked (uses the server's default membership) —</option>
-        {options.map((m) => (
-          <option key={m.id} value={pickKey(m)}>{m.name}{pickLabel(m) ? ` · ${pickLabel(m)}` : ""}</option>
-        ))}
-      </select>
-      <div className="flex flex-wrap items-center justify-between gap-2 text-[10.5px] text-ink3">
-        <span>
-          {q.loading ? "Loading Zenoti memberships…" : current
-            ? `Zenoti: ${pickLabel(current) || "no price listed"}${current.discountedPrice != null ? ` (offer ₹${current.discountedPrice})` : ""}${current.durationMonths ? ` · ${current.durationMonths} mo` : ""}`
-            : `${rows.length} of ${all.length} membership(s)${zenFamily.length && !showAll ? " · Zen family only" : ""}`}
-        </span>
-        {zenFamily.length > 0 && zenFamily.length < all.length && (
-          <button type="button" className="underline-offset-2 hover:underline" onClick={() => setShowAll((v) => !v)}>{showAll ? "Zen family only" : "show all"}</button>
-        )}
-      </div>
+    <>
+      <Field label="Zenoti membership" full hint={
+        <span className="flex flex-wrap items-center justify-between gap-2">
+          <span>
+            {q.loading ? "Loading Zenoti memberships…" : current
+              ? `Zenoti: ${pickLabel(current) || "no price listed"}${current.discountedPrice != null ? ` (offer ₹${current.discountedPrice})` : ""}${current.durationMonths ? ` · ${current.durationMonths} mo` : ""}`
+              : `${rows.length} of ${all.length} membership(s)${zenFamily.length && !showAll ? " · Zen family only" : ""}`}
+          </span>
+          {zenFamily.length > 0 && zenFamily.length < all.length && (
+            <button type="button" className="font-semibold text-primary underline-offset-4 hover:underline" onClick={() => setShowAll((v) => !v)}>{showAll ? "Zen family only" : "Show all"}</button>
+          )}
+        </span>}>
+        <Select value={value}
+          onChange={(v) => { const m = all.find((r) => pickKey(r) === v); onChange(v, m?.name ?? ""); }}
+          options={[
+            { value: "", label: "— not linked (uses the server's default membership) —" },
+            ...options.map((m) => ({ value: pickKey(m), label: `${m.name}${pickLabel(m) ? ` · ${pickLabel(m)}` : ""}` })),
+          ]} />
+      </Field>
       {current?.isActive === false && (
-        <Note kind="crit" className="my-0 text-[11.5px]">This membership is inactive in Zenoti; invoices for it may be refused.</Note>
+        <Note kind="err">This membership is inactive in Zenoti; invoices for it may be refused.</Note>
       )}
-    </div>
+    </>
   );
 }
 
 /* ================= MEMBERSHIP CARD ================= */
+const MEMBERSHIP_SECTIONS: StudioSection[] = [
+  { id: "status", title: "Membership right now", blurb: "How many guests hold the Zen membership today. Membership is granted per guest from their guest record — open a guest and use Grant Zen membership." },
+  { id: "zenoti", title: "Zenoti membership", blurb: "What an app purchase is recorded as in Zenoti." },
+  { id: "pricing", title: "Pricing", blurb: "What the guest is charged, and the figures the card displays." },
+  { id: "closing", title: "Closing the sale in Zenoti", blurb: "How an app purchase is invoiced there." },
+  { id: "benefits", title: "What's included", blurb: "The benefits list on the app's membership screen. Leave empty to keep the bundled ten." },
+  { id: "faqs", title: "Help & Support", blurb: "The questions on the app's Help screen. Leave empty to keep the bundled set." },
+  { id: "card", title: "Card & copy", blurb: "The card on the home screen and the membership page behind it." },
+];
+
 export function MembershipCard() {
-  const { toast, audit, can } = useStore();
+  const { can } = useStore();
   const c = useCustomization();
   const setHome = c.section("homeScreen");
   const home = () => ((c.draft?.homeScreen ?? {}) as Record<string, unknown>);
@@ -609,181 +684,209 @@ export function MembershipCard() {
   // content-only role does not generate a denial on every visit.
   const members = useApi(() => (can("analytics.view") ? api.analytics.patients().catch(() => undefined) : Promise.resolve(undefined)), []);
 
+  const benefits = ((mem().benefits as { title: string; copy?: string }[] | undefined) ?? []);
+  const faqs = ((((c.draft?.helpScreen ?? {}) as Record<string, unknown>).faqs as { q: string; a: string }[] | undefined) ?? []);
+  const sections = MEMBERSHIP_SECTIONS
+    .filter((s) => s.id !== "status" || !!members.data)
+    .map((s) => s.id === "benefits" ? { ...s, count: benefits.length || undefined }
+      : s.id === "faqs" ? { ...s, count: faqs.length || undefined } : s);
+  const [active, setActive] = useStudioSection("membership", sections, "card");
+  const sec = sections.find((s) => s.id === active) ?? sections[0];
+
+  const preview = (
+    <PhonePreview caption="The card as guests see it">
+      <MembershipMock
+        image={String(home().zenMembershipCardImage ?? "")}
+        title={String(home().zenMembershipCardTitle ?? "")}
+        cardDescription={String(home().zenMembershipCardDescription ?? "")}
+        name={String(mem().name ?? "")} tagline={String(mem().tagline ?? "")} description={String(mem().description ?? "")}
+        price={livePrice} basePrice={Number(mem().basePriceInr ?? 0) || null} salePrice={Number(mem().salePriceInr ?? 0) || null}
+        benefits={benefits} cta={String(mem().ctaText ?? "")} onSale={mem().isActive !== false} />
+    </PhonePreview>
+  );
+
   return (
-    <Page title="Zen membership card" sub="The membership card as guests see it on the app's home screen"
-      actions={
-        <Btn kind="gold" disabled={!c.dirty || c.busy}
-          onClick={() => c.save(() => { audit("APP_CUSTOMIZATION_UPDATED", "Membership card"); toast("Published"); })}>
-          {c.busy ? "Publishing…" : "Publish"}
-        </Btn>
-      }>
+    <StudioPage title="Membership card" intro="The Zen membership as guests see it on the app's home screen — the card, its price, what's included and how a purchase lands in Zenoti."
+      sections={sections} active={active} onSection={setActive}
+      footer={<DraftPublishBar c={c} what="Membership card" />}>
       <Async q={c.q} label="Loading card settings…" rows={4}>
         {() => !c.draft ? <Loading /> : (
           <>
-            <SaveBar canEdit={c.canEdit} dirty={c.dirty} busy={c.busy} err={c.err}
-              onSave={() => c.save(() => { audit("APP_CUSTOMIZATION_UPDATED", "Membership card"); toast("Published"); })}
-              onReset={() => c.setDraft(c.q.data ?? null)} />
-
-            <div className="flex flex-wrap items-start gap-5">
-              <Card className="min-w-[280px] flex-1 p-4">
-                <div className="grid gap-3">
-                  <In label="Card title" value={String(home().zenMembershipCardTitle ?? "")} onChange={setHome("zenMembershipCardTitle")} />
-                  <Area label="Card description" value={String(home().zenMembershipCardDescription ?? "")}
-                    onChange={setHome("zenMembershipCardDescription")} rows={2} />
-                  <ImageField label="Card image URL (optional)" value={String(home().zenMembershipCardImage ?? "")}
-                    onChange={setHome("zenMembershipCardImage")} uploadAs="zenMembershipCard" onUploaded={c.q.reload}
-                    hint="Leave blank for the default green-and-gold card" />
-                </div>
-
-                {members.data && (
-                  <>
-                    <SecH t="Membership right now" />
-                    <div className="grid gap-1.5 text-[12.5px]">
-                      <div className="flex justify-between border-b border-border pb-1.5">
-                        <span className="text-ink3">Active members</span><b>{members.data.membershipStatus?.active ?? 0}</b>
-                      </div>
-                      <div className="flex justify-between border-b border-border pb-1.5">
-                        <span className="text-ink3">Expired</span><b>{members.data.membershipStatus?.expired ?? 0}</b>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-ink3">No expiry set</span><b>{members.data.membershipStatus?.pending ?? 0}</b>
-                      </div>
+            {active === "status" && members.data && (
+              <Section title={sec.title} blurb={sec.blurb}>
+                <div className="col-span-full grid gap-3 @md/fields:grid-cols-3">
+                  {([["Active members", members.data.membershipStatus?.active ?? 0], ["Expired", members.data.membershipStatus?.expired ?? 0], ["No expiry set", members.data.membershipStatus?.pending ?? 0]] as [string, number][]).map(([k, v]) => (
+                    <div key={k} className="rounded-[12px] border border-border bg-ivory px-4 py-4">
+                      <div className="text-[14px] font-semibold text-ink2">{k}</div>
+                      <div className="mt-1 text-[28px] font-extrabold tabular-nums leading-none text-ink">{v.toLocaleString("en-IN")}</div>
                     </div>
-                    <Note className="mb-0 text-[11.5px]">
-                      Membership is granted per guest from their guest record — open a guest and use <B>Grant Zen membership</B>.
-                    </Note>
-                  </>
-                )}
-              </Card>
+                  ))}
+                </div>
+              </Section>
+            )}
 
-              <Card className="min-w-[280px] flex-1 p-4">
-                {/* Pricing and merchandising. priceInr is what Razorpay charges;
-                    base/sale are the struck-through and offer figures on the card. */}
-                <SecH t="Zenoti membership" em="· what a purchase is recorded as in Zenoti" />
+            {active === "zenoti" && (
+              <Section title={sec.title} blurb={sec.blurb}>
                 <ZenotiMembershipPick value={String(mem().zenotiMembershipVersionId ?? "")}
                   onChange={(id, name) => { setMem("zenotiMembershipVersionId")(id); setMem("zenotiMembershipName")(name); }}
                   onRow={setZenotiRow} />
-                <div className="mb-3" />
-                <SecH t="Pricing" em={priceSource === "zenoti" ? "· the member is charged Zenoti's live price" : "· the member is charged the price typed below"} />
-                <div className="mb-3 grid gap-1.5">
-                  <div className="text-[11px] font-bold tracking-[0.02em] text-ink2">Price source</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {([["zenoti", "Zenoti live"], ["manual", "Manual"]] as const).map(([v, label]) => (
-                      <button key={v} type="button" onClick={() => setMem("priceSource")(v)}
-                        className={`rounded-full border px-3 py-1 text-[12px] font-semibold transition-colors ${priceSource === v ? "border-primary bg-primary text-white" : "border-border bg-surface text-ink2 hover:bg-ivory"}`}>
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="text-[10.5px] text-ink3">
-                    {priceSource === "zenoti"
-                      ? zenotiRow
-                        ? zenotiRow.price != null
-                          ? <>Live price <B>{fmtINR(zenotiRow.price)}</B>{zenotiRow.code ? ` · ${zenotiRow.code}` : ""}{zenotiRow.isActive == null ? "" : zenotiRow.isActive ? " · active in Zenoti" : " · inactive in Zenoti"} — read from the picked variant each time the app loads.</>
-                          : "The picked Zenoti variant lists no price — pick another or switch to Manual."
-                        : "Pick a Zenoti membership above to read its price."
-                      : "The app charges the price typed here; Zenoti's list price is ignored."}
-                  </div>
-                  {priceSource === "zenoti" && zenotiRow?.isActive === false && (
-                    <Note kind="crit" className="my-0 text-[11.5px]">This membership is inactive in Zenoti; invoices for it may be refused.</Note>
-                  )}
-                </div>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <In label="Membership name" value={String(mem().name ?? "")} onChange={setMem("name")} />
-                  <In label="Tagline" value={String(mem().tagline ?? "")} onChange={setMem("tagline")} />
-                  <div className={priceSource === "zenoti" ? "opacity-50" : ""}>
-                    <In label={priceSource === "zenoti" ? "Price charged (₹) · from Zenoti" : "Price charged (₹)"} type="number"
-                      value={priceSource === "zenoti" ? String(zenotiRow?.price ?? mem().priceInr ?? "") : String(mem().priceInr ?? "")}
-                      readOnly={priceSource === "zenoti"}
-                      onChange={(v) => { if (priceSource === "manual") setMem("priceInr")(Number(v) || 0); }} />
-                  </div>
-                  <In label="Original price (₹, optional)" type="number" value={String(mem().basePriceInr ?? "")}
-                    onChange={(v) => setMem("basePriceInr")(Number(v) || 0)} />
-                  <In label="Offer price shown (₹, optional)" type="number" value={String(mem().salePriceInr ?? "")}
-                    onChange={(v) => setMem("salePriceInr")(Number(v) || 0)} />
-                  <In label="Renewal price (₹, 0 = same)" type="number" value={String(mem().renewalPriceInr ?? "")}
-                    onChange={(v) => setMem("renewalPriceInr")(Number(v) || 0)} />
-                  <In label="Member discount (%)" type="number" value={String(mem().discountPercent ?? "")}
-                    onChange={(v) => setMem("discountPercent")(Number(v) || 0)} />
-                  <In label="Tax (%)" type="number" value={String(mem().taxPercent ?? "")}
-                    onChange={(v) => setMem("taxPercent")(Number(v) || 0)} />
-                  <In label="Validity (months)" type="number" value={String(mem().durationMonths ?? "")}
-                    onChange={(v) => setMem("durationMonths")(Number(v) || 0)} />
-                  <In label="Display order" type="number" value={String(mem().displayOrder ?? "")}
-                    onChange={(v) => setMem("displayOrder")(Number(v) || 0)} />
-                  <In label="CTA text" value={String(mem().ctaText ?? "")} onChange={setMem("ctaText")} />
-                  <In label="CTA destination" value={String(mem().ctaDestination ?? "")} onChange={setMem("ctaDestination")}
-                    hint="An app route, e.g. /profile/membership" />
-                </div>
-                <div className="mt-3 grid gap-3">
-                  <Area label="Description" value={String(mem().description ?? "")} rows={2} onChange={setMem("description")} />
-                  <Area label="Terms" value={String(mem().terms ?? "")} rows={3} onChange={setMem("terms")} />
-                  <div className="flex flex-wrap items-center gap-4">
-                    <label className="flex items-center gap-2 text-[12px] font-semibold text-ink2">
-                      <Toggle on={mem().isActive !== false} onChange={(v) => setMem("isActive")(v)} /> On sale
-                    </label>
-                    <label className="flex items-center gap-2 text-[12px] font-semibold text-ink2">
-                      <Toggle on={!!mem().featured} onChange={(v) => setMem("featured")(v)} /> Featured
-                    </label>
-                  </div>
-                  <Note className="mb-0 text-[11.5px]">
-                    Guests are charged {priceSource === "zenoti" ? <>Zenoti&rsquo;s live price{livePrice != null ? <> (<B>{fmtINR(livePrice)}</B> right now)</> : null}</> : <B>Price charged</B>}. The original and offer prices are only what the card
-                    displays — they never change what Razorpay collects. Turning <B>On sale</B> off stops new
-                    purchases without affecting existing members.
-                  </Note>
-                </div>
+              </Section>
+            )}
 
-                <SecH t="Closing the sale in Zenoti" em="· how an app purchase is invoiced there" />
-                <div className="grid gap-3">
-                  <In label="Custom payment type id" value={String(mem().zenotiCustomPaymentId ?? "")} onChange={setMem("zenotiCustomPaymentId")}
-                    placeholder="e.g. 4f1c…-…" hint="The id of the Razorpay/online custom payment type set up in Zenoti — Zenoti has no API to list these, paste it from Zenoti admin" />
-                  <div className="flex flex-col gap-1">
-                    <label className="text-[11px] font-bold tracking-[0.02em] text-ink2">Closed by (employee)</label>
-                    <select value={closedByKnown ? closedById : ""}
-                      onChange={(e) => { const p = staffRows.find((x) => x.zenotiEmployeeId === e.target.value); setMem("zenotiClosedByEmployeeId")(p?.zenotiEmployeeId ?? ""); setMem("zenotiClosedByEmployeeName")(p?.name ?? ""); }}
-                      className="rounded-lg border border-border bg-ivory px-2.5 py-2 text-[12.5px] text-ink outline-none focus:border-gold-dark">
-                      <option value="">{staff.loading ? "Loading Zenoti staff…" : staffRows.length ? "— pick a Zenoti employee —" : "— no Zenoti staff loaded; type an id below —"}</option>
-                      {staffRows.map((p) => <option key={p.zenotiEmployeeId ?? p.filterValue} value={p.zenotiEmployeeId ?? ""}>{p.name}{p.centers?.length ? ` · ${p.centers.join(", ")}` : ""}</option>)}
-                    </select>
-                    <div className="text-[10.5px] text-ink3">The Zenoti employee the invoice is recorded as closed by. {closedById && !closedByKnown ? "The saved id is not in the staff list — it is kept as typed below." : ""}</div>
-                  </div>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <In label="Employee id (any Zenoti employee)" value={closedById} onChange={(v) => { setMem("zenotiClosedByEmployeeId")(v.trim()); const p = staffRows.find((x) => x.zenotiEmployeeId === v.trim()); if (p) setMem("zenotiClosedByEmployeeName")(p.name); }}
-                      placeholder="Paste a Zenoti employee id" hint="Free-text fallback when the person is not in the list" />
-                    <In label="Employee name (shown on the sale)" value={String(mem().zenotiClosedByEmployeeName ?? "")} onChange={setMem("zenotiClosedByEmployeeName")} />
-                  </div>
-                </div>
-              </Card>
-
-              <Card className="min-w-[280px] flex-1 p-4">
-                <SecH t="What's included — benefits list" em={`· ${(((c.draft.membership ?? {}) as Record<string, unknown>).benefits as unknown[] | undefined)?.length || "bundled"}`} />
-                <Note className="text-[11.5px]">Shown on the app's membership screen. Leave empty to keep the bundled ten.</Note>
-                <BenefitsEditor
-                  value={((((c.draft.membership ?? {}) as Record<string, unknown>).benefits as { title: string; copy?: string }[] | undefined) ?? [])}
-                  onChange={(v) => c.setDraft((d) => (d ? { ...d, membership: { ...((d.membership ?? {}) as Record<string, unknown>), benefits: v } } : d))} />
-              </Card>
-
-              <div className="w-[270px]">
-                {String(home().zenMembershipCardImage ?? "") ? (
-                  <img src={String(home().zenMembershipCardImage)} alt="" className="w-full rounded-2xl border border-border object-cover" />
-                ) : (
-                  <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#043528] to-secondary text-white" style={{ padding: 18 }}>
-                    <div className="absolute -right-8 -top-8 h-[120px] w-[120px] rounded-full bg-[radial-gradient(circle,rgba(224,195,145,0.32),transparent_68%)]" />
-                    <div className="font-logo text-[15px] tracking-[0.2em] text-gold">
-                      {String(home().zenMembershipCardTitle ?? "Zen Membership")}
-                    </div>
-                    <div className="mt-3.5 text-[11px] leading-relaxed opacity-85">
-                      {String(home().zenMembershipCardDescription ?? "")}
-                    </div>
-                  </div>
+            {active === "pricing" && (
+              <Section title={sec.title} blurb={priceSource === "zenoti" ? "The member is charged Zenoti's live price." : "The member is charged the price typed below."}>
+                {/* priceInr is what Razorpay charges; base/sale are the struck-through and offer figures on the card. */}
+                <Field label="Price source" full hint={
+                  priceSource === "zenoti"
+                    ? zenotiRow
+                      ? zenotiRow.price != null
+                        ? <>Live price <B>{fmtINR(zenotiRow.price)}</B>{zenotiRow.code ? ` · ${zenotiRow.code}` : ""}{zenotiRow.isActive == null ? "" : zenotiRow.isActive ? " · active in Zenoti" : " · inactive in Zenoti"} — read from the picked variant each time the app loads.</>
+                        : "The picked Zenoti variant lists no price — pick another or switch to Manual."
+                      : "Pick a Zenoti membership (in the Zenoti membership section) to read its price."
+                    : "The app charges the price typed here; Zenoti's list price is ignored."}>
+                  <div><Segmented value={priceSource} onChange={(v) => setMem("priceSource")(v)} options={[{ value: "zenoti", label: "Zenoti live" }, { value: "manual", label: "Manual" }]} /></div>
+                </Field>
+                {priceSource === "zenoti" && zenotiRow?.isActive === false && (
+                  <Note kind="err">This membership is inactive in Zenoti; invoices for it may be refused.</Note>
                 )}
-                <div className="mt-2 text-center text-[11px] text-ink3">Live card preview</div>
-              </div>
-            </div>
+                <Field label={priceSource === "zenoti" ? "Price charged (₹) · from Zenoti" : "Price charged (₹)"}>
+                  <NumberInput value={priceSource === "zenoti" ? String(zenotiRow?.price ?? mem().priceInr ?? "") : String(mem().priceInr ?? "")}
+                    readOnly={priceSource === "zenoti"}
+                    onChange={(v) => { if (priceSource === "manual") setMem("priceInr")(Number(v) || 0); }} />
+                </Field>
+                <Field label="Original price (₹, optional)" hint="Shown struck through on the card.">
+                  <NumberInput value={String(mem().basePriceInr ?? "")} onChange={(v) => setMem("basePriceInr")(Number(v) || 0)} />
+                </Field>
+                <Field label="Offer price shown (₹, optional)">
+                  <NumberInput value={String(mem().salePriceInr ?? "")} onChange={(v) => setMem("salePriceInr")(Number(v) || 0)} />
+                </Field>
+                <Field label="Renewal price (₹, 0 = same)">
+                  <NumberInput value={String(mem().renewalPriceInr ?? "")} onChange={(v) => setMem("renewalPriceInr")(Number(v) || 0)} />
+                </Field>
+                <Field label="Member discount (%)">
+                  <NumberInput value={String(mem().discountPercent ?? "")} onChange={(v) => setMem("discountPercent")(Number(v) || 0)} />
+                </Field>
+                <Field label="Tax (%)">
+                  <NumberInput value={String(mem().taxPercent ?? "")} onChange={(v) => setMem("taxPercent")(Number(v) || 0)} />
+                </Field>
+                <Field label="Validity (months)">
+                  <NumberInput value={String(mem().durationMonths ?? "")} onChange={(v) => setMem("durationMonths")(Number(v) || 0)} />
+                </Field>
+                <Note>
+                  Guests are charged {priceSource === "zenoti" ? <>Zenoti&rsquo;s live price{livePrice != null ? <> (<B>{fmtINR(livePrice)}</B> right now)</> : null}</> : <B>Price charged</B>}. The original and offer prices are only what the card
+                  displays — they never change what Razorpay collects. Turning <B>On sale</B> off (under Card &amp; copy) stops new
+                  purchases without affecting existing members.
+                </Note>
+              </Section>
+            )}
+
+            {active === "closing" && (
+              <Section title={sec.title} blurb={sec.blurb}>
+                <Field label="Custom payment type id" full hint="The id of the Razorpay/online custom payment type set up in Zenoti — Zenoti has no API to list these, paste it from Zenoti admin">
+                  <Input value={String(mem().zenotiCustomPaymentId ?? "")} onChange={setMem("zenotiCustomPaymentId")} placeholder="e.g. 4f1c…-…" />
+                </Field>
+                <Field label="Closed by (employee)" full hint={<>The Zenoti employee the invoice is recorded as closed by. {closedById && !closedByKnown ? "The saved id is not in the staff list — it is kept as typed below." : ""}</>}>
+                  <Select value={closedByKnown ? closedById : ""}
+                    onChange={(v) => { const p = staffRows.find((x) => x.zenotiEmployeeId === v); setMem("zenotiClosedByEmployeeId")(p?.zenotiEmployeeId ?? ""); setMem("zenotiClosedByEmployeeName")(p?.name ?? ""); }}
+                    options={[
+                      { value: "", label: staff.loading ? "Loading Zenoti staff…" : staffRows.length ? "— pick a Zenoti employee —" : "— no Zenoti staff loaded; type an id below —" },
+                      ...staffRows.map((p) => ({ value: p.zenotiEmployeeId ?? "", label: `${p.name}${p.centers?.length ? ` · ${p.centers.join(", ")}` : ""}` })),
+                    ]} />
+                </Field>
+                <Field label="Employee id (any Zenoti employee)" hint="Free-text fallback when the person is not in the list">
+                  <Input value={closedById} placeholder="Paste a Zenoti employee id"
+                    onChange={(v) => { setMem("zenotiClosedByEmployeeId")(v.trim()); const p = staffRows.find((x) => x.zenotiEmployeeId === v.trim()); if (p) setMem("zenotiClosedByEmployeeName")(p.name); }} />
+                </Field>
+                <Field label="Employee name (shown on the sale)">
+                  <Input value={String(mem().zenotiClosedByEmployeeName ?? "")} onChange={setMem("zenotiClosedByEmployeeName")} />
+                </Field>
+              </Section>
+            )}
+
+            {active === "benefits" && (
+              <Section title={sec.title} blurb={sec.blurb}>
+                <div className="col-span-full">
+                  <BenefitsEditor value={benefits}
+                    onChange={(v) => c.setDraft((d) => (d ? { ...d, membership: { ...((d.membership ?? {}) as Record<string, unknown>), benefits: v } } : d))} />
+                </div>
+              </Section>
+            )}
+
+            {active === "faqs" && (
+              <Section title={sec.title} blurb={sec.blurb}>
+                <div className="col-span-full">
+                  <FaqEditor value={faqs}
+                    onChange={(v) => c.setDraft((d) => (d ? { ...d, helpScreen: { ...((d.helpScreen ?? {}) as Record<string, unknown>), faqs: v } } : d))} />
+                </div>
+              </Section>
+            )}
+
+            {active === "card" && (
+              <Section title={sec.title} blurb={sec.blurb} aside={preview}>
+                <Field label="Card title" full><Input value={String(home().zenMembershipCardTitle ?? "")} onChange={setHome("zenMembershipCardTitle")} /></Field>
+                <Field label="Card description" full><Textarea value={String(home().zenMembershipCardDescription ?? "")} onChange={setHome("zenMembershipCardDescription")} rows={2} /></Field>
+                <Field label="Card image (optional)" full hint="Leave blank for the default green-and-gold card">
+                  <ImageInput value={String(home().zenMembershipCardImage ?? "")} onChange={setHome("zenMembershipCardImage")} uploadAs="zenMembershipCard" onUploaded={c.q.reload} />
+                </Field>
+                <Field label="Membership name"><Input value={String(mem().name ?? "")} onChange={setMem("name")} /></Field>
+                <Field label="Tagline"><Input value={String(mem().tagline ?? "")} onChange={setMem("tagline")} /></Field>
+                <Field label="Description" full><Textarea value={String(mem().description ?? "")} rows={2} onChange={setMem("description")} /></Field>
+                <Field label="CTA text"><Input value={String(mem().ctaText ?? "")} onChange={setMem("ctaText")} /></Field>
+                <Field label="CTA destination" hint="An app route, e.g. /profile/membership"><Input value={String(mem().ctaDestination ?? "")} onChange={setMem("ctaDestination")} /></Field>
+                <Field label="Terms" full><Textarea value={String(mem().terms ?? "")} rows={3} onChange={setMem("terms")} /></Field>
+                <Field label="Display order"><NumberInput value={String(mem().displayOrder ?? "")} onChange={(v) => setMem("displayOrder")(Number(v) || 0)} /></Field>
+                <ToggleRow label="On sale" description="Turning this off stops new purchases without affecting existing members." on={mem().isActive !== false} onChange={(v) => setMem("isActive")(v)} />
+                <ToggleRow label="Featured" description="Highlights the card in the app." on={!!mem().featured} onChange={(v) => setMem("featured")(v)} />
+              </Section>
+            )}
           </>
         )}
       </Async>
-    </Page>
+    </StudioPage>
+  );
+}
+
+/** The membership card and the screen behind it, sketched from the draft. */
+function MembershipMock({ image, title, cardDescription, name, tagline, description, price, basePrice, salePrice, benefits, cta, onSale }: {
+  image: string; title: string; cardDescription: string; name: string; tagline: string; description: string;
+  price: number | null; basePrice: number | null; salePrice: number | null;
+  benefits: { title: string; copy?: string }[]; cta: string; onSale: boolean;
+}) {
+  const shown = salePrice ?? price;
+  const was = basePrice && shown && basePrice > shown ? basePrice : null;
+  const list = benefits.length ? benefits.slice(0, 5) : [{ title: "Bundled benefits" }, { title: "Ten included perks" }, { title: "Shown as saved in the app" }];
+  return (
+    <div className="grid gap-3 px-3.5 py-3" style={{ background: APP.surface }}>
+      {image ? (
+        <img src={image} alt="" className="w-full rounded-[16px] object-cover" style={{ aspectRatio: "16/10" }} />
+      ) : (
+        <div className="relative overflow-hidden rounded-[16px] p-4 text-white" style={{ background: `linear-gradient(135deg, #1f2f24, ${APP.primary})` }}>
+          <div className="absolute -right-8 -top-8 h-[110px] w-[110px] rounded-full" style={{ background: "radial-gradient(circle, rgba(224,195,145,0.35), transparent 68%)" }} />
+          <div className="font-logo text-[15px] tracking-[0.2em]" style={{ color: APP.gold }}>{title || name || "Zen Membership"}</div>
+          <div className="mt-2 text-[9.5px] leading-relaxed opacity-85">{cardDescription || tagline || "A year of Zennara's signature treatments and privileges."}</div>
+        </div>
+      )}
+      <div>
+        <div className="text-[15px] font-extrabold leading-tight" style={{ color: APP.ink }}>{name || title || "Zen Membership"}</div>
+        {tagline && <div className="mt-0.5 text-[10px]" style={{ color: APP.ink2 }}>{tagline}</div>}
+      </div>
+      <div className="flex items-baseline gap-2">
+        <span className="text-[18px] font-extrabold tabular-nums" style={{ color: APP.primary }}>{shown != null ? fmtINR(shown) : "—"}</span>
+        {was && <span className="text-[11px] line-through tabular-nums" style={{ color: APP.ink3 }}>{fmtINR(was)}</span>}
+        {!onSale && <span className="ml-auto rounded-full px-2 py-0.5 text-[8.5px] font-bold" style={{ background: APP.cream, color: APP.ink2 }}>Not on sale</span>}
+      </div>
+      {description && <div className="text-[9.5px] leading-relaxed" style={{ color: APP.ink2 }}>{description}</div>}
+      <div className="grid gap-1.5">
+        {list.map((b, i) => (
+          <div key={i} className="flex items-start gap-2 text-[9.5px]" style={{ color: APP.ink }}>
+            <span className="mt-[3px] grid h-3 w-3 shrink-0 place-items-center rounded-full text-[7px] font-bold text-white" style={{ background: APP.primary }}>✓</span>
+            <span><b>{b.title || "Benefit"}</b>{b.copy ? <span style={{ color: APP.ink2 }}> — {b.copy}</span> : null}</span>
+          </div>
+        ))}
+        {benefits.length > 5 && <div className="text-[9px]" style={{ color: APP.ink3 }}>+ {benefits.length - 5} more</div>}
+      </div>
+      <div className="rounded-[12px] py-2 text-center text-[11px] font-bold" style={{ background: APP.gold, color: APP.primary }}>{cta || "Become a Zen Member"}</div>
+    </div>
   );
 }
 
@@ -794,92 +897,114 @@ const NOTIF_TABS: { label: string; type?: string }[] = [
   { label: "Consultations", type: "consultation" }, { label: "Products", type: "product" },
   { label: "Inventory", type: "inventory" }, { label: "Promotions", type: "promotion" }, { label: "Reminders", type: "reminder" },
 ];
+const NOTIF_PAGE = 20;
 
 export function Announcements() {
   const nav = useNavigate();
   const { toast } = useStore();
-  const [tab, setTab] = useState(0);
+  const stats = useApi(() => api.notifications.stats().catch(() => undefined), []);
+  const sections: StudioSection[] = NOTIF_TABS.map((t) => ({
+    id: t.type ?? "all", title: t.label,
+    count: t.type ? stats.data?.byType?.find((b) => b._id === t.type)?.count || undefined : undefined,
+  }));
+  const [active, setActive] = useStudioSection("announcements", sections);
+  const tab = Math.max(0, NOTIF_TABS.findIndex((t) => (t.type ?? "all") === active));
+  const [page, setPage] = useState(1);
 
   const q = useApi(() => api.notifications.list({ type: NOTIF_TABS[tab].type, limit: 100 }), [tab]);
-  const stats = useApi(() => api.notifications.stats().catch(() => undefined), []);
   const rows = q.data?.notifications ?? [];
+  useEffect(() => { setPage(1); }, [tab]);
+  const pages = Math.max(1, Math.ceil(rows.length / NOTIF_PAGE));
+  const current = Math.min(page, pages);
+  const shown = rows.slice((current - 1) * NOTIF_PAGE, current * NOTIF_PAGE);
 
   return (
-    <Page title="Notifications" sub="Everything the system has told the clinic and its guests"
+    <StudioPage title="Announcements" intro="Everything the system has told the clinic and its guests — raised automatically as bookings, orders and stock events happen."
+      sections={sections} active={active} onSection={(id) => { setActive(id); }}
       actions={<>
-        <Btn kind="ghost" onClick={async () => {
+        <StudioBtn kind="ghost" onClick={async () => {
           try { await api.notifications.markAllRead(); toast("All marked read"); q.reload(); stats.reload(); }
           catch (e) { toast((e as Error).message); }
-        }}>Mark all read</Btn>
-        <Btn kind="ghost" onClick={async () => {
+        }}>Mark all read</StudioBtn>
+        <StudioBtn kind="ghost" onClick={async () => {
           try { await api.notifications.clearRead(); toast("Read notifications cleared"); q.reload(); stats.reload(); }
           catch (e) { toast((e as Error).message); }
-        }}>Clear read</Btn>
+        }}>Clear read</StudioBtn>
       </>}>
-      {!!stats.data?.byType?.length && (
-        <div className="mb-4 grid grid-cols-2 gap-2.5 md:grid-cols-4 xl:grid-cols-6">
-          <Card className="px-3.5 py-3">
-            <div className="font-mono text-[10px] font-bold uppercase tracking-[0.09em] text-ink3">Unread</div>
-            <div className="mt-1 text-[22px] font-bold tabular-nums text-gold-dark">
-              {(q.data?.unreadCount ?? 0).toLocaleString("en-IN")}
+      <Section title={NOTIF_TABS[tab].label === "All" ? "All notifications" : NOTIF_TABS[tab].label}
+        blurb={rows.length ? `${rows.length.toLocaleString("en-IN")} shown, newest first · ${(q.data?.unreadCount ?? 0).toLocaleString("en-IN")} unread. Opening one marks it read.` : undefined}>
+        {!!stats.data?.byType?.length && (
+          <div className="col-span-full grid grid-cols-2 gap-3 @md/fields:grid-cols-3 @2xl/fields:grid-cols-6">
+            <div className="rounded-[12px] border border-primary/20 bg-primary/[0.04] px-4 py-3">
+              <div className="text-[14px] font-semibold text-ink2">Unread</div>
+              <div className="mt-1 text-[24px] font-extrabold tabular-nums leading-none text-primary">{(q.data?.unreadCount ?? 0).toLocaleString("en-IN")}</div>
             </div>
-          </Card>
-          {stats.data.byType.slice(0, 5).map((t) => (
-            <Card key={t._id} className="px-3.5 py-3">
-              <div className="font-mono text-[10px] font-bold uppercase tracking-[0.09em] text-ink3">{t._id}</div>
-              <div className="mt-1 text-[22px] font-bold tabular-nums">{t.count.toLocaleString("en-IN")}</div>
-            </Card>
-          ))}
-        </div>
-      )}
-
-      <Tabs active={tab} onChange={setTab} items={NOTIF_TABS.map((t) => [t.label])} />
-      <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
-
-      <Async q={q} label="Loading notifications…" rows={8}>
-        {() => rows.length === 0 ? (
-          <Empty title="Nothing here" hint="Notifications are raised automatically as bookings, orders and stock events happen." />
-        ) : (
-          <DataTable cols={["When", "Type", "Title", "Message", "Priority", "Read"]}
-            onRow={(i) => {
-              const n = rows[i];
-              api.notifications.markRead(n._id).then(q.reload).catch(() => toast("Could not mark as read"));
-              if (n.actionUrl) nav(n.actionUrl);
-            }}
-            rows={rows.map((n) => [
-              fmtAgo(n.createdAt),
-              <Tag key={`${n._id}t`} kind="mute">{n.type}</Tag>,
-              <B key={`${n._id}h`}>{n.title}</B>,
-              <span key={`${n._id}m`} className="text-[11.5px] text-ink3">{n.message}</span>,
-              <Tag key={`${n._id}p`} kind={n.priority === "urgent" || n.priority === "high" ? "err" : n.priority === "medium" ? "warn" : "mute"}>
-                {n.priority}
-              </Tag>,
-              n.isRead ? <Tag key={`${n._id}r`} kind="mute">read</Tag> : <Tag key={`${n._id}r`} kind="info">new</Tag>,
-            ])} />
+            {stats.data.byType.slice(0, 5).map((t) => (
+              <div key={t._id} className="rounded-[12px] border border-border bg-ivory px-4 py-3">
+                <div className="truncate text-[14px] font-semibold capitalize text-ink2">{t._id}</div>
+                <div className="mt-1 text-[24px] font-extrabold tabular-nums leading-none text-ink">{t.count.toLocaleString("en-IN")}</div>
+              </div>
+            ))}
+          </div>
         )}
-      </Async>
-
-      <Note>
-        These are system notifications raised by bookings, orders and stock events. <B>Outbound marketing campaigns</B>
-        {" "}(scheduled push or WhatsApp blasts to a segment) are not part of the backend yet — that needs a campaign
-        model and a sender before this screen can schedule one.
-      </Note>
-    </Page>
+        <div className="col-span-full"><StudioStale error={q.data ? q.error : null} onRetry={q.reload} /></div>
+        <div className="col-span-full">
+          <Async q={q} label="Loading notifications…" rows={8}>
+            {() => rows.length === 0 ? (
+              <StudioEmpty title="Nothing here" hint="Notifications are raised automatically as bookings, orders and stock events happen." />
+            ) : (
+              <div className="grid gap-2">
+                {shown.map((n) => (
+                  <Row key={n._id} className={n.isRead ? "" : "border-primary/30"} onClick={() => {
+                    api.notifications.markRead(n._id).then(q.reload).catch(() => toast("Could not mark as read"));
+                    if (n.actionUrl) nav(n.actionUrl);
+                  }}>
+                    <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${n.isRead ? "bg-border" : "bg-primary"}`} aria-hidden />
+                    <div className="min-w-0 flex-1 py-1">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <span className="text-[15px] font-semibold text-ink">{n.title}</span>
+                        <StatusTag kind="mute">{n.type}</StatusTag>
+                        <StatusTag kind={n.priority === "urgent" || n.priority === "high" ? "err" : n.priority === "medium" ? "warn" : "mute"}>{n.priority ?? "low"}</StatusTag>
+                        {n.isRead ? <StatusTag kind="mute">read</StatusTag> : <StatusTag kind="info">new</StatusTag>}
+                      </div>
+                      <div className="mt-0.5 text-[14px] leading-6 text-ink2">{n.message}</div>
+                    </div>
+                    <span className="shrink-0 text-[14px] text-ink3">{fmtAgo(n.createdAt)}</span>
+                  </Row>
+                ))}
+                {pages > 1 && (
+                  <div className="flex items-center justify-end gap-2 pt-2 text-[14px] text-ink2">
+                    <StudioBtn kind="ghost" small disabled={current <= 1} onClick={() => setPage(current - 1)}>← Previous</StudioBtn>
+                    <span>{(current - 1) * NOTIF_PAGE + 1}–{Math.min(current * NOTIF_PAGE, rows.length)} of {rows.length}</span>
+                    <StudioBtn kind="ghost" small disabled={current >= pages} onClick={() => setPage(current + 1)}>Next →</StudioBtn>
+                  </div>
+                )}
+              </div>
+            )}
+          </Async>
+        </div>
+        <Note>
+          These are system notifications raised by bookings, orders and stock events. <B>Outbound marketing campaigns</B>
+          {" "}(scheduled push or WhatsApp blasts to a segment) are not part of the backend yet — that needs a campaign
+          model and a sender before this screen can schedule one.
+        </Note>
+      </Section>
+    </StudioPage>
   );
 }
 
 /* ================= SCREEN COPY ================= */
-const SCREENS: { key: keyof Draft; title: string; fields: [string, string][] }[] = [
-  { key: "consultationsScreen", title: "Consultations screen", fields: [
+const SCREENS: { key: keyof Draft; title: string; blurb: string; fields: [string, string][] }[] = [
+  { key: "consultationsScreen", title: "Consultations screen", blurb: "The screen a guest reaches from the Consultation tab.", fields: [
     ["heading", "Heading"], ["subHeading", "Sub-heading"], ["searchbarPlaceholder", "Search placeholder"],
   ]},
-  { key: "appointmentsScreen", title: "Appointments screen", fields: [
+  { key: "appointmentsScreen", title: "Appointments screen", blurb: "The guest's upcoming and past visits.", fields: [
     ["heading", "Heading"], ["subHeading", "Sub-heading"],
   ]},
-  { key: "productsScreen", title: "Products screen", fields: [
+  { key: "productsScreen", title: "Products screen", blurb: "The shop.", fields: [
     ["heading", "Heading"], ["subHeading", "Sub-heading"], ["searchbarPlaceholder", "Search placeholder"],
   ]},
-  { key: "profileScreen", title: "Profile screen", fields: [
+  { key: "profileScreen", title: "Profile screen", blurb: "The guest's profile and the cards that lead off it.", fields: [
     ["heading", "Heading"], ["subHeading", "Sub-heading"], ["searchbarPlaceholder", "Search placeholder"],
     ["personalCardText", "Personal card"], ["addressesCardText", "Addresses card"], ["bankDetailsCardText", "Bank details card"],
     ["membershipCardText", "Membership card"], ["ordersCardText", "Orders card"], ["treatmentsCardText", "Treatments card"],
@@ -887,82 +1012,60 @@ const SCREENS: { key: keyof Draft; title: string; fields: [string, string][] }[]
     ["termsCardText", "Terms card"], ["privacyCardText", "Privacy card"], ["deleteCardText", "Delete account card"],
   ]},
 ];
+const COPY_SECTIONS: StudioSection[] = SCREENS.map((s) => ({ id: String(s.key), title: s.title, blurb: s.blurb }));
 
 export function ScreenCopy() {
   const { toast, audit } = useStore();
   const c = useCustomization();
   const [resetOpen, setResetOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [active, setActive] = useStudioSection("screen-copy", COPY_SECTIONS);
+  const screen = SCREENS.find((s) => String(s.key) === active) ?? SCREENS[0];
 
   return (
-    <Page title="Screen copy" sub="Every heading, sub-heading and label the mobile app renders"
-      actions={<>
-        {c.canEdit && <Btn kind="ghost" onClick={() => setResetOpen(true)}>Reset to defaults</Btn>}
-        <Btn kind="gold" disabled={!c.dirty || c.busy}
-          onClick={() => c.save(() => { audit("APP_CUSTOMIZATION_UPDATED", "Screen copy"); toast("Published"); })}>
-          {c.busy ? "Publishing…" : "Publish"}
-        </Btn>
-      </>}>
-      <Hint id="screen-copy">Change wording here and it appears in the app on the next launch — no release needed. Leave a field blank and the app falls back to its built-in default.</Hint>
-
+    <StudioPage title="Screen copy" intro="Every heading, sub-heading and label the mobile app renders. Change wording here and it appears on the next launch — leave a field blank and the app falls back to its built-in default."
+      sections={COPY_SECTIONS} active={active} onSection={setActive}
+      actions={c.canEdit ? <StudioBtn kind="danger" onClick={() => setResetOpen(true)}>Reset to defaults</StudioBtn> : undefined}
+      footer={<DraftPublishBar c={c} what="Screen copy" />}>
       <Async q={c.q} label="Loading screen copy…" rows={6}>
         {() => !c.draft ? <Loading /> : (
-          <>
-            <SaveBar canEdit={c.canEdit} dirty={c.dirty} busy={c.busy} err={c.err}
-              onSave={() => c.save(() => { audit("APP_CUSTOMIZATION_UPDATED", "Screen copy"); toast("Published"); })}
-              onReset={() => c.setDraft(c.q.data ?? null)} />
-
-            <div className="grid gap-3 xl:grid-cols-2">
-              {SCREENS.map((screen) => {
-                const set = c.section(screen.key);
-                return (
-                  <Card key={String(screen.key)} className="p-4">
-                    <SecH t={screen.title} />
-                    <div className="grid gap-3">
-                      {screen.fields.map(([field, label]) => (
-                        <In key={field} label={label} value={c.get(screen.key, field)} onChange={set(field)} />
-                      ))}
-                    </div>
-                  </Card>
-                );
-              })}
-            </div>
-
+          <Section key={String(screen.key)} title={screen.title} blurb={screen.blurb}>
+            {screen.fields.map(([field, label]) => {
+              const set = c.section(screen.key);
+              return (
+                <Field key={field} label={label} full={field === "subHeading"}>
+                  <Input value={c.get(screen.key, field)} onChange={set(field)} />
+                </Field>
+              );
+            })}
             {c.draft.lastUpdatedAt && (
-              <Note className="text-[11.5px]">
+              <Note>
                 Last published {fmtDateFull(c.draft.lastUpdatedAt)} · config version {c.draft.version ?? 1}.
                 The app caches the last good config, so a failed fetch can never blank a screen.
               </Note>
             )}
-            <Card className="p-4">
-              <SecH t="Help & Support — FAQs" em={`· ${(((c.draft?.helpScreen ?? {}) as Record<string, unknown>).faqs as unknown[] | undefined)?.length || "bundled"}`} />
-              <Note className="text-[11.5px]">The questions on the app's Help screen. Leave empty to keep the bundled set.</Note>
-              <FaqEditor
-                value={((((c.draft?.helpScreen ?? {}) as Record<string, unknown>).faqs as { q: string; a: string }[] | undefined) ?? [])}
-                onChange={(v) => c.setDraft((d) => (d ? { ...d, helpScreen: { ...((d.helpScreen ?? {}) as Record<string, unknown>), faqs: v } } : d))} />
-            </Card>
-          </>
+          </Section>
         )}
       </Async>
 
       <Modal open={resetOpen} onClose={() => setResetOpen(false)} title="Reset app customisation">
-        <Note kind="crit" className="mt-0">
+        <Note kind="err" className="mt-0">
           This restores every screen's copy, the hero banner, the logo and the category cards to their built-in
           defaults, across the whole app. It cannot be undone.
         </Note>
         <div className="mt-4 flex justify-end gap-2">
-          <Btn kind="ghost" onClick={() => setResetOpen(false)}>Cancel</Btn>
-          <Btn kind="danger" disabled={busy} onClick={async () => {
+          <StudioBtn kind="ghost" onClick={() => setResetOpen(false)}>Cancel</StudioBtn>
+          <StudioBtn kind="danger" disabled={busy} onClick={async () => {
             setBusy(true);
             try {
               await api.appStudio.reset();
               audit("APP_CUSTOMIZATION_UPDATED", "Reset app customisation to defaults");
               toast("Reset to defaults"); c.q.reload(); setResetOpen(false);
             } catch (e) { toast((e as Error).message); } finally { setBusy(false); }
-          }}>{busy ? "Resetting…" : "Reset everything"}</Btn>
+          }}>{busy ? "Resetting…" : "Reset everything"}</StudioBtn>
         </div>
       </Modal>
-    </Page>
+    </StudioPage>
   );
 }
 
@@ -993,22 +1096,20 @@ function HomeSectionsEditor({ value, onChange }: {
     onChange(next);
   };
   return (
-    <div className="grid gap-1.5">
+    <div className="grid gap-2">
       {list.map((s, i) => {
         const meta = HOME_SECTIONS_META.find((m) => m.id === s.id)!;
         const hidden = s.visible === false;
         return (
-          <div key={s.id} className={`flex items-center gap-2.5 rounded-lg border border-border px-3 py-2 ${hidden ? "bg-dis-bg opacity-70" : "bg-ivory"}`}>
-            <span className="flex flex-col gap-0.5">
-              <button onClick={() => move(i, -1)} disabled={i === 0} className="rounded border border-border px-1 text-[9px] leading-3 disabled:opacity-30">▲</button>
-              <button onClick={() => move(i, 1)} disabled={i === list.length - 1} className="rounded border border-border px-1 text-[9px] leading-3 disabled:opacity-30">▼</button>
-            </span>
+          <Row key={s.id} muted={hidden}>
+            <OrderButtons onUp={() => move(i, -1)} onDown={() => move(i, 1)} upDisabled={i === 0} downDisabled={i === list.length - 1} />
             <div className="min-w-0 flex-1">
-              <b className="text-[12.5px]">{i + 1}. {meta.label}</b>
-              <div className="text-[10.5px] text-ink3">{meta.hint}</div>
+              <div className="text-[15px] font-semibold text-ink">{i + 1}. {meta.label}</div>
+              <div className="text-[14px] text-ink3">{meta.hint}</div>
             </div>
+            <span className="hidden text-[14px] text-ink3 sm:inline">{hidden ? "Hidden" : "Shown"}</span>
             <Toggle on={!hidden} onChange={() => onChange(list.map((x, k) => (k === i ? { ...x, visible: hidden } : x)))} />
-          </div>
+          </Row>
         );
       })}
     </div>
@@ -1036,28 +1137,30 @@ function QuickActionsEditor({ value, onChange }: {
     return url;
   };
   return (
-    <div className="grid gap-2">
-      <Note className="text-[11.5px]">Destinations are a validated list — a tile can only open a real page. Leave the icon empty to keep the bundled one.</Note>
+    <div className="grid gap-3">
+      <div className="hidden grid-cols-[44px_minmax(0,1fr)_170px_140px_auto_auto] gap-3 px-3.5 text-[14px] font-semibold text-ink3 @xl/fields:grid">
+        <span>Icon</span><span>Label</span><span>Opens</span><span /><span>Shown</span><span />
+      </div>
       {list.map((a, i) => (
-        <div key={i} className="grid items-center gap-2 rounded-lg border border-border bg-ivory px-3 py-2 md:grid-cols-[minmax(0,1fr)_150px_150px_auto_auto]">
-          <input value={a.label} onChange={(e) => set(i, { label: e.target.value })} placeholder="Label"
-            className="rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[12.5px] outline-none focus:border-gold-dark" />
-          <select value={a.route ?? "consultation"} onChange={(e) => set(i, { route: e.target.value })}
-            className="rounded-lg border border-border bg-surface px-2 py-1.5 text-[12px] outline-none">
-            {QUICK_ROUTES.map((r) => <option key={r} value={r}>{r}</option>)}
-          </select>
-          <label className="cursor-pointer truncate rounded-lg border border-border bg-surface px-2 py-1.5 text-center text-[11.5px] font-semibold hover:border-gold-dark">
+        <div key={i} className="grid items-center gap-3 rounded-[10px] border border-border bg-surface px-3.5 py-3 @xl/fields:grid-cols-[44px_minmax(0,1fr)_170px_140px_auto_auto]">
+          <span className="grid h-11 w-11 place-items-center overflow-hidden rounded-[10px] bg-sage">
+            {a.image ? <img src={a.image} alt="" className="h-7 w-7 object-contain" /> : <span className="text-[14px] font-extrabold text-primary">{(a.label || "?").slice(0, 1)}</span>}
+          </span>
+          <Input value={a.label} onChange={(v) => set(i, { label: v })} placeholder="Label" />
+          <Select value={a.route ?? "consultation"} onChange={(v) => set(i, { route: v })} options={QUICK_ROUTES} />
+          <label className="inline-flex min-h-[44px] cursor-pointer items-center justify-center rounded-[10px] border border-border bg-surface px-3 text-[14px] font-semibold text-ink2 hover:bg-ivory hover:text-ink">
             {a.image ? "Change icon" : "Upload icon"}
             <input type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadIcon(i)(f); e.target.value = ""; }} />
           </label>
-          <Toggle on={a.visible !== false} onChange={() => set(i, { visible: a.visible === false })} />
-          <button onClick={() => onChange(list.filter((_, k) => k !== i))} className="text-[12px] font-bold text-err">×</button>
+          <div className="flex items-center gap-2 text-[14px] text-ink3"><Toggle on={a.visible !== false} onChange={() => set(i, { visible: a.visible === false })} /><span className="@xl/fields:hidden">{a.visible === false ? "Hidden" : "Shown"}</span></div>
+          <RemoveButton onClick={() => onChange(list.filter((_, k) => k !== i))} label="Remove tile" />
         </div>
       ))}
-      <div>
-        <Btn kind="ghost" className="!py-1 !text-[12px]" disabled={list.length >= 8}
-          onClick={() => onChange([...list, { label: "New tile", route: "products", visible: true }])}>+ Add tile</Btn>
+      <div className="flex flex-wrap gap-2">
+        <StudioBtn kind="ghost" disabled={list.length >= 8}
+          onClick={() => onChange([...list, { label: "New tile", route: "products", visible: true }])}>+ Add tile</StudioBtn>
       </div>
+      <div className="text-[12.5px] text-ink3">Leave the icon empty to keep the bundled one. Up to eight tiles.</div>
     </div>
   );
 }
@@ -1072,40 +1175,39 @@ function TestimonialsEditor({ value, onChange }: {
     const next = [...value]; [next[i], next[j]] = [next[j], next[i]]; onChange(next);
   };
   return (
-    <div className="grid gap-2">
+    <div className="grid gap-3">
+      {value.length === 0 && <StudioEmpty title="Using the bundled celebrity set" hint="Add a quote to replace it with your own list." />}
       {value.map((t, i) => (
-        <div key={i} className="rounded-lg border border-border bg-ivory p-3">
-          <div className="flex items-start gap-2.5">
-            {t.image ? <img src={t.image} alt="" className="h-12 w-12 shrink-0 rounded-full object-cover" /> : <span className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-sage text-[12px] font-bold text-primary">{t.name?.slice(0, 1) || "?"}</span>}
-            <div className="grid min-w-0 flex-1 gap-1.5 md:grid-cols-2">
-              <input value={t.name} onChange={(e) => set(i, { name: e.target.value })} placeholder="Name"
-                className="rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[12.5px] outline-none focus:border-gold-dark" />
-              <input value={t.role ?? ""} onChange={(e) => set(i, { role: e.target.value })} placeholder="Role (e.g. Indian Actress)"
-                className="rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[12.5px] outline-none focus:border-gold-dark" />
+        <div key={i} className="grid gap-3 rounded-[12px] border border-border bg-surface p-4">
+          <div className="flex items-start gap-3">
+            {t.image ? <img src={t.image} alt="" className="h-12 w-12 shrink-0 rounded-full object-cover" /> : <span className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-sage text-[15px] font-bold text-primary">{t.name?.slice(0, 1) || "?"}</span>}
+            <div className="grid min-w-0 flex-1 gap-3 @lg/fields:grid-cols-2">
+              <Field label="Name"><Input value={t.name} onChange={(v) => set(i, { name: v })} placeholder="Name" /></Field>
+              <Field label="Role"><Input value={t.role ?? ""} onChange={(v) => set(i, { role: v })} placeholder="e.g. Indian Actress" /></Field>
             </div>
-            <span className="flex flex-col gap-0.5">
-              <button onClick={() => move(i, -1)} disabled={i === 0} className="rounded border border-border px-1 text-[9px] leading-3 disabled:opacity-30">▲</button>
-              <button onClick={() => move(i, 1)} disabled={i === value.length - 1} className="rounded border border-border px-1 text-[9px] leading-3 disabled:opacity-30">▼</button>
-            </span>
-            <button onClick={() => onChange(value.filter((_, k) => k !== i))} className="text-[12px] font-bold text-err">×</button>
+            <div className="flex shrink-0 items-center gap-1 pt-7">
+              <OrderButtons onUp={() => move(i, -1)} onDown={() => move(i, 1)} upDisabled={i === 0} downDisabled={i === value.length - 1} />
+              <RemoveButton onClick={() => onChange(value.filter((_, k) => k !== i))} label="Remove quote" />
+            </div>
           </div>
-          <textarea value={t.quote} onChange={(e) => set(i, { quote: e.target.value })} placeholder="Quote" rows={2}
-            className="mt-2 w-full resize-y rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[12.5px] outline-none focus:border-gold-dark" />
-          <label className="mt-1 inline-block cursor-pointer rounded-lg border border-border bg-surface px-2.5 py-1 text-[11.5px] font-semibold hover:border-gold-dark">
-            {t.image ? "Change photo" : "Upload photo"}
-            <input type="file" accept="image/*" className="hidden" onChange={async (e) => {
-              const f = e.target.files?.[0]; if (!f) return;
-              const r = await api.media.upload([f]); const url = r?.[0]?.url ?? "";
-              if (url) set(i, { image: url });
-              e.target.value = "";
-            }} />
-          </label>
+          <Field label="Quote"><Textarea value={t.quote} onChange={(v) => set(i, { quote: v })} placeholder="Quote" rows={2} /></Field>
+          <div>
+            <label className="inline-flex min-h-[44px] cursor-pointer items-center rounded-[10px] border border-border bg-surface px-4 text-[14px] font-semibold text-ink2 hover:bg-ivory hover:text-ink">
+              {t.image ? "Change photo" : "Upload photo"}
+              <input type="file" accept="image/*" className="hidden" onChange={async (e) => {
+                const f = e.target.files?.[0]; if (!f) return;
+                const r = await api.media.upload([f]); const url = r?.[0]?.url ?? "";
+                if (url) set(i, { image: url });
+                e.target.value = "";
+              }} />
+            </label>
+          </div>
         </div>
       ))}
-      <div>
-        <Btn kind="ghost" className="!py-1 !text-[12px]" disabled={value.length >= 10}
-          onClick={() => onChange([...value, { name: "", role: "", quote: "" }])}>+ Add quote</Btn>
-        {value.length > 0 && <Btn kind="ghost" className="ml-2 !py-1 !text-[12px] !text-err" onClick={() => onChange([])}>Use the bundled set</Btn>}
+      <div className="flex flex-wrap gap-2">
+        <StudioBtn kind="ghost" disabled={value.length >= 10}
+          onClick={() => onChange([...value, { name: "", role: "", quote: "" }])}>+ Add quote</StudioBtn>
+        {value.length > 0 && <StudioBtn kind="danger" onClick={() => onChange([])}>Use the bundled set</StudioBtn>}
       </div>
     </div>
   );
@@ -1116,19 +1218,23 @@ function TestimonialsEditor({ value, onChange }: {
 function BenefitsEditor({ value, onChange }: { value: { title: string; copy?: string }[]; onChange: (v: { title: string; copy?: string }[]) => void }) {
   const set = (i: number, patch: Partial<{ title: string; copy?: string }>) => onChange(value.map((x, k) => (k === i ? { ...x, ...patch } : x)));
   return (
-    <div className="grid gap-1.5">
+    <div className="grid gap-3">
+      {value.length === 0 && <StudioEmpty title="Using the bundled ten benefits" hint="Add a benefit to replace them with your own list." />}
+      {value.length > 0 && (
+        <div className="hidden grid-cols-[minmax(0,2fr)_minmax(0,3fr)_36px] gap-3 px-3.5 text-[14px] font-semibold text-ink3 @lg/fields:grid">
+          <span>Benefit</span><span>One-line description</span><span />
+        </div>
+      )}
       {value.map((b, i) => (
-        <div key={i} className="flex items-center gap-2 rounded-lg border border-border bg-ivory px-2.5 py-1.5">
-          <input value={b.title} onChange={(e) => set(i, { title: e.target.value })} placeholder="Benefit"
-            className="w-2/5 rounded-lg border border-border bg-surface px-2 py-1.5 text-[12.5px] outline-none focus:border-gold-dark" />
-          <input value={b.copy ?? ""} onChange={(e) => set(i, { copy: e.target.value })} placeholder="One-line description"
-            className="min-w-0 flex-1 rounded-lg border border-border bg-surface px-2 py-1.5 text-[12.5px] outline-none focus:border-gold-dark" />
-          <button onClick={() => onChange(value.filter((_, k) => k !== i))} className="text-[12px] font-bold text-err">×</button>
+        <div key={i} className="grid items-center gap-3 rounded-[10px] border border-border bg-surface px-3.5 py-3 @lg/fields:grid-cols-[minmax(0,2fr)_minmax(0,3fr)_36px]">
+          <Input value={b.title} onChange={(v) => set(i, { title: v })} placeholder="Benefit" />
+          <Input value={b.copy ?? ""} onChange={(v) => set(i, { copy: v })} placeholder="One-line description" />
+          <RemoveButton onClick={() => onChange(value.filter((_, k) => k !== i))} label="Remove benefit" />
         </div>
       ))}
-      <div>
-        <Btn kind="ghost" className="!py-1 !text-[12px]" disabled={value.length >= 14} onClick={() => onChange([...value, { title: "", copy: "" }])}>+ Add benefit</Btn>
-        {value.length > 0 && <Btn kind="ghost" className="ml-2 !py-1 !text-[12px] !text-err" onClick={() => onChange([])}>Use the bundled set</Btn>}
+      <div className="flex flex-wrap gap-2">
+        <StudioBtn kind="ghost" disabled={value.length >= 14} onClick={() => onChange([...value, { title: "", copy: "" }])}>+ Add benefit</StudioBtn>
+        {value.length > 0 && <StudioBtn kind="danger" onClick={() => onChange([])}>Use the bundled set</StudioBtn>}
       </div>
     </div>
   );
@@ -1138,31 +1244,37 @@ function FaqEditor({ value, onChange }: { value: { q: string; a: string }[]; onC
   const set = (i: number, patch: Partial<{ q: string; a: string }>) => onChange(value.map((x, k) => (k === i ? { ...x, ...patch } : x)));
   const move = (i: number, dir: -1 | 1) => { const j = i + dir; if (j < 0 || j >= value.length) return; const next = [...value]; [next[i], next[j]] = [next[j], next[i]]; onChange(next); };
   return (
-    <div className="grid gap-2">
+    <div className="grid gap-3">
+      {value.length === 0 && <StudioEmpty title="Using the bundled questions" hint="Add a question to replace them with your own list." />}
       {value.map((f, i) => (
-        <div key={i} className="rounded-lg border border-border bg-ivory p-2.5">
-          <div className="flex items-center gap-2">
-            <input value={f.q} onChange={(e) => set(i, { q: e.target.value })} placeholder="Question"
-              className="min-w-0 flex-1 rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[12.5px] font-semibold outline-none focus:border-gold-dark" />
-            <span className="flex flex-col gap-0.5">
-              <button onClick={() => move(i, -1)} disabled={i === 0} className="rounded border border-border px-1 text-[9px] leading-3 disabled:opacity-30">▲</button>
-              <button onClick={() => move(i, 1)} disabled={i === value.length - 1} className="rounded border border-border px-1 text-[9px] leading-3 disabled:opacity-30">▼</button>
-            </span>
-            <button onClick={() => onChange(value.filter((_, k) => k !== i))} className="text-[12px] font-bold text-err">×</button>
+        <div key={i} className="grid gap-3 rounded-[12px] border border-border bg-surface p-4">
+          <div className="flex items-end gap-3">
+            <Field label={`Question ${i + 1}`} className="min-w-0 flex-1"><Input value={f.q} onChange={(v) => set(i, { q: v })} placeholder="Question" /></Field>
+            <div className="flex shrink-0 items-center gap-1 pb-1">
+              <OrderButtons onUp={() => move(i, -1)} onDown={() => move(i, 1)} upDisabled={i === 0} downDisabled={i === value.length - 1} />
+              <RemoveButton onClick={() => onChange(value.filter((_, k) => k !== i))} label="Remove question" />
+            </div>
           </div>
-          <textarea value={f.a} onChange={(e) => set(i, { a: e.target.value })} placeholder="Answer" rows={2}
-            className="mt-1.5 w-full resize-y rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[12.5px] outline-none focus:border-gold-dark" />
+          <Field label="Answer"><Textarea value={f.a} onChange={(v) => set(i, { a: v })} placeholder="Answer" rows={2} /></Field>
         </div>
       ))}
-      <div>
-        <Btn kind="ghost" className="!py-1 !text-[12px]" disabled={value.length >= 25} onClick={() => onChange([...value, { q: "", a: "" }])}>+ Add question</Btn>
-        {value.length > 0 && <Btn kind="ghost" className="ml-2 !py-1 !text-[12px] !text-err" onClick={() => onChange([])}>Use the bundled set</Btn>}
+      <div className="flex flex-wrap gap-2">
+        <StudioBtn kind="ghost" disabled={value.length >= 25} onClick={() => onChange([...value, { q: "", a: "" }])}>+ Add question</StudioBtn>
+        {value.length > 0 && <StudioBtn kind="danger" onClick={() => onChange([])}>Use the bundled set</StudioBtn>}
       </div>
     </div>
   );
 }
 
 /* ================= APP CONTROL — design system & copy ================= */
+const CONTROL_SECTIONS: StudioSection[] = [
+  { id: "palette", title: "Palette", blurb: "The app's core colours. Derived shades — pressed states, secondary green, overlays, link colour — follow the primary automatically; the gold's darker shade follows the accent." },
+  { id: "controls", title: "Colours & buttons", blurb: "Buttons, inputs, headers, navigation and icons. Each role can change independently of the palette." },
+  { id: "scale", title: "Type scale", blurb: "One multiplier for every text size in the app. The interface font is Manrope (brand-fixed; the wordmark stays Cormorant Garamond)." },
+  { id: "sizes", title: "Text sizes", blurb: "The exact font sizes found across the active mobile layout. Changing one updates every matching heading, label, button, caption or counter; the global scale still applies on top." },
+  { id: "copy", title: "Copy", blurb: "Every registered string. Empty fields fall back to the app's bundled wording; new strings appear here as screens are wired to the copy registry." },
+];
+
 /**
  * Full control of the app's look and wording: theme colours, type scale and
  * every registered copy string. Saved onto AppCustomization; the app applies
@@ -1173,7 +1285,6 @@ export function AppControl() {
   // Same split as the other App Studio screens: `appStudio.view` shows what the
   // app looks like, `appStudio.manage` publishes a change to it.
   const canEdit = can("appStudio.manage");
-  const [tab, setTab] = useQueryNumber("tab", 0, { min: 0, max: 2 });
   const q = useApi(() => api.appStudio.get(), []);
   const [colors, setColors] = useState<Record<string, string>>({});
   const [fontScale, setFontScale] = useState(1);
@@ -1184,13 +1295,16 @@ export function AppControl() {
   const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
 
+  const applyServer = (data: AppCustomization) => {
+    setColors({ ...(data.appearance?.colors ?? {}) });
+    setFontScale(Number(data.appearance?.typography?.fontScale) || 1);
+    setSizeOverrides({ ...(data.appearance?.typography?.sizeOverrides ?? {}) });
+    setCopy({ ...(data.copy ?? {}) });
+    setDirty(false);
+  };
   useEffect(() => {
     if (!q.data) return;
-    setColors({ ...(q.data.appearance?.colors ?? {}) });
-    setFontScale(Number(q.data.appearance?.typography?.fontScale) || 1);
-    setSizeOverrides({ ...(q.data.appearance?.typography?.sizeOverrides ?? {}) });
-    setCopy({ ...(q.data.copy ?? {}) });
-    setDirty(false);
+    applyServer(q.data);
   }, [q.data]);
 
   const allColorTokens = [...COLOR_TOKENS, ...CONTROL_COLOR_TOKENS, ...ADVANCED_COLOR_TOKENS];
@@ -1245,222 +1359,207 @@ export function AppControl() {
     return !term || `${t.key} ${t.label} ${t.hint}`.toLowerCase().includes(term);
   };
 
+  const paletteChanged = [...COLOR_TOKENS, ...ADVANCED_COLOR_TOKENS].filter((t) => t.key in colors).length;
+  const controlsChanged = CONTROL_COLOR_TOKENS.filter((t) => t.key in colors).length;
+  const sections = CONTROL_SECTIONS.map((s) => ({
+    ...s,
+    count: s.id === "palette" ? paletteChanged || undefined
+      : s.id === "controls" ? controlsChanged || undefined
+      : s.id === "scale" ? (fontScale !== 1 ? `${fontScale}×` : undefined)
+      : s.id === "sizes" ? Object.keys(sizeOverrides).length || undefined
+      : overriddenCopy || undefined,
+  }));
+  const [active, setActive] = useStudioSection("app-control", sections);
+  const sec = sections.find((s) => s.id === active) ?? sections[0];
+
+  // A render function, not a component: a component declared inside render
+  // is a new type on every keystroke, which remounts the card and drops focus.
+  const tokenCard = (t: { key: string; label: string; hint: string; default: string }) => {
+    const overridden = t.key in colors;
+    const value = val(t.key);
+    return (
+      <div key={t.key} className={`grid gap-3 rounded-[12px] border p-4 ${overridden ? "border-primary/40 bg-primary/[0.04]" : "border-border bg-surface"}`}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-[14px] font-semibold text-ink">{t.label}</div>
+            <div className="mt-0.5 text-[12.5px] leading-5 text-ink3">{t.hint}</div>
+          </div>
+          {overridden && <StudioBtn kind="link" small onClick={() => clearColor(t.key)}>Reset</StudioBtn>}
+        </div>
+        <div className="flex items-center gap-2">
+          <input type="color" aria-label={`${t.label} colour`} value={/^#[0-9a-f]{6}$/i.test(value) ? value : "#000000"} onChange={(e) => setColor(t.key, e.target.value)}
+            className="h-11 w-14 shrink-0 cursor-pointer rounded-[10px] border border-border bg-surface p-1" />
+          <Input value={value} onChange={(v) => setColor(t.key, v)} mono className="!w-[150px] uppercase" />
+          <span className="ml-auto flex items-center gap-2 text-[12.5px] text-ink3">
+            <span className="h-6 w-6 rounded-[6px] border border-border" style={{ background: value }} title={value} />
+            <span className="hidden font-mono sm:inline">default {t.default}</span>
+          </span>
+        </div>
+      </div>
+    );
+  };
+
+  const preview = (
+    <div className="overflow-hidden rounded-[12px] border border-border">
+      <div className="border-b border-border bg-ivory px-4 py-2.5 text-[14px] font-semibold text-ink2">Live preview</div>
+      <div style={{ background: P.background }} className="p-3">
+        <div style={{ color: P.textPrimary, fontSize: previewFont(17), fontWeight: 800 }}>{copyVal("home.greeting.morning", "Good morning")}, Sana</div>
+        <div style={{ color: P.textSecondary, fontSize: previewFont(11.5), marginTop: 2 }}>{copyVal("brand.tagline.1", "Skin.")} {copyVal("brand.tagline.2", "Aesthetics.")} {copyVal("brand.tagline.3", "Wellness.")}</div>
+        <div style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 14, padding: 12, marginTop: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ width: 30, height: 30, borderRadius: 15, background: P.sage, display: "grid", placeItems: "center", color: P.primary, fontWeight: 800, fontSize: previewFont(12) }}>Z</span>
+            <div>
+              <div style={{ color: P.textPrimary, fontWeight: 700, fontSize: previewFont(13) }}>HydraFacial · Signature</div>
+              <div style={{ color: P.textSecondary, fontSize: previewFont(11) }}>Tomorrow · 11:00 · Jubilee Hills</div>
+            </div>
+          </div>
+          <div style={{ background: P.primaryButton, color: P.primaryButtonText, textAlign: "center", borderRadius: 10, padding: "8px 0", marginTop: 10, fontWeight: 700, fontSize: previewFont(12.5) }}>{copyVal("home.book.cta", "Book an appointment")}</div>
+        </div>
+        <div style={{ background: P.sage, borderRadius: 14, padding: 12, marginTop: 10 }}>
+          <div style={{ color: P.primary, fontWeight: 800, fontSize: previewFont(12.5) }}>{copyVal("membership.title", "Zen Membership")}</div>
+          <div style={{ color: P.textSecondary, fontSize: previewFont(10.5), marginTop: 2 }}>{copyVal("membership.pitch", "A year of Zennara's signature treatments and privileges.")}</div>
+          <div style={{ background: P.goldButton, color: P.goldButtonText, textAlign: "center", borderRadius: 10, padding: "7px 0", marginTop: 8, fontWeight: 800, fontSize: previewFont(11.5) }}>{copyVal("membership.cta", "Become a Zen Member")}</div>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-around", borderTop: `1px solid ${P.border}`, background: P.tab, marginTop: 12, paddingTop: 8, borderRadius: 10 }}>
+          {[copyVal("tabs.home", "Home"), copyVal("tabs.consultation", "Consult"), copyVal("tabs.appointments", "Appointments"), copyVal("tabs.shop", "Shop")].map((t, i) => (
+            <span key={t} style={{ fontSize: previewFont(9.5), fontWeight: 700, color: i === 0 ? P.tabActive : P.tabInactive, paddingBottom: 6 }}>{t}</span>
+          ))}
+        </div>
+      </div>
+      <div className="border-t border-border bg-ivory px-4 py-2.5 text-[12.5px] leading-5 text-ink3">An approximation — open the app after publishing to see it exactly.</div>
+    </div>
+  );
+
+  const colorSearchField = (
+    <Field label="Find a colour" full>
+      <Input value={colorSearch} onChange={setColorSearch} placeholder="Search a colour, button, input, icon or element…" />
+    </Field>
+  );
+
   return (
-    <Page title="App control" sub="The app's design system and wording — colours, type scale and every registered copy string"
-      actions={<>
-        <Btn kind="ghost" onClick={resetAll}>Reset to defaults</Btn>
-        {canEdit
-          ? <Btn disabled={!dirty || busy} onClick={save}>{busy ? "Saving…" : "Save & publish"}</Btn>
-          : <span className="text-[11.5px] text-ink3">Publishing needs the “edit app home, control &amp; content” permission.</span>}
-      </>}>
-      <Hint id="app-control">Changes publish to every install: screens that are open re-style on their next refresh, and the whole app picks the theme up on its next launch. Colours cascade — pressed states, overlays and links follow the primary automatically.</Hint>
-      <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
-      <Tabs active={tab} onChange={setTab} items={[["Colours", overriddenColors || undefined], ["Typography", Object.keys(sizeOverrides).length || (fontScale !== 1 ? `${fontScale}×` : undefined)], ["Copy", overriddenCopy || undefined]]} />
+    <StudioPage title="App control" intro="The app's design system and wording. Changes publish to every install: open screens re-style on their next refresh, and the whole app picks the theme up on its next launch."
+      sections={sections} active={active} onSection={setActive}
+      actions={<StudioBtn kind="danger" onClick={resetAll}>Reset to defaults</StudioBtn>}
+      footer={<PublishBar canEdit={canEdit} dirty={dirty} busy={busy} err={null}
+        lastSavedAt={q.data?.lastUpdatedAt ? fmtDateFull(q.data.lastUpdatedAt) : undefined}
+        onPublish={save} onDiscard={() => { if (q.data) applyServer(q.data); }} />}>
+      <StudioStale error={q.data ? q.error : null} onRetry={q.reload} />
 
       <Async q={q} label="Loading app settings…" rows={6}>
         {() => (
-          <div className="grid items-start gap-3.5 xl:grid-cols-[minmax(0,1fr)_300px]">
-            <div className="min-w-0">
-              {tab === 0 && (
-                <Card className="p-4">
-                  <input value={colorSearch} onChange={(e) => setColorSearch(e.target.value)} placeholder="Search a colour, button, input, icon or element…"
-                    className="mb-3 w-full rounded-(--radius-btn) border border-border bg-surface px-3.5 py-2 text-[13px] outline-none focus:border-gold-dark" />
-                  <div className="grid gap-2.5 md:grid-cols-2">
-                    {COLOR_TOKENS.filter(matchesColor).map((t) => {
-                      const overridden = t.key in colors;
-                      return (
-                        <div key={t.key} className={`rounded-xl border p-3 ${overridden ? "border-gold bg-gold/5" : "border-border bg-ivory"}`}>
-                          <div className="flex items-center justify-between gap-2">
-                            <b className="text-[12.5px] font-bold">{t.label}</b>
-                            {overridden && <button onClick={() => clearColor(t.key)} className="text-[10.5px] font-semibold text-ink3 hover:text-err">Reset</button>}
-                          </div>
-                          <div className="mt-0.5 text-[10.5px] leading-4 text-ink3">{t.hint}</div>
-                          <div className="mt-2 flex items-center gap-2">
-                            <input type="color" value={/^#[0-9a-f]{6}$/i.test(val(t.key)) ? val(t.key) : "#000000"} onChange={(e) => setColor(t.key, e.target.value)}
-                              className="h-8 w-10 cursor-pointer rounded border border-border bg-surface p-0.5" />
-                            <input value={val(t.key)} onChange={(e) => setColor(t.key, e.target.value)}
-                              className="w-24 rounded-lg border border-border bg-surface px-2 py-1 font-mono text-[11.5px] uppercase outline-none focus:border-gold-dark" />
-                            <span className="ml-auto font-mono text-[9.5px] text-ink3">default {t.default}</span>
-                          </div>
-                        </div>
-                      );
-                    })}
+          <>
+            {active === "palette" && (
+              <Section title={sec.title} blurb={sec.blurb} aside={preview}>
+                {colorSearchField}
+                <div className="col-span-full grid gap-3 @lg/fields:grid-cols-2">
+                  {COLOR_TOKENS.filter(matchesColor).map((t) => tokenCard(t))}
+                </div>
+                <Note>Only valid hex / rgba values are applied — anything else is ignored by the app.</Note>
+                <details className="col-span-full">
+                  <summary className="cursor-pointer text-[15px] font-semibold text-ink">All tokens — every remaining colour in the app ({ADVANCED_COLOR_TOKENS.length})</summary>
+                  <div className="mt-4 grid gap-3 @lg/fields:grid-cols-2">
+                    {ADVANCED_COLOR_TOKENS.filter(matchesColor).map((t) => tokenCard(t))}
                   </div>
-                  <div className="mt-4 border-t border-border pt-4">
-                    <SecH t="Buttons, inputs, headers, navigation & icons" em={`· ${CONTROL_COLOR_TOKENS.length} controls`} />
-                    <div className="grid gap-2.5 md:grid-cols-2">
-                      {CONTROL_COLOR_TOKENS.filter(matchesColor).map((t) => {
-                        const overridden = t.key in colors;
-                        const value = val(t.key);
-                        return (
-                          <div key={t.key} className={`rounded-xl border p-3 ${overridden ? "border-gold bg-gold/5" : "border-border bg-ivory"}`}>
-                            <div className="flex items-center justify-between gap-2">
-                              <b className="text-[12.5px] font-bold">{t.label}</b>
-                              {overridden && <button onClick={() => clearColor(t.key)} className="text-[10.5px] font-semibold text-ink3 hover:text-err">Reset</button>}
-                            </div>
-                            <div className="mt-0.5 text-[10.5px] leading-4 text-ink3">{t.hint}</div>
-                            <div className="mt-2 flex items-center gap-2">
-                              <input type="color" value={/^#[0-9a-f]{6}$/i.test(value) ? value : "#000000"} onChange={(e) => setColor(t.key, e.target.value)} className="h-8 w-10 cursor-pointer rounded border border-border bg-surface p-0.5" />
-                              <input value={value} onChange={(e) => setColor(t.key, e.target.value)} className="w-32 rounded-lg border border-border bg-surface px-2 py-1 font-mono text-[11.5px] uppercase outline-none focus:border-gold-dark" />
-                              <span className="ml-auto h-6 w-6 rounded-md border border-border" style={{ background: value }} title={value} />
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                  <Note className="mb-0 mt-3">Derived shades (pressed states, secondary green, overlays, link colour) follow the primary automatically; the gold's darker shade follows the accent. Only valid hex / rgba values are applied — anything else is ignored by the app.</Note>
-                  <details className="mt-3">
-                    <summary className="cursor-pointer text-[12.5px] font-bold text-ink2">All tokens — every remaining colour in the app ({ADVANCED_COLOR_TOKENS.length})</summary>
-                    <div className="mt-2 grid gap-2.5 md:grid-cols-2">
-                      {ADVANCED_COLOR_TOKENS.filter(matchesColor).map((t) => {
-                        const overridden = t.key in colors;
-                        return (
-                          <div key={t.key} className={`rounded-xl border p-3 ${overridden ? "border-gold bg-gold/5" : "border-border bg-ivory"}`}>
-                            <div className="flex items-center justify-between gap-2">
-                              <b className="text-[12.5px] font-bold">{t.label}</b>
-                              {overridden && <button onClick={() => clearColor(t.key)} className="text-[10.5px] font-semibold text-ink3 hover:text-err">Reset</button>}
-                            </div>
-                            <div className="mt-0.5 text-[10.5px] leading-4 text-ink3">{t.hint}</div>
-                            <div className="mt-2 flex items-center gap-2">
-                              <input type="color" value={/^#[0-9a-f]{6}$/i.test(colors[t.key] ?? t.default) ? (colors[t.key] ?? t.default) : "#000000"} onChange={(e) => setColor(t.key, e.target.value)}
-                                className="h-8 w-10 cursor-pointer rounded border border-border bg-surface p-0.5" />
-                              <input value={colors[t.key] ?? t.default} onChange={(e) => setColor(t.key, e.target.value)}
-                                className="w-24 rounded-lg border border-border bg-surface px-2 py-1 font-mono text-[11.5px] uppercase outline-none focus:border-gold-dark" />
-                              <span className="ml-auto font-mono text-[9.5px] text-ink3">default {t.default}</span>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </details>
-                </Card>
-              )}
+                </details>
+              </Section>
+            )}
 
-              {tab === 1 && (
-                <Card className="p-4">
-                  <SecH t="Type scale" em={`· ${fontScale}×`} />
-                  <div className="flex items-center gap-3">
-                    <span className="text-[11px] text-ink3">Smaller</span>
-                    <input type="range" min={0.85} max={1.3} step={0.05} value={fontScale}
-                      onChange={(e) => { setFontScale(Number(e.target.value)); setDirty(true); }} className="flex-1 accent-[var(--color-primary)]" />
-                    <span className="text-[11px] text-ink3">Larger</span>
-                    <Btn kind="ghost" className="!px-2 !py-1 !text-[11px]" onClick={() => { setFontScale(1); setDirty(true); }}>1×</Btn>
-                  </div>
-                  <div className="mt-4 rounded-xl border border-border bg-ivory p-4">
-                    <div style={{ fontSize: previewFont(22), fontWeight: 800, color: P.textPrimary }}>Good morning, Sana</div>
-                    <div style={{ fontSize: previewFont(17), fontWeight: 700, color: P.textPrimary, marginTop: 8 }}>Popular treatments</div>
-                    <div style={{ fontSize: previewFont(13), color: P.textSecondary, marginTop: 4 }}>Body copy — descriptions and supporting text scale together, so nothing falls out of step.</div>
-                    <div style={{ fontSize: previewFont(11), color: P.textSecondary, marginTop: 4, opacity: 0.7 }}>Captions and metadata</div>
-                  </div>
-                  <div className="mt-4 border-t border-border pt-4">
-                    <SecH t="Every base text size" em={`· ${Object.keys(sizeOverrides).length} changed`} />
-                    <div className="mb-3 text-[11.5px] leading-5 text-ink3">These are the exact font sizes found across the active mobile layout. Changing one updates every matching heading, body label, button, caption or counter, while the global scale remains available above.</div>
-                    <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                      {FONT_SIZE_TOKENS.map((t) => {
-                        const key = String(t.base);
-                        const overridden = key in sizeOverrides;
-                        const value = sizeOverrides[key] ?? t.base;
-                        return (
-                          <div key={key} className={`rounded-xl border p-2.5 ${overridden ? "border-gold bg-gold/5" : "border-border bg-ivory"}`}>
-                            <div className="flex items-center justify-between gap-2">
-                              <div><b className="text-[11.5px]">{t.label}</b><div className="text-[9.5px] text-ink3">{t.hint}</div></div>
-                              {overridden && <button onClick={() => { setSizeOverrides((s) => { const n = { ...s }; delete n[key]; return n; }); setDirty(true); }} className="text-[10px] font-semibold text-ink3 hover:text-err">Reset</button>}
-                            </div>
-                            <div className="mt-2 flex items-center gap-2">
-                              <input type="number" min={8} max={48} step={0.5} value={value}
-                                onChange={(e) => { const n = Number(e.target.value); setSizeOverrides((s) => ({ ...s, [key]: n })); setDirty(true); }}
-                                className="w-20 rounded-lg border border-border bg-surface px-2 py-1 text-[11.5px] outline-none focus:border-gold-dark" />
-                              <span className="text-[10.5px] text-ink3">px</span>
-                              <span className="ml-auto truncate" style={{ fontSize: Math.min(28, value * fontScale), color: P.textPrimary }}>Aa</span>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                  <Note className="mb-0 mt-3">The app's interface font is Manrope (brand-fixed; the wordmark stays Cormorant Garamond). Exact sizes apply first, then the global scale. Line heights follow proportionally so text does not overlap.</Note>
-                </Card>
-              )}
+            {active === "controls" && (
+              <Section title={sec.title} blurb={sec.blurb} aside={preview}
+                right={<span className="text-[14px] text-ink3">{CONTROL_COLOR_TOKENS.length} controls</span>}>
+                {colorSearchField}
+                <div className="col-span-full grid gap-3 @lg/fields:grid-cols-2">
+                  {CONTROL_COLOR_TOKENS.filter(matchesColor).map((t) => tokenCard(t))}
+                </div>
+                <Note>Only valid hex / rgba values are applied — anything else is ignored by the app.</Note>
+              </Section>
+            )}
 
-              {tab === 2 && (
-                <div>
-                  <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search copy — key, label or text…"
-                    className="mb-3 w-full max-w-[380px] rounded-(--radius-btn) border border-border bg-surface px-3.5 py-2 text-[13px] outline-none focus:border-gold-dark" />
-                  {COPY_GROUPS.map((g) => {
-                    const term = search.toLowerCase();
-                    const entries = g.entries.filter((e) => !term || e.key.includes(term) || e.label.toLowerCase().includes(term) || e.default.toLowerCase().includes(term) || (copy[e.key] ?? "").toLowerCase().includes(term));
-                    if (!entries.length) return null;
+            {active === "scale" && (
+              <Section title={sec.title} blurb={sec.blurb} aside={preview}>
+                <Field label={`Scale · ${fontScale}×`} full hint="Exact sizes apply first, then this scale. Line heights follow proportionally so text does not overlap.">
+                  <div className="flex min-h-[44px] items-center gap-4">
+                    <span className="text-[14px] text-ink2">Smaller</span>
+                    <input type="range" min={0.85} max={1.3} step={0.05} value={fontScale} aria-label="Type scale"
+                      onChange={(e) => { setFontScale(Number(e.target.value)); setDirty(true); }} className="h-11 flex-1 accent-[var(--color-primary)]" />
+                    <span className="text-[14px] text-ink2">Larger</span>
+                    <StudioBtn kind="ghost" onClick={() => { setFontScale(1); setDirty(true); }}>1×</StudioBtn>
+                  </div>
+                </Field>
+                <div className="col-span-full rounded-[12px] border border-border bg-ivory p-5">
+                  <div style={{ fontSize: previewFont(22), fontWeight: 800, color: P.textPrimary }}>Good morning, Sana</div>
+                  <div style={{ fontSize: previewFont(17), fontWeight: 700, color: P.textPrimary, marginTop: 8 }}>Popular treatments</div>
+                  <div style={{ fontSize: previewFont(13), color: P.textSecondary, marginTop: 4 }}>Body copy — descriptions and supporting text scale together, so nothing falls out of step.</div>
+                  <div style={{ fontSize: previewFont(11), color: P.textSecondary, marginTop: 4, opacity: 0.7 }}>Captions and metadata</div>
+                </div>
+              </Section>
+            )}
+
+            {active === "sizes" && (
+              <Section title={sec.title} blurb={sec.blurb} aside={preview}
+                right={<span className="text-[14px] text-ink3">{Object.keys(sizeOverrides).length} changed</span>}>
+                <div className="col-span-full grid gap-3 @lg/fields:grid-cols-2">
+                  {FONT_SIZE_TOKENS.map((t) => {
+                    const key = String(t.base);
+                    const overridden = key in sizeOverrides;
+                    const value = sizeOverrides[key] ?? t.base;
                     return (
-                      <Card key={g.title} className="mb-3 p-4">
-                        <SecH t={g.title} em={`· ${entries.length}`} />
-                        <div className="grid gap-2">
-                          {entries.map((e) => {
-                            const overridden = !!copy[e.key]?.trim();
-                            return (
-                              <div key={e.key} className="grid items-center gap-2 md:grid-cols-[220px_minmax(0,1fr)_auto]">
-                                <div>
-                                  <div className="text-[12px] font-bold">{e.label}</div>
-                                  <div className="font-mono text-[9.5px] text-ink3">{e.key}</div>
-                                </div>
-                                <input value={copy[e.key] ?? ""} placeholder={e.default}
-                                  onChange={(ev) => { setCopy((c) => ({ ...c, [e.key]: ev.target.value })); setDirty(true); }}
-                                  className={`rounded-lg border px-2.5 py-1.5 text-[12.5px] outline-none focus:border-gold-dark ${overridden ? "border-gold bg-gold/5" : "border-border bg-ivory"}`} />
-                                {overridden
-                                  ? <button onClick={() => { setCopy((c) => { const n = { ...c }; delete n[e.key]; return n; }); setDirty(true); }} className="text-[10.5px] font-semibold text-ink3 hover:text-err">Reset</button>
-                                  : <span className="text-[10px] text-ink3">default</span>}
-                              </div>
-                            );
-                          })}
+                      <div key={key} className={`grid gap-3 rounded-[12px] border p-4 ${overridden ? "border-primary/40 bg-primary/[0.04]" : "border-border bg-surface"}`}>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-[14px] font-semibold text-ink">{t.label}</div>
+                            <div className="mt-0.5 text-[12.5px] leading-5 text-ink3">{t.hint}</div>
+                          </div>
+                          {overridden && <StudioBtn kind="link" small onClick={() => { setSizeOverrides((s) => { const n = { ...s }; delete n[key]; return n; }); setDirty(true); }}>Reset</StudioBtn>}
                         </div>
-                      </Card>
+                        <div className="flex items-center gap-2">
+                          <NumberInput min={8} max={48} step={0.5} value={value} className="!w-[110px]"
+                            onChange={(v) => { const n = Number(v); setSizeOverrides((s) => ({ ...s, [key]: n })); setDirty(true); }} />
+                          <span className="text-[14px] text-ink3">px</span>
+                          <span className="ml-auto truncate" style={{ fontSize: Math.min(28, value * fontScale), color: P.textPrimary }}>Aa</span>
+                        </div>
+                      </div>
                     );
                   })}
-                  <Note>Empty fields fall back to the app's bundled wording. New strings appear here as screens are wired to the copy registry.</Note>
                 </div>
-              )}
-            </div>
+              </Section>
+            )}
 
-            {/* ---- live preview ---- */}
-            <div className="xl:sticky xl:top-[72px]">
-              <Card className="overflow-hidden">
-                <div className="border-b border-border bg-ivory px-3 py-2 font-mono text-[9.5px] font-bold uppercase tracking-[0.12em] text-ink3">Live preview</div>
-                <div style={{ background: P.background }} className="p-3">
-                  <div style={{ color: P.textPrimary, fontSize: previewFont(17), fontWeight: 800 }}>{copyVal("home.greeting.morning", "Good morning")}, Sana</div>
-                  <div style={{ color: P.textSecondary, fontSize: previewFont(11.5), marginTop: 2 }}>{copyVal("brand.tagline.1", "Skin.")} {copyVal("brand.tagline.2", "Aesthetics.")} {copyVal("brand.tagline.3", "Wellness.")}</div>
-                  <div style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 14, padding: 12, marginTop: 12 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ width: 30, height: 30, borderRadius: 15, background: P.sage, display: "grid", placeItems: "center", color: P.primary, fontWeight: 800, fontSize: previewFont(12) }}>Z</span>
-                      <div>
-                        <div style={{ color: P.textPrimary, fontWeight: 700, fontSize: previewFont(13) }}>HydraFacial · Signature</div>
-                        <div style={{ color: P.textSecondary, fontSize: previewFont(11) }}>Tomorrow · 11:00 · Jubilee Hills</div>
-                      </div>
+            {active === "copy" && (
+              <Section title={sec.title} blurb={sec.blurb} aside={preview}>
+                <Field label="Find a string" full>
+                  <Input value={search} onChange={setSearch} placeholder="Search copy — key, label or text…" />
+                </Field>
+                {COPY_GROUPS.map((g) => {
+                  const term = search.toLowerCase();
+                  const entries = g.entries.filter((e) => !term || e.key.includes(term) || e.label.toLowerCase().includes(term) || e.default.toLowerCase().includes(term) || (copy[e.key] ?? "").toLowerCase().includes(term));
+                  if (!entries.length) return null;
+                  return (
+                    <div key={g.title} className="col-span-full grid gap-4">
+                      <SubHeading title={g.title} right={<span className="text-[14px] text-ink3">{entries.length}</span>} />
+                      {entries.map((e) => {
+                        const overridden = !!copy[e.key]?.trim();
+                        return (
+                          <Field key={e.key} label={e.label} hint={<span className="font-mono">{e.key}</span>}>
+                            <div className="flex items-center gap-2">
+                              <Input value={copy[e.key] ?? ""} placeholder={e.default}
+                                onChange={(v) => { setCopy((c) => ({ ...c, [e.key]: v })); setDirty(true); }}
+                                className={overridden ? "!border-primary/40 !bg-primary/[0.04]" : ""} />
+                              {overridden
+                                ? <StudioBtn kind="link" small onClick={() => { setCopy((c) => { const n = { ...c }; delete n[e.key]; return n; }); setDirty(true); }}>Reset</StudioBtn>
+                                : <span className="shrink-0 text-[12.5px] text-ink3">default</span>}
+                            </div>
+                          </Field>
+                        );
+                      })}
                     </div>
-                    <div style={{ background: P.primaryButton, color: P.primaryButtonText, textAlign: "center", borderRadius: 10, padding: "8px 0", marginTop: 10, fontWeight: 700, fontSize: previewFont(12.5) }}>{copyVal("home.book.cta", "Book an appointment")}</div>
-                  </div>
-                  <div style={{ background: P.sage, borderRadius: 14, padding: 12, marginTop: 10 }}>
-                    <div style={{ color: P.primary, fontWeight: 800, fontSize: previewFont(12.5) }}>{copyVal("membership.title", "Zen Membership")}</div>
-                    <div style={{ color: P.textSecondary, fontSize: previewFont(10.5), marginTop: 2 }}>{copyVal("membership.pitch", "A year of Zennara's signature treatments and privileges.")}</div>
-                    <div style={{ background: P.goldButton, color: P.goldButtonText, textAlign: "center", borderRadius: 10, padding: "7px 0", marginTop: 8, fontWeight: 800, fontSize: previewFont(11.5) }}>{copyVal("membership.cta", "Become a Zen Member")}</div>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-around", borderTop: `1px solid ${P.border}`, background: P.tab, marginTop: 12, paddingTop: 8, borderRadius: 10 }}>
-                    {[copyVal("tabs.home", "Home"), copyVal("tabs.consultation", "Consult"), copyVal("tabs.appointments", "Appointments"), copyVal("tabs.shop", "Shop")].map((t, i) => (
-                      <span key={t} style={{ fontSize: previewFont(9.5), fontWeight: 700, color: i === 0 ? P.tabActive : P.tabInactive, paddingBottom: 6 }}>{t}</span>
-                    ))}
-                  </div>
-                </div>
-              </Card>
-              <Note className="mt-2">The preview is an approximation — open the app after saving to see it exactly.</Note>
-            </div>
-          </div>
+                  );
+                })}
+              </Section>
+            )}
+          </>
         )}
       </Async>
-      {dirty && (
-        <div className="sticky bottom-3 z-30 mt-3 flex flex-wrap items-center justify-between gap-3 rounded-(--radius-card) border border-gold-dark bg-cream px-4 py-2.5 shadow-lg">
-          <span className="text-[12.5px] font-semibold text-ink2">Design changes are still local — publish them to update the app.</span>
-          <Btn disabled={busy} onClick={save}>{busy ? "Publishing…" : "Save & publish"}</Btn>
-        </div>
-      )}
-    </Page>
+    </StudioPage>
   );
 }
