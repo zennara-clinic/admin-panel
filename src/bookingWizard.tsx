@@ -175,14 +175,16 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser, preset }:
       ?? null;
   }, [roster.data?.services, tier]);
   /*
-   * A service with no Zenoti line cannot be booked into Zenoti.
+   * Which Zenoti line this visit is recorded against.
    *
-   * syncBooking records the push as `skipped` and the desk gets a 502 having
-   * already filled in four steps — while the booking sits in our database
-   * only, which is exactly the ghost this wizard exists to avoid. Say it at
-   * the step where the tier is chosen, and name the one place it is fixed.
+   * A consultation always reaches Zenoti even with nothing mapped: the server
+   * falls back to Zenoti's own generic "Consultation" for anything in the
+   * Consultation category (see resolveServiceId). That fallback is the same
+   * single line for both tiers, so a senior consultation priced above it
+   * would be recorded in Zenoti at the generic price. Worth saying, not worth
+   * blocking — the appointment itself is created either way.
    */
-  const unmapped = Boolean(tier && service && !service.zenotiServiceId);
+  const usingGenericLine = Boolean(tier && service && !service.zenotiServiceId);
 
   const fee = useMemo(() => {
     if (!tier) return 0;
@@ -236,9 +238,7 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser, preset }:
   const canAdvance =
     step === 0 ? !!guest
       : step === 1 ? !!date && !!time && !dayClosed
-        // An unmapped service is a booking Zenoti will never see — stop here,
-        // where the fix is one sentence away, not after the summary.
-        : step === 2 ? !!tier && !!picked && !unmapped
+        : step === 2 ? !!tier && !!picked
           : true;
 
   const next = () => { setErr(null); setStep((s) => Math.min(STEPS.length - 1, s + 1)); };
@@ -393,9 +393,9 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser, preset }:
             })}
           </div>
 
-          {unmapped && (
-            <Note kind="crit" className="my-0">
-              <B>{service?.name}</B> has no Zenoti service mapped to it, so an appointment booked here would never reach Zenoti. Set it once under <B>Care › Services › {service?.name} › Zenoti service</B> and this will work for every booking afterwards.
+          {usingGenericLine && (
+            <Note className="my-0">
+              This books into Zenoti against its generic <B>Consultation</B> line, which is what happens when no specific service is mapped. To bill it as something else, set one under <B>Care › Services › {service?.name} › Zenoti service</B>.
             </Note>
           )}
 
