@@ -402,6 +402,21 @@ export const schedules = {
       `/dermatologists/${encodeURIComponent(doctorId)}/availability`,
       { query: { from, to, ...(branchId ? { branchId } : {}) } },
     ),
+  /**
+   * Which dermatologists are free at one date and time.
+   *
+   * `branch` narrows it to a centre; leaving it off asks across every clinic,
+   * which is how the desk answers "anyone, anywhere". Each match carries the
+   * centre they are free at, because the same person may work more than one.
+   */
+  whoIsFree: (date: string, time: string, branch?: string | null) =>
+    request<{
+      date: string; time: string; doctorIds: string[];
+      matches: { doctorId: string; branchId: string; branchName: string }[];
+    }>("/dermatologists/any/free", { query: { date, time, ...(branch ? { branch } : {}) } }),
+  /** Merged free times across the whole team, for a date. */
+  anySlots: (date: string, branch?: string | null) =>
+    request<SlotDay>("/dermatologists/any/slots", { query: { date, ...(branch ? { branch } : {}) } }),
   /** Every slot on one date, each flagged booked, too soon, or free. */
   slots: (doctorId: string, date: string, branchId?: string | null) =>
     request<SlotDay>(`/dermatologists/${encodeURIComponent(doctorId)}/slots`, {
