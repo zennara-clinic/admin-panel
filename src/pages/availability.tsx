@@ -450,13 +450,22 @@ export function Schedule({ doctorId: forced }: { doctorId?: string } = {}) {
                       const isOff = ov?.unavailable;
                       const custom = !!ov?.ranges?.length;
                       const free = info?.free ?? 0;
+                      /*
+                       * Nothing rostered on this day. Faded to match what the
+                       * guest sees in the app, but still clickable — this is
+                       * the page where staff GIVE a day its hours, so making
+                       * it inert would remove the only way to fix it.
+                       */
+                      const unrostered = !isOff && (!info || info.total === 0);
 
                       return (
                         <button key={k} onClick={() => setOpenDate(openDate === k ? null : k)}
+                          title={unrostered ? "Nothing rostered — guests cannot book this day" : undefined}
                           className={[
                             "relative rounded-lg border py-1.5 text-[12.5px] transition-colors",
                             openDate === k ? "border-gold-dark bg-cream font-bold" : "border-transparent hover:border-border",
                             isOff ? "text-err line-through" : free > 0 ? "text-ink" : "text-ink3",
+                            unrostered ? "opacity-40" : "",
                           ].join(" ")}>
                           {fromKey(k).getUTCDate()}
                           {/* Free count, so a day that looks open but is fully

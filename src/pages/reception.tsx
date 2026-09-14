@@ -835,6 +835,24 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser, preset }:
     }
   }, [location, date, branches.length]);
 
+  /*
+   * Where this centre's written roster ends.
+   *
+   * A date past it has no staff rostered, so the slot list comes back empty
+   * and used to be reported as "every time on this day is taken" — the desk
+   * then tells a guest the day is full when it has simply not been planned.
+   * The date field also stops there, so the browser's own picker will not
+   * offer a day nobody can work.
+   */
+  const horizon = useApi(async () => {
+    const b = branches.find((x) => x.name === location);
+    if (!b) return null;
+    const from = isoDay();
+    const to = isoDay(new Date(Date.now() + 60 * 86400000));
+    return api.branches.availability(b._id, from, to).catch(() => null);
+  }, [location, branches.length]);
+  const rosteredTo = horizon.data?.rosteredTo ?? null;
+
   const branchDoc = branches.find((x) => x.name === location);
   const hours = centreHours(branchDoc, date);
   const slotList = slots.data?.list ?? [];
@@ -845,7 +863,9 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser, preset }:
       case "setup": return "Pick a centre and a date first.";
       case "closed": return `${location || "This centre"} is closed on this date. Choose another day, or type a time to record it anyway.`;
       case "over": return `The clinic day has finished${hours ? ` — ${location} closes at ${hours.close}` : ""}. Type a time to record an appointment that already happened.`;
-      case "full": return "Every time on this day is taken. Type a time to double-book deliberately.";
+      case "full": return rosteredTo && date > rosteredTo
+        ? `Nobody is rostered on this date — ${location || "this centre"} has planned its diary up to ${fmtDate(rosteredTo)}. Guests cannot book past that day in the app. Type a time to record one anyway.`
+        : "Every time on this day is taken. Type a time to double-book deliberately.";
       case "error": return `Zenoti did not answer, so free times could not be checked${slots.data?.message ? ` (${slots.data.message})` : ""}. Type a time to book without the check.`;
       default: return "";
     }
@@ -999,7 +1019,10 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser, preset }:
               <SecH t="Appointment" em={`· ${lines.length} service${lines.length === 1 ? "" : "s"}`} />
               <div className="grid grid-cols-2 gap-2">
                 <Sel label="Centre" value={location} onChange={setLocation} options={branches.map((b) => b.name)} />
-                <In label="Date" type="date" value={date} onChange={setDate} />
+                <In label="Date" type="date" value={date} onChange={setDate}
+                  min={isoDay()}
+                  max={rosteredTo ?? undefined}
+                  hint={rosteredTo ? `Rostered to ${fmtDate(rosteredTo)}` : undefined} />
               </div>
               {lines.map((l, i) => {
                 const svc = svcOf(l.serviceId);

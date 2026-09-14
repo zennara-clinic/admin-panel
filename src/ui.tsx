@@ -352,14 +352,16 @@ export function Hint({ id, children, steps }: { id: string; children?: ReactNode
 }
 
 /* ---------- inputs ---------- */
-export function In({ label, value, onChange, placeholder, type = "text", full, hint, readOnly }: {
+export function In({ label, value, onChange, placeholder, type = "text", full, hint, readOnly, min, max }: {
   label: string; value: string; onChange: (v: string) => void; placeholder?: string;
   type?: string; full?: boolean; hint?: string; readOnly?: boolean;
+  /** Bounds for a date or number field — the browser's own picker enforces them. */
+  min?: string; max?: string;
 }) {
   return (
     <div className={`flex flex-col gap-1 ${full ? "col-span-full" : ""}`}>
       <label className="text-[11px] font-bold tracking-[0.02em] text-ink2">{label}</label>
-      <input type={type} value={value} placeholder={placeholder} readOnly={readOnly} onChange={(e) => onChange(e.target.value)}
+      <input type={type} value={value} placeholder={placeholder} readOnly={readOnly} min={min} max={max} onChange={(e) => onChange(e.target.value)}
         className={`rounded-lg border border-border px-2.5 py-2 text-[12.5px] text-ink outline-none focus:border-gold-dark ${readOnly ? "cursor-not-allowed bg-surface text-ink3" : "bg-ivory"}`} />
       {hint && <div className="text-[10.5px] text-ink3">{hint}</div>}
     </div>

@@ -70,6 +70,15 @@ export const branches = {
   get: (id: Id) => request<Branch>(`/branches/${id}`),
   slots: (id: Id, date: string) =>
     request<{ slots: string[]; branch?: string; date?: string }>(`/branches/${id}/slots`, { query: { date } }),
+  /**
+   * Which days this centre can take a booking on, and where its written
+   * roster ends. A day past `rosteredTo` is unplanned, not full.
+   */
+  availability: (id: Id, from: string, to: string) =>
+    request<{
+      days: { date: string; open: boolean; total: number; free: number }[];
+      rosteredTo?: string | null; lastOpen?: string | null;
+    }>(`/branches/${id}/availability`, { query: { from, to } }),
   create: (body: Partial<Branch>) => request<Branch>("/branches", { method: "POST", body }),
   update: (id: Id, body: Partial<Branch>) => request<Branch>(`/branches/${id}`, { method: "PUT", body }),
   toggle: (id: Id) => request<Branch>(`/branches/${id}/toggle-status`, { method: "PATCH" }),
