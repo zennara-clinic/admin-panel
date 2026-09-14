@@ -174,6 +174,16 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser, preset }:
       ?? list.find((s) => (tier === "senior-consultant" ? /senior/i : /^(?!.*senior).*consult/i).test(s.name))
       ?? null;
   }, [roster.data?.services, tier]);
+  /*
+   * A service with no Zenoti line cannot be booked into Zenoti.
+   *
+   * syncBooking records the push as `skipped` and the desk gets a 502 having
+   * already filled in four steps — while the booking sits in our database
+   * only, which is exactly the ghost this wizard exists to avoid. Say it at
+   * the step where the tier is chosen, and name the one place it is fixed.
+   */
+  const unmapped = Boolean(tier && service && !service.zenotiServiceId);
+
   const fee = useMemo(() => {
     if (!tier) return 0;
     const t = roster.data?.tiers.find((x) => x.id === tier);
@@ -226,7 +236,9 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser, preset }:
   const canAdvance =
     step === 0 ? !!guest
       : step === 1 ? !!date && !!time && !dayClosed
-        : step === 2 ? !!tier && !!picked
+        // An unmapped service is a booking Zenoti will never see — stop here,
+        // where the fix is one sentence away, not after the summary.
+        : step === 2 ? !!tier && !!picked && !unmapped
           : true;
 
   const next = () => { setErr(null); setStep((s) => Math.min(STEPS.length - 1, s + 1)); };
@@ -380,6 +392,12 @@ export function NewBookingModal({ open, onClose, onBooked, presetUser, preset }:
               );
             })}
           </div>
+
+          {unmapped && (
+            <Note kind="crit" className="my-0">
+              <B>{service?.name}</B> has no Zenoti service mapped to it, so an appointment booked here would never reach Zenoti. Set it once under <B>Care › Services › {service?.name} › Zenoti service</B> and this will work for every booking afterwards.
+            </Note>
+          )}
 
           {free.loading ? <Loading label="Asking Zenoti who is free…" rows={3} />
             : !tier ? <div className="text-[12px] text-ink3">Choose a tier to see who is free.</div>
