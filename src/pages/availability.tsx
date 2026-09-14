@@ -418,6 +418,26 @@ export function Schedule({ doctorId: forced }: { doctorId?: string } = {}) {
                       </div>
                     } />
 
+                  {/*
+                    * Where Zenoti's roster runs out.
+                    *
+                    * A month past it paints as every day empty, which reads as
+                    * "fully booked" when it means "not written yet" — and it is
+                    * the single most common reason a guest is told there are no
+                    * appointments. Say which it is, and say it on the screen
+                    * where someone would go looking.
+                    */}
+                  {!!days.data?.rosteredTo && (
+                    <Note className={`my-0 mb-3 ${monthRange.from > days.data.rosteredTo ? "" : "hidden"}`} kind="crit">
+                      Nothing is rostered in this month. Zenoti has shifts written up to <B>{fmtDayKey(days.data.rosteredTo, { day: "numeric", month: "short", year: "numeric" })}</B> — guests cannot book past that date in the app until the roster is published further ahead.
+                    </Note>
+                  )}
+                  {!!days.data?.rosteredTo && monthRange.from <= days.data.rosteredTo && monthRange.to > days.data.rosteredTo && (
+                    <Note className="my-0 mb-3">
+                      The roster ends on <B>{fmtDayKey(days.data.rosteredTo, { day: "numeric", month: "short", year: "numeric" })}</B>. Days after it are unwritten, not full — guests see no appointments beyond it.
+                    </Note>
+                  )}
+
                   <div className="grid grid-cols-7 gap-1 text-center">
                     {DAY_SHORT.map((d, i) => (
                       <div key={i} className="pb-1 font-mono text-[9px] font-bold uppercase tracking-[0.1em] text-ink3">{d}</div>
