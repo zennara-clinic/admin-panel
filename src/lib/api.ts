@@ -464,6 +464,7 @@ export const products = {
   stockMovements: (id: string, limit = 100) => request<{ success: boolean; data: ProductStockMovement[] }>(`/admin/products/${id}/stock-movements?limit=${limit}`).then((r) => r.data),
   appStockPreview: (file: File) => { const form = new FormData(); form.append("file", file); return request<AppStockImportResult>("/admin/products/app-stock/preview", { method: "POST", body: form }); },
   appStockImport: (file: File) => { const form = new FormData(); form.append("file", file); return requestRaw<AppStockImportResult>("/admin/products/app-stock/import", { method: "POST", body: form }); },
+  appStockTemplatePath: (kind: "import" | "export") => `/admin/products/app-stock/template?kind=${kind}`,
   appStockExportPath: (q?: Query) => `/admin/products/app-stock/export${q ? "?" + new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined && v !== null && v !== "").map(([k, v]) => [k, String(v)])).toString() : ""}`,
   update: (id: Id, body: Partial<Product>) => request<Product>(`/admin/products/${id}`, { method: "PUT", body }),
   remove: (id: Id) => requestRaw(`/admin/products/${id}`, { method: "DELETE" }),

@@ -1887,7 +1887,8 @@ export type ProductStockMovement = {
 
 export type AppStockImportResult = {
   sheets: { sheetName: string; kind: "template" | "classification"; classification: "otc" | "rx" | null; rows: number; skipped: number }[];
-  matched: number; unmatched: number; willUpdate: number; willPublish: number; willUnpublish: number; rxFlagged: number;
-  applied?: number; published?: number; unpublished?: number;
-  samples: { unmatched: string[]; changes: { name: string; code?: string | null; fields: string[] }[] };
+  hasClassification?: boolean;
+  matched: number; unmatched: number; willCreate?: number; willUpdate: number; unchanged?: number; willPublish: number; willUnpublish: number; rxFlagged: number;
+  applied?: number; created?: number; published?: number; unpublished?: number; failed?: string[];
+  samples: { unmatched: string[]; changes: { name: string; code?: string | null; fields: string[] }[]; creates?: { name: string; code: string; price: number | null; stock: number | null }[] };
 };

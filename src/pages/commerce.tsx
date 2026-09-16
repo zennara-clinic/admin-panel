@@ -111,14 +111,18 @@ export function Products() {
           <button onClick={() => setGrid(true)} className={`px-3 py-2 text-[12.5px] font-bold ${grid ? "bg-primary text-white" : "bg-surface text-ink2"}`}>▦ Grid</button>
         </div>
         {can("products.manage") && scope === "app" && <Btn kind="ghost" onClick={() => setCentreBulkOpen(true)}>Centre visibility…</Btn>}
-        {can("products.manage") && <Btn kind="ghost" onClick={() => setImportOpen(true)}>Import template</Btn>}
-        <Btn kind="ghost" onClick={() => download(api.products.appStockExportPath({ catalogue: scope === "app" ? "app" : "all" }), `AppStock_Template_${scope === "app" ? "Commerce" : "AllProducts"}.xlsx`).catch((e) => toastMsg((e as Error).message))}>Export template</Btn>
+        {can("products.manage") && <Btn kind="ghost" onClick={() => setImportOpen(true)}>Import</Btn>}
+        <Btn kind="ghost" onClick={() => download(api.products.appStockExportPath({ catalogue: scope === "app" ? "app" : "all" }), `Zennara_Products_${scope === "app" ? "Commerce" : "All"}.xlsx`).catch((e) => toastMsg((e as Error).message))}>Export</Btn>
+        <Menu align="right" button={<MenuButton kind="ghost">Templates</MenuButton>} items={[
+          { label: "Import template", onClick: () => { download(api.products.appStockTemplatePath("import"), "Zennara_Product_Import_Template.xlsx").catch((e) => toastMsg((e as Error).message)); } },
+          { label: "Export template", onClick: () => { download(api.products.appStockTemplatePath("export"), "Zennara_Product_Export_Template.xlsx").catch((e) => toastMsg((e as Error).message)); } },
+        ]} />
         {can("products.manage") && <Btn onClick={() => setAddOpen(true)}>+ New product</Btn>}
       </>}>
       <Hint id="products-live" steps={[
         "This is the live retail catalogue the app sells from — formulation tabs mirror the app's filters.",
         "Click any product to open it on the right: name, price, stock, image and app visibility.",
-        "Use the Low stock filter before ordering day, and Export CSV for the purchase list.",
+        "Import updates products from a filled sheet and adds new codes; Export downloads the products; Templates gives the blank sheet.",
         "Stock edits here are audited with your name.",
       ]} />
 
@@ -1421,10 +1425,10 @@ function RefundModal({ open, order, onClose, onDone }: { open: boolean; order: P
 
 /* ------------------------------ App Stock import ------------------------------ */
 /**
- * The pharmacy's App Stock template (or its Rx/OTC classification sheet) →
- * the Commerce catalogue. Preview first, then apply. Matches products that
- * already exist here by code, then name; never creates and never writes to
- * Zenoti.
+ * A filled product sheet (or the pharmacy's Rx/OTC classification sheet) →
+ * the Commerce catalogue. Preview first, then apply. Rows match products by
+ * code, then name; a template row with a new code, a name and a price adds a
+ * hidden product. Never writes to Zenoti.
  */
 function AppStockImportModal({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: () => void }) {
   const { toast } = useStore();
@@ -1441,8 +1445,8 @@ function AppStockImportModal({ open, onClose, onDone }: { open: boolean; onClose
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   };
   return (
-    <Modal open={open} onClose={onClose} title="Import the App Stock template" wide>
-      <Note className="mt-0">Upload the <B>App Stock template</B> (stock, prices, GST, re-order and target levels, pack, vendor, status) or the <B>Rx vs OTC sheet</B> (which products sell directly and which are prescription). Rows match products by code, then by name. Nothing is written to Zenoti.</Note>
+    <Modal open={open} onClose={onClose} title="Import products" wide>
+      <Note className="mt-0">Upload a filled <B>product sheet</B> (from Templates › Import template, or an Export you have edited) or the <B>Rx vs OTC sheet</B>. Rows match products by code, then by name. A new code adds the product, hidden until you switch it on. Only fields whose value differs are changed. Nothing is written to Zenoti.</Note>
       <div className="mt-3">
         <input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => { setFile(e.target.files?.[0] ?? null); setPreview(null); setErr(null); }}
           className="rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[12.5px] file:mr-2 file:rounded file:border-0 file:bg-ivory file:px-2 file:py-1 file:text-[12px]" />
@@ -1450,17 +1454,33 @@ function AppStockImportModal({ open, onClose, onDone }: { open: boolean; onClose
       {err && <Note kind="crit" className="mt-3">{err}</Note>}
       {preview && (
         <>
-          <div className="mt-3 grid gap-2 sm:grid-cols-5">
-            {[["Sheets", preview.sheets.map((s) => `${s.sheetName} ${s.rows}`).join(" · ")], ["Matched", String(preview.matched)], ["Not found", String(preview.unmatched)], ["Will publish", String(preview.willPublish)], ["Rx, off the app", String(preview.willUnpublish)]].map(([k, v]) => (
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+            {([
+              ["Rows read", String(preview.sheets.reduce((n, s) => n + s.rows, 0))],
+              ["Will change", String(preview.willUpdate)],
+              ["Already up to date", String(preview.unchanged ?? 0)],
+              ["New products", String(preview.willCreate ?? 0)],
+              ["Skipped", String(preview.unmatched)],
+              ...(preview.hasClassification ? [["Goes live in app", String(preview.willPublish)], ["Rx, off the app", String(preview.willUnpublish)]] : []),
+            ] as [string, string][]).map(([k, v]) => (
               <div key={k} className="rounded-xl border border-border bg-ivory px-3 py-2"><div className="text-[10px] font-bold uppercase tracking-wider text-ink3">{k}</div><div className="text-[13px] font-extrabold">{v}</div></div>
             ))}
           </div>
+          {preview.willUpdate === 0 && !(preview.willCreate) && <Note className="mt-2">Every row already matches what is saved. Applying this file changes nothing.</Note>}
           {preview.samples.changes.length > 0 && (
             <div className="mt-2 max-h-56 overflow-y-auto rounded-lg border border-border text-[12px]">
-              {preview.samples.changes.map((c) => <div key={c.name} className="flex flex-wrap items-center gap-x-2 border-b border-border/60 px-3 py-1.5"><B>{c.name}</B><span className="font-mono text-[10.5px] text-ink3">{c.code ?? ""}</span><span className="text-ink3">{c.fields.join(" · ")}</span></div>)}
+              {preview.samples.changes.map((c) => <div key={`${c.code}-${c.name}`} className="flex flex-wrap items-center gap-x-2 border-b border-border/60 px-3 py-1.5"><B>{c.name}</B><span className="font-mono text-[10.5px] text-ink3">{c.code ?? ""}</span><span className="text-ink3">{c.fields.join(" · ")}</span></div>)}
+              {preview.willUpdate > preview.samples.changes.length && <div className="px-3 py-1.5 text-ink3">and {preview.willUpdate - preview.samples.changes.length} more</div>}
             </div>
           )}
-          {preview.unmatched > 0 && <Note kind="crit" className="mt-2">{preview.unmatched} row{preview.unmatched === 1 ? "" : "s"} did not match any product here and will be skipped: {preview.samples.unmatched.slice(0, 5).join(", ")}. Products arrive from Zenoti on the hourly sync — nothing is created from the sheet.</Note>}
+          {(preview.samples.creates?.length ?? 0) > 0 && (
+            <div className="mt-2 max-h-40 overflow-y-auto rounded-lg border border-border text-[12px]">
+              <div className="border-b border-border/60 bg-ivory px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-ink3">Will be added, hidden until switched on</div>
+              {preview.samples.creates!.map((c) => <div key={c.code} className="flex flex-wrap items-center gap-x-2 border-b border-border/60 px-3 py-1.5"><B>{c.name}</B><span className="font-mono text-[10.5px] text-ink3">{c.code}</span><span className="text-ink3">{c.price != null ? fmtINR(c.price) : ""}{c.stock != null ? ` · stock ${c.stock}` : ""}</span></div>)}
+              {(preview.willCreate ?? 0) > preview.samples.creates!.length && <div className="px-3 py-1.5 text-ink3">and {(preview.willCreate ?? 0) - preview.samples.creates!.length} more</div>}
+            </div>
+          )}
+          {preview.unmatched > 0 && <Note kind="crit" className="mt-2">{preview.unmatched} row{preview.unmatched === 1 ? "" : "s"} will be skipped: {preview.samples.unmatched.slice(0, 5).join(", ")}{preview.unmatched > 5 ? "…" : ""}</Note>}
         </>
       )}
       <div className="mt-4 flex justify-end gap-2">
