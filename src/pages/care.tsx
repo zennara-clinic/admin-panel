@@ -1134,6 +1134,8 @@ function PackageEditor({ open, pkg, seed, onClose, onSaved, onDelete, onClone }:
         price,
         services: included.map((it) => ({
           serviceId: findSvc(it.serviceId)?._id ?? it.serviceId,
+          // A mirrored Zenoti line with no catalogue match keeps its name, so the server can keep the line.
+          serviceName: it.serviceName ?? it.name,
           sessions: Math.max(1, it.sessions ?? 1),
           redemptionOrder: Math.max(1, it.redemptionOrder ?? 1),
           ...(it.customPrice !== undefined && it.customPrice !== null ? { customPrice: Number(it.customPrice) } : {}),
