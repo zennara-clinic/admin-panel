@@ -359,31 +359,6 @@ function runLabel(r: ZenotiSyncRun | null | undefined) {
   return `${when}`;
 }
 
-/** Can what is created here reach Zenoti? The honest checklist. */
-function PublishHours() {
-  const { toast, can } = useStore();
-  const [busy, setBusy] = useState<"plan" | "publish" | null>(null);
-  const [result, setResult] = useState<{ planned: number; written: number; alreadyWorking: number; failed: number; dryRun: boolean; wouldWrite?: number; errors: string[]; mode: string } | null>(null);
-  if (!can("zenoti.manage")) return null;
-  const run = async (dryRun: boolean) => {
-    setBusy(dryRun ? "plan" : "publish");
-    try { const r = await api.zenoti.publishDoctorHours({ dryRun }); setResult(r); toast(dryRun ? `Would write ${r.wouldWrite ?? 0} shifts` : `${r.written} shifts written to Zenoti${r.failed ? `, ${r.failed} failed` : ""}`); }
-    catch (e) { toast((e as Error).message); } finally { setBusy(null); }
-  };
-  return (
-    <div className="mt-3 flex flex-wrap items-center gap-2 text-[12px]">
-      <Btn kind="ghost" disabled={!!busy} onClick={() => run(true)}>{busy === "plan" ? "Checking…" : "Preview shifts to publish"}</Btn>
-      <Btn disabled={!!busy} onClick={() => run(false)}>{busy === "publish" ? "Publishing…" : "Publish dermatologist hours to Zenoti"}</Btn>
-      {result && (
-        <span className="text-ink3">
-          {result.dryRun ? `Plan: ${result.planned} doctor-days, ${result.wouldWrite ?? 0} to write, ${result.alreadyWorking} already scheduled in Zenoti` : `Written ${result.written}, already scheduled ${result.alreadyWorking}, failed ${result.failed}`}
-          {result.mode !== "live" && " · write mode is not live, nothing was sent"}
-          {result.errors.length > 0 && ` · ${result.errors[0]}`}
-        </span>
-      )}
-    </div>
-  );
-}
 
 /** Is everything flowing, both ways? Shown at the top of the Zenoti page. */
 function SyncHealth() {
@@ -492,9 +467,8 @@ function ReadinessCard() {
         </div>
       )}
       {r.clinics.some((c) => c.schedulesPublished === false) && (
-        <Note kind="crit" className="mt-2">Zenoti's slot engine offers nothing while staff shifts are "NotScheduled", so appointments created here cannot be written into Zenoti. Publish the dermatologists' panel hours into Zenoti below (runs nightly too); only days Zenoti has nothing scheduled are written, and shifts the clinic set are never touched.</Note>
+        <Note kind="crit" className="mt-2">No staff shifts are written in Zenoti for this centre, so nothing there is bookable — in the app, at the desk, or in Zenoti itself. Shifts, leave and block-outs are set only in Zenoti's Employee Schedule; this panel reads them live and never writes one.</Note>
       )}
-      <PublishHours />
     </Card>
   );
 }

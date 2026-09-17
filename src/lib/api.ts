@@ -23,7 +23,7 @@ import type {
   CurrentStockRow, StockSummary, StockCount, StockTransfer, StockValuation, StockImportResult,
   MessageTemplate, StaffSalesRow, InvoiceSummary, AppStockImportResult, ProductStockMovement,
   AnalyticsSeries, MonthlyRevenueRow, PatientAcquisitionRow, GuestWindow, GuestDemographics, GuestSourceRow, GuestSources,
-  LifecycleAction, LifecycleState,
+  LifecycleAction, LifecycleState, ZenotiRoster,
 } from "./types";
 
 /* ============================ auth ============================ */
@@ -377,7 +377,7 @@ export const schedules = {
   dayShifts: (date: string, branchId?: string | null) =>
     request<DayBook>("/dermatologists/day-shifts", { query: { date, ...(branchId ? { branchId } : {}) } }),
   get: (doctorId: string) =>
-    request<{ dermatologist: Doctor; schedule: DermatologistSchedule; canEdit: boolean; scheduleAuthority?: "zenoti" | "local"; authorityMessage?: string }>(
+    request<{ dermatologist: Doctor; schedule: DermatologistSchedule; canEdit: boolean; scheduleAuthority?: "zenoti" | "local"; authorityMessage?: string; roster?: ZenotiRoster }>(
       `/dermatologists/${encodeURIComponent(doctorId)}/schedule`,
     ),
   save: (doctorId: string, body: Partial<DermatologistSchedule>) =>
@@ -1303,9 +1303,6 @@ export const zenoti = {
   catalogServices: (q?: Query) => request<ZenotiCatalogService[]>("/admin/zenoti/catalog/services", { query: q }),
   catalogPackages: (q?: Query) => request<ZenotiCatalogPackage[]>("/admin/zenoti/catalog/packages", { query: q }),
   readiness: () => request<ZenotiReadiness>("/admin/zenoti/readiness"),
-  /** Publish dermatologists' panel hours into Zenoti as Working shifts (dryRun returns the plan). */
-  publishDoctorHours: (body?: { days?: number; doctorId?: string; dryRun?: boolean }) =>
-    request<{ planned: number; written: number; alreadyWorking: number; failed: number; dryRun: boolean; wouldWrite?: number; errors: string[]; mode: string }>("/admin/zenoti/publish-doctor-hours", { method: "POST", body: body ?? {} }),
   /** App doctors + Zenoti-only doctors for reporting filters; never an app roster endpoint. */
   practitioners: () => request<ReportingPractitioner[]>("/admin/zenoti/practitioners"),
   syncPractitioners: () => request<unknown>("/admin/zenoti/practitioners/sync", { method: "POST" }),

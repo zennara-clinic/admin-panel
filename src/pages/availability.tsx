@@ -4,7 +4,8 @@ import { useApi } from "../lib/useApi";
 import { useMyDoctor } from "../lib/useMe";
 import { Async, B, Btn, Card, Empty, Note, Page, SecH, Switch, Tag } from "../ui";
 import { useStore } from "../store";
-import type { ScheduleOverride, TimeRange, WeeklyBlock } from "../lib/types";
+import type { ScheduleOverride, TimeRange, WeeklyBlock, ZenotiRoster,
+} from "../lib/types";
 import { SESSION_SLOT_MINUTES } from "../lib/scheduling";
 import { clinicMonthEnd, clinicMonthStart, dayKeyDate, fmtDayKey, isoDay } from "../lib/format";
 
@@ -97,6 +98,45 @@ function Ranges({
 /* -------------------------------------------------------------------------
  * The page
  * ---------------------------------------------------------------------- */
+
+/**
+ * Zenoti's roster for the next four weeks, exactly as Zenoti holds it.
+ *
+ * One row per clinic day and centre: Working with the hours, Leave, or Not
+ * scheduled. This is the schedule every booking surface uses, so a day that
+ * looks wrong here is corrected in Zenoti's Employee Schedule — this panel
+ * never writes a shift.
+ */
+function ZenotiRosterList({ roster }: { roster?: ZenotiRoster | null }) {
+  if (!roster) return null;
+  if (roster.error) return <Note kind="crit" className="mt-3 mb-0">Zenoti's roster could not be read just now: {roster.error}</Note>;
+  if (!roster.centres.length) return <Note className="mt-3 mb-0">This dermatologist has no Zenoti employee link at any clinic, so Zenoti has no roster for them.</Note>;
+  const rows = roster.days.flatMap((d) => d.entries.filter((e) => e.state !== "not-scheduled").map((e) => ({ date: d.date, ...e })));
+  const workingDays = new Set(rows.filter((r) => r.state === "working").map((r) => r.date)).size;
+  return (
+    <div className="mt-3">
+      <div className="mb-1.5 text-[11px] font-bold uppercase tracking-[0.06em] text-ink3">
+        Zenoti roster · {fmtDayKey(roster.from, { day: "numeric", month: "short" })} – {fmtDayKey(roster.to, { day: "numeric", month: "short", year: "numeric" })} · {workingDays} working day{workingDays === 1 ? "" : "s"} at {roster.centres.map((c) => c.branchName).join(", ")}
+      </div>
+      {rows.length === 0 ? (
+        <div className="text-[12.5px] text-ink3">Nothing rostered in Zenoti for these four weeks — no day is bookable until the clinic writes shifts there.</div>
+      ) : (
+        <div className="max-h-72 overflow-y-auto rounded-lg border border-border">
+          {rows.map((r, i) => (
+            <div key={`${r.date}-${r.branchId}-${i}`} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 border-b border-border px-2.5 py-1.5 text-[12px] last:border-0">
+              <span className="font-semibold text-ink">{fmtDayKey(r.date, { weekday: "short", day: "numeric", month: "short" })}</span>
+              <span className="text-ink3">{r.branchName}</span>
+              <span className={r.state === "working" ? "text-ok" : "text-err"}>
+                {r.state === "working" ? r.ranges.map((x) => `${x.start}–${x.end}`).join(", ") : `On leave${r.leaveCode ? ` (Zenoti code ${r.leaveCode})` : ""}`}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="mt-1.5 text-[11px] text-ink3">Days not listed are not scheduled in Zenoti and cannot be booked.</div>
+    </div>
+  );
+}
 
 /**
  * Named `Schedule`, not `Availability` — the existing Availability page is
@@ -314,8 +354,10 @@ export function Schedule({ doctorId: forced }: { doctorId?: string } = {}) {
                   <p className="text-[12.5px] leading-relaxed text-ink2">
                     Set them in Zenoti. This panel reads them back live — the calendar
                     opposite is what guests can actually book, and updates on its own
-                    within about ten seconds of a change.
+                    within about ten seconds of a change. Nothing here is ever written
+                    back to Zenoti.
                   </p>
+                  <ZenotiRosterList roster={loaded.data?.roster} />
                 </Card>
               ) : (
               <Card className="min-w-0 p-4">

@@ -1892,3 +1892,17 @@ export type AppStockImportResult = {
   applied?: number; created?: number; published?: number; unpublished?: number; failed?: string[];
   samples: { unmatched: string[]; changes: { name: string; code?: string | null; fields: string[] }[]; creates?: { name: string; code: string; price: number | null; stock: number | null }[] };
 };
+
+/** Zenoti's roster for one dermatologist, day by day and per centre — read live, never edited here. */
+export type ZenotiRosterEntry = {
+  branchId: string; branchName: string;
+  state: "working" | "leave" | "not-scheduled";
+  ranges: { start: string; end: string }[];
+  leaveCode?: number;
+};
+export type ZenotiRoster = {
+  source: string; from: string; to: string;
+  centres: { branchId: string; branchName: string; zenotiCenterId: string }[];
+  days: { date: string; entries: ZenotiRosterEntry[] }[];
+  error?: string;
+};
