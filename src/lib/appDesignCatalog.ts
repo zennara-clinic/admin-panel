@@ -251,7 +251,7 @@ export const COPY_GROUPS: CopyGroup[] = [
     { key: "shop.seeAll", label: "see all", default: "See all products" },
     { key: "shop.all.title", label: "all \u2014 title", default: "All products" },
     { key: "shop.byConcern", label: "by concern", default: "Shop by concern" },
-    { key: "shop.byCategory", label: "by category", default: "Shop by category" },
+    { key: "shop.byCategory", label: "by products", default: "Shop by products" },
   ]},
   { title: "Treatments tab", entries: [
     { key: "treatments.tiers.heading", label: "tiers \u2014 heading", default: "Who would you like to see?" },
