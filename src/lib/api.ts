@@ -471,8 +471,12 @@ export const products = {
   toggle: (id: Id) => request<Product>(`/admin/products/${id}/toggle-status`, { method: "PATCH" }),
   setStock: (id: Id, stock: number) =>
     request<Product>(`/admin/products/${id}/stock`, { method: "PATCH", body: { stock } }),
-  /** Plain field sets, or `{ centreListing: { branchId, visible?, price?, pickup? } }` to merge one centre's listing onto every product. */
-  bulkUpdate: (productIds: Id[], updates: Partial<Product> | { centreListing: { branchId: Id; visible?: boolean; price?: number | null; pickup?: boolean } }) =>
+  /**
+   * Plain field sets, `{ centreListing: { branchId, visible?, price?, pickup? } }` to merge one
+   * centre's listing onto every product, or `{ collection: { slug, on } }` to put every product
+   * on a shelf (or take it off) without touching the other shelves it is on.
+   */
+  bulkUpdate: (productIds: Id[], updates: Partial<Product> | { centreListing: { branchId: Id; visible?: boolean; price?: number | null; pickup?: boolean } } | { collection: { slug: string; on: boolean } }) =>
     requestRaw<{ modifiedCount?: number }>("/admin/products/bulk-update", { method: "PATCH", body: { productIds, updates } }),
 };
 

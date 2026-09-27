@@ -805,10 +805,43 @@ export type SupportMessage = {
 /* ---------------- commerce ---------------- */
 export type CentreListing = { branchId: Id; branchName?: string; visible: boolean; price: number | null; pickup: boolean };
 
+/** One entry of the shop menu (Backend utils/productTaxonomy.js), with how many products it holds. */
+export type ShopMenuItem = { slug: string; name: string; blurb?: string; icon?: string; count: number };
+export type ShopTaxonomy = {
+  total: number;
+  collections: ShopMenuItem[];
+  categories: ShopMenuItem[];
+  concerns: ShopMenuItem[];
+  concernAreas: { slug: string; name: string; concerns: ShopMenuItem[] }[];
+};
+/** The long-form product page. Every part is optional; the app shows what is filled. */
+export type ProductDetails = {
+  overview?: string;
+  benefits?: string[];
+  keyIngredients?: string[];
+  ingredients?: string;
+  howToUse?: string[];
+  suitableFor?: string;
+  manufacturer?: string;
+  countryOfOrigin?: string;
+};
+
 export type Product = {
   _id: Id;
   name: string;
   description: string;
+  /** One line for cards and search results. */
+  shortDescription?: string;
+  slug?: string | null;
+  /** Every category the product is filed under; `productCategory` is the main one. */
+  categories?: string[];
+  /** Concern slugs (acne, pigmentation, hairfall…). */
+  concerns?: string[];
+  /** Shelves: 'bestseller' | 'new-arrival' | 'kids'. Bestseller mirrors `isPopular`. */
+  shopCollections?: string[];
+  details?: ProductDetails | null;
+  /** Which catalogue load created the row; null = made in the panel. */
+  catalogueSource?: string | null;
   formulation: string;
   OrgName: string;
   code?: string;

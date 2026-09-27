@@ -7,7 +7,7 @@ import api from "../lib/api";
 import { useApi, useDebounced } from "../lib/useApi";
 import { useQueryNumber, useQueryPage, useQueryString } from "../lib/useListState";
 import { fmtDate, fmtDateFull, fmtINR, fmtCompactINR, idOf, isoDay, nameOf } from "../lib/format";
-import type { Branch, Brand, CentreListing, Coupon, Formulation, OrderStatus, Product, ProductOrder, AppStockImportResult, ProductStockMovement } from "../lib/types";
+import type { Branch, Brand, CentreListing, Coupon, Formulation, OrderStatus, Product, ProductDetails, ProductOrder, AppStockImportResult, ProductStockMovement, ShopTaxonomy } from "../lib/types";
 import { download } from "../lib/http";
 
 /* ================= PRODUCTS ================= */
@@ -51,14 +51,25 @@ export function Products() {
   const [fStock, setFStock] = useState("all");
   const [fHsn, setFHsn] = useState("");
   const dHsn = useDebounced(fHsn, 300);
+  // The shop's other two axes: the shelf a product is on, and the concern it is filed under.
+  const [fShelf, setFShelf] = useQueryString("shelf", "");
+  const [fConcern, setFConcern] = useQueryString("concern", "");
+  const [shelfBulkOpen, setShelfBulkOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const q = useApi(() => api.products.list({
     search: debounced || undefined, catalogue: scope === "app" ? "app" : "master",
     kind: scope === "app" || kind === "all" ? undefined : kind, branchId: centre || undefined,
     category: fCat === "All" ? undefined : fCat, subCategory: fSub === "All" ? undefined : fSub, vendor: fVendor === "All" ? undefined : fVendor,
     status: fStatus === "All" ? undefined : fStatus, stockFilter: fStock === "all" ? undefined : fStock, hsn: dHsn || undefined,
+    collection: fShelf || undefined, concern: fConcern || undefined,
     ...shopParams,
-  }), [debounced, kind, centre, scope, fCat, fSub, fVendor, fStatus, fStock, dHsn, shopFilter]);
+  }), [debounced, kind, centre, scope, fCat, fSub, fVendor, fStatus, fStock, dHsn, shopFilter, fShelf, fConcern]);
+  // The shop menu with counts — every shelf and concern, the empty ones included.
+  const taxonomy = (q.data as { taxonomy?: ShopTaxonomy } | undefined)?.taxonomy;
+  const shelves = taxonomy?.collections ?? [];
+  const concerns = taxonomy?.concerns ?? [];
+  const concernName = useMemo(() => new Map(concerns.map((c) => [c.slug, c.name])), [concerns]);
+  const shelfName = useMemo(() => new Map(shelves.map((c) => [c.slug, c.name])), [shelves]);
   const facets = (q.data as { facets?: { categories: string[]; subCategories: string[]; vendors: string[]; statuses: string[] } } | undefined)?.facets;
   const stats = useApi(() => api.products.statistics().catch(() => undefined), []);
 
@@ -110,6 +121,7 @@ export function Products() {
           <button onClick={() => setGrid(false)} className={`px-3 py-2 text-[12.5px] font-bold ${!grid ? "bg-primary text-white" : "bg-surface text-ink2"}`}><span className="inline-flex items-center gap-1.5"><List size={13} /> List</span></button>
           <button onClick={() => setGrid(true)} className={`px-3 py-2 text-[12.5px] font-bold ${grid ? "bg-primary text-white" : "bg-surface text-ink2"}`}>▦ Grid</button>
         </div>
+        {can("products.manage") && scope === "app" && <Btn kind="ghost" onClick={() => setShelfBulkOpen(true)}>Shelves &amp; stock…</Btn>}
         {can("products.manage") && scope === "app" && <Btn kind="ghost" onClick={() => setCentreBulkOpen(true)}>Centre visibility…</Btn>}
         {can("products.manage") && <Btn kind="ghost" onClick={() => setImportOpen(true)}>Import</Btn>}
         <Btn kind="ghost" onClick={() => download(api.products.appStockExportPath({ catalogue: scope === "app" ? "app" : "all" }), `Zennara_Products_${scope === "app" ? "Commerce" : "All"}.xlsx`).catch((e) => toastMsg((e as Error).message))}>Export</Btn>
@@ -120,7 +132,7 @@ export function Products() {
         {can("products.manage") && <Btn onClick={() => setAddOpen(true)}>+ New product</Btn>}
       </>}>
       <Hint id="products-live" steps={[
-        "This is the live retail catalogue the app sells from — formulation tabs mirror the app's filters.",
+        "This is the live catalogue the app sells from. Guests find a product three ways: by shelf (Bestsellers, New arrivals, Kids), by category and by concern.",
         "Click any product to open it on the right: name, price, stock, image and app visibility.",
         "Import updates products from a filled sheet and adds new codes; Export downloads the products; Templates gives the blank sheet.",
         "Stock edits here are audited with your name.",
@@ -133,7 +145,7 @@ export function Products() {
           { k: "Stock value", v: fmtCompactINR(st.totalValue), d: `avg ${fmtINR(st.avgPrice)}` },
           { k: "Low stock", v: st.lowStock ?? 0, hot: (st.lowStock ?? 0) > 0 },
           { k: "Out of stock", v: st.outOfStock ?? 0, tone: (st.outOfStock ?? 0) > 0 ? "dn" : undefined },
-          { k: "Popular", v: st.popular ?? 0, d: "pinned to the app home" },
+          { k: "Bestsellers", v: st.popular ?? 0, d: "lead the shop and the app home" },
         ]} />
       )}
 
@@ -151,9 +163,15 @@ export function Products() {
         {() => (
           <>
             <div data-tour="prod-tabs" />
-            <Note className="mb-2">The app's catalogue — the pharmacy's OTC list, {buckets?.app ?? rows.length} products. Categories, brands and formulations come from the sheet and from each product's own page. Stock, prices, HSN, vendor and re-order levels are edited here or re-imported from the App Stock template. Nothing on this page is written to Zenoti.</Note>
+            <Note className="mb-2">The app's catalogue — {buckets?.app ?? rows.length} products. Each product is filed under a category and the concerns it helps with, and can be put on a shelf (Bestsellers, New arrivals, Kids); all three are set on the product's own page or in bulk with <b>Shelves &amp; stock</b>. Stock, prices, HSN, vendor and re-order levels are edited here or re-imported from the App Stock template. Nothing on this page is written to Zenoti.</Note>
             <div className="mb-2 flex flex-wrap items-end gap-3">
+              <Sel label="Shelf" value={fShelf ? shelfName.get(fShelf) ?? "All products" : "All products"}
+                options={["All products", ...shelves.map((c) => `${c.name} (${c.count})`)]}
+                onChange={(v) => setFShelf(shelves.find((c) => v.startsWith(c.name))?.slug ?? "")} />
               <Sel label="Category" value={fCat} onChange={(v) => { setFCat(v); setFSub("All"); }} options={["All", ...(facets?.categories ?? [])]} />
+              <Sel label="Concern" value={fConcern === "none" ? "No concern set" : fConcern ? concernName.get(fConcern) ?? "Any" : "Any"}
+                options={["Any", ...concerns.filter((c) => c.count > 0).map((c) => c.name), "No concern set"]}
+                onChange={(v) => setFConcern(v === "No concern set" ? "none" : concerns.find((c) => c.name === v)?.slug ?? "")} />
               <Sel label="Sub category" value={fSub} onChange={setFSub} options={["All", ...(facets?.subCategories ?? [])]} />
               <Sel label="Vendor" value={fVendor} onChange={setFVendor} options={["All", ...(facets?.vendors ?? [])]} />
               <In label="HSN" value={fHsn} onChange={setFHsn} placeholder="e.g. 3304" />
@@ -208,12 +226,18 @@ export function Products() {
                   : ["Product", "Code", "Category", "Type", "Price", "MRP", "GST", "Centres", "In app"]}
                 onRow={(i) => setSel(list[i])}
                 rows={list.map((p) => scope === "app" ? [
-                  <span key={p._id}><B>{p.name}{p.isPopular ? <Star size={11} className="ml-1 inline fill-current text-gold-dark" /> : null}</B>{p.packName || p.packSize ? <span className="ml-1 text-[10.5px] text-ink3">{[p.packSize, p.packName].filter(Boolean).join(" ")}</span> : null}{!p.image ? <span className="ml-1 text-[10px] text-warn">no photo</span> : null}</span>,
+                  <span key={p._id}><B>{p.name}{p.isPopular ? <Star size={11} className="ml-1 inline fill-current text-gold-dark" /> : null}</B>{p.packName || p.packSize ? <span className="ml-1 text-[10.5px] text-ink3">{[p.packSize, p.packName].filter(Boolean).join(" ")}</span> : null}{(p.shopCollections ?? []).filter((c) => c !== "bestseller").map((c) => <Tag key={c} kind="info">{shelfName.get(c) ?? c}</Tag>)}{p.isRx ? <Tag kind="warn">Rx</Tag> : null}{!p.image ? <span className="ml-1 text-[10px] text-warn">no photo</span> : null}{p.brand && p.brand !== "Zennara" ? <div className="text-[10.5px] font-normal text-ink3">{p.brand}</div> : null}</span>,
                   <span key={`${p._id}c`} className="font-mono text-[11px]">{p.code ?? p.sku ?? "—"}</span>,
-                  <span key={`${p._id}cat`} className="text-[11.5px]">{p.productCategory ?? "—"}{p.productSubCategory ? <div className="text-[10.5px] text-ink3">{p.productSubCategory}</div> : null}</span>,
+                  <span key={`${p._id}cat`} className="text-[11.5px]">{p.productCategory ?? "—"}{(p.categories ?? []).filter((c) => c !== p.productCategory).map((c) => <span key={c} className="text-ink3"> · {c}</span>)}
+                    {p.productSubCategory ? <div className="text-[10.5px] text-ink3">{p.productSubCategory}</div> : null}
+                    {/* Only once the server sends the shop menu: before that a missing concern is the server's silence, not the product's. */}
+                    {taxonomy && <div className="max-w-[220px] text-[10.5px] text-ink3" title={(p.concerns ?? []).map((c) => concernName.get(c) ?? c).join(", ")}>
+                      {(p.concerns ?? []).length ? `${(p.concerns ?? []).slice(0, 2).map((c) => concernName.get(c) ?? c).join(", ")}${(p.concerns ?? []).length > 2 ? ` +${(p.concerns ?? []).length - 2}` : ""}` : <span className="text-warn">no concern set</span>}
+                    </div>}
+                  </span>,
                   <span key={`${p._id}h`} className="font-mono text-[11px]">{p.hsn ?? "—"}</span>,
                   <span key={`${p._id}v`} className="text-[11.5px]">{p.vendorName ?? "—"}</span>,
-                  <span key={`${p._id}s`} className="tabular-nums">
+                  p.trackStock === false ? <span key={`${p._id}s`} className="text-[11.5px] text-ink3" title="No count is kept: the app sells it without checking stock">not counted</span> : <span key={`${p._id}s`} className="tabular-nums">
                     <B>{p.stock ?? 0}</B>
                     {(p.reorderLevel ?? p.lowStockThreshold) ? <span className="text-[10.5px] text-ink3"> / re-order {p.reorderLevel ?? p.lowStockThreshold}{p.targetLevel ? ` · target ${p.targetLevel}` : ""}</span> : null}
                     {(p.stock ?? 0) <= 0 ? <Tag kind="err">out</Tag> : (p.stock ?? 0) <= (p.reorderLevel ?? p.lowStockThreshold ?? 0) ? <Tag kind="warn">low</Tag> : null}
@@ -245,7 +269,8 @@ export function Products() {
 
       <AppStockImportModal open={importOpen} onClose={() => setImportOpen(false)} onDone={() => { setImportOpen(false); q.reload(); stats.reload(); }} />
       <CentreVisibilityModal open={centreBulkOpen} clinics={clinics} products={list} onClose={() => setCentreBulkOpen(false)} onDone={() => { setCentreBulkOpen(false); q.reload(); }} />
-      <ProductEditor open={!!sel || addOpen} product={sel} formulations={formulationNames} clinics={clinics}
+      <ShelfBulkModal open={shelfBulkOpen} shelves={shelves} products={list} onClose={() => setShelfBulkOpen(false)} onDone={() => { setShelfBulkOpen(false); q.reload(); stats.reload(); }} />
+      <ProductEditor open={!!sel || addOpen} product={sel} formulations={formulationNames} clinics={clinics} taxonomy={taxonomy}
         onClose={() => { setSel(null); setAddOpen(false); }}
         onSaved={() => { q.reload(); stats.reload(); setSel(null); setAddOpen(false); }}
         onDelete={(p) => { setSel(null); setDel(p); }} />
@@ -299,6 +324,50 @@ function shopLabel(filter: string, clinics: Branch[]) {
 }
 
 /**
+ * A shelf, or the stock rule, across every product currently listed: "put
+ * these in New arrivals", "take these out of Kids", "sell these without a
+ * stock count". A product's other shelves are left as they are.
+ */
+function ShelfBulkModal({ open, shelves, products, onClose, onDone }: {
+  open: boolean; shelves: { slug: string; name: string }[]; products: Product[]; onClose: () => void; onDone: () => void;
+}) {
+  const { toast, audit } = useStore();
+  const ACTIONS = useMemo(() => [
+    ...shelves.map((c) => ({ key: `add:${c.slug}`, label: `Put on the ${c.name} shelf`, updates: { collection: { slug: c.slug, on: true } } })),
+    ...shelves.map((c) => ({ key: `remove:${c.slug}`, label: `Take off the ${c.name} shelf`, updates: { collection: { slug: c.slug, on: false } } })),
+    { key: "count:off", label: "Sell without a stock count", updates: { trackStock: false } },
+    { key: "count:on", label: "Count stock (sold only while in stock)", updates: { trackStock: true } },
+  ], [shelves]);
+  const [action, setAction] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { if (open) setAction(ACTIONS[0]?.key ?? ""); }, [open, ACTIONS]);
+  const chosen = ACTIONS.find((a) => a.key === action);
+  const uncounted = chosen?.key === "count:off";
+  const apply = async () => {
+    if (!chosen || !products.length) return;
+    setBusy(true);
+    try {
+      const r = await api.products.bulkUpdate(products.map((p) => p._id), chosen.updates);
+      audit("PRODUCT_UPDATED", `${chosen.label} — ${products.length} products`, {});
+      toast(`${r.modifiedCount ?? products.length} products updated`);
+      onDone();
+    } catch (e) { toast((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <Modal open={open} onClose={onClose} title="Shelves & stock">
+      <Note>Applies to the <b>{products.length} products in the current list</b> — narrow the list first (search, category, concern) if you mean fewer.</Note>
+      <Sel label="Change" value={chosen?.label ?? ""} onChange={(v) => setAction(ACTIONS.find((a) => a.label === v)?.key ?? "")} options={ACTIONS.map((a) => a.label)} />
+      {uncounted && <Note kind="crit" className="mb-0 mt-3">Guests will be able to order and pay for these whatever the stock figure says. Use it only for products the clinic can always supply.</Note>}
+      {chosen?.key === "count:on" && <Note className="mb-0 mt-3">A counted product with no stock shows as sold out in the app until stock is entered.</Note>}
+      <div className="mt-4 flex justify-end gap-2">
+        <Btn kind="ghost" onClick={onClose}>Back</Btn>
+        <Btn kind={uncounted ? "danger" : "primary"} disabled={busy || !chosen || !products.length} onClick={apply}>{busy ? "Applying…" : "Apply"}</Btn>
+      </div>
+    </Modal>
+  );
+}
+
+/**
  * One centre's listing across every product currently listed: "hide the
  * whole shop at Kondapur", "show everything at Jubilee Hills". Prices are
  * left alone here — those are set per product in the editor.
@@ -344,8 +413,12 @@ function CentreVisibilityModal({ open, clinics, products, onClose, onDone }: {
   );
 }
 
-function ProductEditor({ open, product, formulations, clinics, onClose, onSaved, onDelete }: {
-  open: boolean; product: Product | null; formulations: string[]; clinics: Branch[];
+/** One entry per line, as the panel edits a list; bullets and numbering a person pastes in are dropped. */
+const toLines = (v: string) => v.split(/\r?\n/).map((x) => x.replace(/^\s*(?:[-•*]|\d+[.)])\s*/, "").trim()).filter(Boolean);
+const fromLines = (v?: string[] | null) => (v ?? []).join("\n");
+
+function ProductEditor({ open, product, formulations, clinics, taxonomy, onClose, onSaved, onDelete }: {
+  open: boolean; product: Product | null; formulations: string[]; clinics: Branch[]; taxonomy?: ShopTaxonomy;
   onClose: () => void; onSaved: () => void; onDelete: (p: Product) => void;
 }) {
   const { toast, audit, can } = useStore();
@@ -365,7 +438,38 @@ function ProductEditor({ open, product, formulations, clinics, onClose, onSaved,
     });
     setStockReason("");
     setErr(null);
+    // The list carries the row without its long-form page; the editor needs all of it.
+    if (product?._id) {
+      const id = product._id;
+      api.products.get(id).then((full) => { if (full && full._id === id) setF((s) => (s._id === id ? { ...s, details: full.details ?? {}, description: full.description, shortDescription: full.shortDescription } : s)); }).catch(() => undefined);
+    }
   }, [open, product?._id]);
+
+  // Where it sits in the shop.
+  const categoryOptions = useMemo(() => {
+    const names = new Set<string>((taxonomy?.categories ?? []).map((c) => c.name));
+    for (const c of f.categories ?? []) names.add(c);
+    if (f.productCategory) names.add(f.productCategory);
+    return [...names];
+  }, [taxonomy, f.categories, f.productCategory]);
+  // A concern listed under two areas (Acne: Face and Body) is one concern; it is offered once, under its first area.
+  const concernOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const out: [string, string][] = [];
+    for (const area of taxonomy?.concernAreas ?? []) for (const c of area.concerns) {
+      if (seen.has(c.slug)) continue;
+      seen.add(c.slug);
+      out.push([c.slug, `${area.name} · ${c.name}`]);
+    }
+    return out;
+  }, [taxonomy]);
+  const onShelf = (slug: string) => (f.shopCollections ?? []).includes(slug) || (slug === "bestseller" && !!f.isPopular && f.shopCollections === undefined);
+  const setShelf = (slug: string, on: boolean) => setF((s) => {
+    const next = on ? [...new Set([...(s.shopCollections ?? []), slug])] : (s.shopCollections ?? []).filter((c) => c !== slug);
+    return { ...s, shopCollections: next, isPopular: next.includes("bestseller") };
+  });
+  const setDetail = <K extends keyof ProductDetails>(k: K) => (v: ProductDetails[K]) => setF((s) => ({ ...s, details: { ...(s.details ?? {}), [k]: v } }));
+  const d = f.details ?? {};
 
   // The <select> shows its first option; keep state honest so Save doesn't reject a filled-in form.
   useEffect(() => {
@@ -404,8 +508,11 @@ function ProductEditor({ open, product, formulations, clinics, onClose, onSaved,
     try {
       const { _id, rating, reviews, createdAt, updatedAt, ...rest } = f as Product & { updatedAt?: string };
       void _id; void rating; void reviews; void createdAt; void updatedAt;
+      const categories = rest.categories?.length ? rest.categories : rest.productCategory ? [rest.productCategory] : [];
       const body: Partial<Product> = {
         ...rest,
+        ...(taxonomy ? { categories, productCategory: rest.productCategory && categories.includes(rest.productCategory) ? rest.productCategory : categories[0] ?? null } : {}),
+        ...(taxonomy ? { concerns: rest.concerns ?? [], shopCollections: rest.shopCollections ?? (rest.isPopular ? ["bestseller"] : []) } : {}),
         price: Number(f.price) || 0,
         gstPercentage: Number(f.gstPercentage) || 0,
         stock: Number(f.stock) || 0,
@@ -438,7 +545,40 @@ function ProductEditor({ open, product, formulations, clinics, onClose, onSaved,
         <UploadField label="Image" value={f.image ?? ""} onChange={set("image")} upload={uploadImage}
           hint="Square, on a plain background, works best in the shop" />
         <In label="Product name" value={f.name ?? ""} onChange={set("name")} />
-        <Area label="Description" value={f.description ?? ""} onChange={set("description")} rows={3} />
+        <In label="In one line" value={f.shortDescription ?? ""} onChange={set("shortDescription")} placeholder="What it is and what it is for" hint="Shown under the name on the product page and in search" />
+        <Area label="Description" value={f.description ?? ""} onChange={set("description")} rows={5} />
+
+        {taxonomy ? (<>
+          <SecH t="In the shop" em="· how guests find it" />
+          <MultiSelect label="Categories" options={categoryOptions.map((c) => [c, c] as [string, string])} value={f.categories?.length ? f.categories : f.productCategory ? [f.productCategory] : []}
+            onChange={(v) => setF((s) => ({ ...s, categories: v, productCategory: v.includes(s.productCategory ?? "") ? s.productCategory : v[0] ?? null }))}
+            placeholder="Choose one or more" searchPlaceholder="Search categories…" />
+          {(f.categories?.length ?? 0) > 1 && (
+            <Sel label="Main category" value={f.productCategory ?? f.categories?.[0] ?? ""} onChange={(v) => set("productCategory")(v)} options={f.categories ?? []} />
+          )}
+          <MultiSelect label="Concerns it helps with" options={concernOptions} value={f.concerns ?? []} onChange={(v) => set("concerns")(v)}
+            placeholder="Choose the concerns" searchPlaceholder="Search concerns…" />
+          {(taxonomy?.collections ?? []).map((c) => (
+            <Switch key={c.slug} on={onShelf(c.slug)} onChange={(v) => setShelf(c.slug, v)} gold={c.slug === "bestseller"}
+              label={`On the ${c.name} shelf`} sub={c.slug === "bestseller" ? "Leads the shop and pins it to the app home rail" : c.blurb} />
+          ))}
+
+          <SecH t="Product page" em="· every part is optional" />
+          <Area label="Why choose it" value={fromLines(d.benefits)} onChange={(v) => setDetail("benefits")(toLines(v))} rows={4} placeholder={"One benefit per line\nHelps fade the look of dark spots"} />
+          <Area label="Key ingredients" value={fromLines(d.keyIngredients)} onChange={(v) => setDetail("keyIngredients")(toLines(v))} rows={3} placeholder={"One per line\nNiacinamide"} />
+          <Area label="How to use" value={fromLines(d.howToUse)} onChange={(v) => setDetail("howToUse")(toLines(v))} rows={4} placeholder={"One step per line"} />
+          <Area label="All ingredients" value={d.ingredients ?? ""} onChange={(v) => setDetail("ingredients")(v)} rows={4} placeholder="The full list, as printed on the pack" />
+          <In label="Suitable for" value={d.suitableFor ?? ""} onChange={(v) => setDetail("suitableFor")(v)} placeholder="e.g. Oily and acne-prone skin" />
+          <In label="Manufacturer" value={d.manufacturer ?? ""} onChange={(v) => setDetail("manufacturer")(v)} />
+          <In label="Country of origin" value={d.countryOfOrigin ?? ""} onChange={(v) => setDetail("countryOfOrigin")(v)} />
+        </>) : (<>
+          {/* A server that does not yet send the shop menu cannot save these either. */}
+          <Note className="my-0">Categories, concerns, shelves and the product page are edited here once the server update is live.</Note>
+          <In label="Category" value={f.productCategory ?? ""} onChange={set("productCategory")} />
+          <Switch on={!!f.isPopular} onChange={set("isPopular")} gold label="Bestseller" sub="Pins it to the app home rail" />
+        </>)}
+
+        <SecH t="Selling" em="· brand, price and stock" />
 
         <In label="Brand" value={f.brand ?? f.OrgName ?? ""} onChange={(v) => setF((s) => ({ ...s, brand: v, OrgName: v || "Zennara" }))} hint={brandNames.length ? `In the catalogue: ${brandNames.slice(0, 6).join(", ")}${brandNames.length > 6 ? "…" : ""}` : "Type the brand as it should appear in the app"} />
         <In label="Formulation" value={f.formulation ?? ""} onChange={set("formulation")} hint={formulations.length ? `In the catalogue: ${formulations.slice(0, 6).join(", ")}${formulations.length > 6 ? "…" : ""}` : "The app groups products by this"} />
@@ -448,16 +588,16 @@ function ProductEditor({ open, product, formulations, clinics, onClose, onSaved,
           <In label="Price (₹)" type="number" value={String(f.price ?? 0)} onChange={(v) => set("price")(Number(v) || 0)} />
           <In label="GST %" type="number" value={String(f.gstPercentage ?? 18)} onChange={(v) => set("gstPercentage")(Number(v) || 0)} />
         </div>
-        <In label="Stock on hand" type="number" value={String(f.stock ?? 0)} onChange={(v) => set("stock")(Number(v) || 0)}
-          hint={product?.stockSource === "template" && product.stockUpdatedAt ? `From the App Stock template, ${fmtDateFull(product.stockUpdatedAt)}. Edits are recorded in the audit log.` : "Direct edits are recorded in the audit log"} />
+        <Switch on={f.trackStock !== false} onChange={(v) => set("trackStock")(v)} label="Count stock" sub={f.trackStock !== false ? "Sold only while the stock below is above zero" : "No count is kept — the app sells it whatever the figure says"} />
+        {f.trackStock !== false && <In label="Stock on hand" type="number" value={String(f.stock ?? 0)} onChange={(v) => set("stock")(Number(v) || 0)}
+          hint={product?.stockSource === "template" && product.stockUpdatedAt ? `From the App Stock template, ${fmtDateFull(product.stockUpdatedAt)}. Edits are recorded in the audit log.` : "Direct edits are recorded in the audit log"} />}
         {stockChanged && (
           <In label="Reason for the stock change" value={stockReason} onChange={setStockReason} placeholder="e.g. goods received / stock count / damaged" />
         )}
 
         <SecH t="Stock & sourcing" em="· the App Stock template's fields" />
         <div className="grid grid-cols-2 gap-3">
-          <In label="Category" value={f.productCategory ?? ""} onChange={set("productCategory")} placeholder="e.g. Skincare" />
-          <In label="Sub category" value={f.productSubCategory ?? ""} onChange={set("productSubCategory")} placeholder="e.g. Hair Fall & Growth" />
+          <In label="Sub category" value={f.productSubCategory ?? ""} onChange={set("productSubCategory")} placeholder="Optional" />
           <In label="HSN code" value={f.hsn ?? ""} onChange={set("hsn")} placeholder="e.g. 33049910" />
           <In label="Vendor" value={f.vendorName ?? ""} onChange={set("vendorName")} placeholder="Supplier name" />
           <In label="Re-order level" type="number" value={String(f.reorderLevel ?? "")} onChange={(v) => set("reorderLevel")(v === "" ? null : Number(v))} hint="Warn when stock falls to this" />
@@ -498,7 +638,6 @@ function ProductEditor({ open, product, formulations, clinics, onClose, onSaved,
 
         <Switch on={!!f.isAppProduct} onChange={set("isAppProduct")} label="In the Commerce catalogue" sub="The curated list the app can sell" />
         <Switch on={!!f.isActive} onChange={set("isActive")} label="Sold in the app" sub="Off hides it from the store" />
-        <Switch on={!!f.isPopular} onChange={set("isPopular")} gold label="Popular" sub="Pins it to the app home rail" />
 
         {product && (
           <div className="rounded-xl bg-ivory px-3.5 py-2.5 text-[12px] text-ink2">
