@@ -832,6 +832,8 @@ export type Product = {
   description: string;
   /** One line for cards and search results. */
   shortDescription?: string;
+  /** Every photograph, the main one (`image`) first. */
+  images?: string[];
   slug?: string | null;
   /** Every category the product is filed under; `productCategory` is the main one. */
   categories?: string[];

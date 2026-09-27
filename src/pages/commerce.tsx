@@ -413,6 +413,9 @@ function CentreVisibilityModal({ open, clinics, products, onClose, onDone }: {
   );
 }
 
+/** What a product starts with until someone enters a count — the server's default (STORE_DEFAULT_STOCK). */
+const DEFAULT_OPENING_STOCK = 100;
+
 /** One entry per line, as the panel edits a list; bullets and numbering a person pastes in are dropped. */
 const toLines = (v: string) => v.split(/\r?\n/).map((x) => x.replace(/^\s*(?:[-•*]|\d+[.)])\s*/, "").trim()).filter(Boolean);
 const fromLines = (v?: string[] | null) => (v ?? []).join("\n");
@@ -434,7 +437,7 @@ function ProductEditor({ open, product, formulations, clinics, taxonomy, onClose
     if (!open) return;
     setF(product ?? {
       name: "", description: "", formulation: formulations[0] ?? "", OrgName: brandNames[0] ?? "",
-      price: 0, gstPercentage: 18, stock: 0, image: "", isActive: true, isPopular: false,
+      price: 0, gstPercentage: 18, stock: DEFAULT_OPENING_STOCK, image: "", isActive: true, isPopular: false,
     });
     setStockReason("");
     setErr(null);
@@ -470,6 +473,7 @@ function ProductEditor({ open, product, formulations, clinics, taxonomy, onClose
   });
   const setDetail = <K extends keyof ProductDetails>(k: K) => (v: ProductDetails[K]) => setF((s) => ({ ...s, details: { ...(s.details ?? {}), [k]: v } }));
   const d = f.details ?? {};
+  const morePhotos = (f.images ?? []).filter((u) => !!u && u !== f.image);
 
   // The <select> shows its first option; keep state honest so Save doesn't reject a filled-in form.
   useEffect(() => {
@@ -511,6 +515,7 @@ function ProductEditor({ open, product, formulations, clinics, taxonomy, onClose
       const categories = rest.categories?.length ? rest.categories : rest.productCategory ? [rest.productCategory] : [];
       const body: Partial<Product> = {
         ...rest,
+        images: [...new Set([...(f.image ? [f.image] : []), ...(f.images ?? [])].filter(Boolean))],
         ...(taxonomy ? { categories, productCategory: rest.productCategory && categories.includes(rest.productCategory) ? rest.productCategory : categories[0] ?? null } : {}),
         ...(taxonomy ? { concerns: rest.concerns ?? [], shopCollections: rest.shopCollections ?? (rest.isPopular ? ["bestseller"] : []) } : {}),
         price: Number(f.price) || 0,
@@ -542,8 +547,20 @@ function ProductEditor({ open, product, formulations, clinics, taxonomy, onClose
   return (
     <Drawer open={open} onClose={onClose} title={product ? product.name : "New product"}>
       <div className="grid gap-3">
-        <UploadField label="Image" value={f.image ?? ""} onChange={set("image")} upload={uploadImage}
+        <UploadField label="Main photo" value={f.image ?? ""} onChange={set("image")} upload={uploadImage}
           hint="Square, on a plain background, works best in the shop" />
+        {/* The product page shows these after the main photo, in this order. */}
+        {morePhotos.map((url, i) => (
+          <div key={`${url}-${i}`} className="flex items-center gap-2 rounded-xl border border-border bg-surface p-2">
+            <img src={url} alt="" className="h-14 w-14 flex-none rounded-lg border border-border object-contain" />
+            <span className="min-w-0 flex-1 truncate text-[11px] text-ink3">Photo {i + 2}</span>
+            <Btn kind="ghost" onClick={() => setF((s) => ({ ...s, image: url, images: [url, ...(s.image ? [s.image] : []), ...morePhotos.filter((u) => u !== url)] }))}>Make main</Btn>
+            <Btn kind="ghost" onClick={() => setF((s) => ({ ...s, images: [...(s.image ? [s.image] : []), ...morePhotos.filter((u) => u !== url)] }))}>Remove</Btn>
+          </div>
+        ))}
+        <UploadField label="Add another photo" value="" preview={false} upload={uploadImage}
+          onChange={(url) => { if (url) setF((s) => ({ ...s, images: [...new Set([...(s.image ? [s.image] : []), ...(s.images ?? []), url])] })); }}
+          hint="The product page shows every photo; lists show the main one" />
         <In label="Product name" value={f.name ?? ""} onChange={set("name")} />
         <In label="In one line" value={f.shortDescription ?? ""} onChange={set("shortDescription")} placeholder="What it is and what it is for" hint="Shown under the name on the product page and in search" />
         <Area label="Description" value={f.description ?? ""} onChange={set("description")} rows={5} />
@@ -590,7 +607,7 @@ function ProductEditor({ open, product, formulations, clinics, taxonomy, onClose
         </div>
         <Switch on={f.trackStock !== false} onChange={(v) => set("trackStock")(v)} label="Count stock" sub={f.trackStock !== false ? "Sold only while the stock below is above zero" : "No count is kept — the app sells it whatever the figure says"} />
         {f.trackStock !== false && <In label="Stock on hand" type="number" value={String(f.stock ?? 0)} onChange={(v) => set("stock")(Number(v) || 0)}
-          hint={product?.stockSource === "template" && product.stockUpdatedAt ? `From the App Stock template, ${fmtDateFull(product.stockUpdatedAt)}. Edits are recorded in the audit log.` : "Direct edits are recorded in the audit log"} />}
+          hint={product?.stockSource === "template" && product.stockUpdatedAt ? `From the App Stock template, ${fmtDateFull(product.stockUpdatedAt)}. Edits are recorded in the audit log.` : `A product starts at ${DEFAULT_OPENING_STOCK} until a count is entered. The app says in stock or out of stock, never the number. 0 = sold out.`} />}
         {stockChanged && (
           <In label="Reason for the stock change" value={stockReason} onChange={setStockReason} placeholder="e.g. goods received / stock count / damaged" />
         )}
