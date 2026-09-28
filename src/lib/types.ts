@@ -555,7 +555,16 @@ export type Consultation = {
   showPriceInApp?: boolean;
   chargeOnlineBooking?: boolean;
   isPopular?: boolean;
+  /** Condition keys it helps with ("acne-scar", "hair-loss"…) — the app's "By condition" tab. */
+  conditions?: string[];
   createdAt?: string;
+};
+
+/** GET /consultations/taxonomy — the app's treatment menu (categories with icons, conditions). */
+export type TreatmentTaxonomy = {
+  total: number;
+  categories: { name: string; slug: string; icon: string; order: number; count: number }[];
+  conditions: { key: string; name: string; blurb: string; order: number; count: number }[];
 };
 
 /** Level 1 of the service taxonomy — Skin, Hair, Skin & Hair, Wellness, … */
@@ -581,6 +590,8 @@ export type Category = {
   type?: string | null;
   displayOrder?: number;
   description?: string;
+  /** Icon drawn beside the category on the app's treatment tabs (see treatmentIcons.tsx). */
+  icon?: string;
   isActive: boolean;
   consultationCount?: number;
   createdAt?: string;

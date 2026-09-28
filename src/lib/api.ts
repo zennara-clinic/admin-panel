@@ -24,6 +24,7 @@ import type {
   MessageTemplate, StaffSalesRow, InvoiceSummary, AppStockImportResult, ProductStockMovement,
   AnalyticsSeries, MonthlyRevenueRow, PatientAcquisitionRow, GuestWindow, GuestDemographics, GuestSourceRow, GuestSources,
   LifecycleAction, LifecycleState, ZenotiRoster,
+  TreatmentTaxonomy,
 } from "./types";
 
 /* ============================ auth ============================ */
@@ -242,6 +243,8 @@ export const services = {
   search: (query: string, limit = 20) =>
     request<Consultation[]>(`/consultations/search/${encodeURIComponent(query)}`, { query: { limit } }),
   stats: () => request<Record<string, unknown>>("/consultations/stats/overview"),
+  /** The app's treatment menu — every category and condition, with counts (empty ones included). */
+  taxonomy: () => request<TreatmentTaxonomy>("/consultations/taxonomy", { query: { includeEmpty: "true" } }),
   /** Publish services to the app catalogue, or take them back off. */
   setCatalog: (ids: Id[], inCatalog: boolean) =>
     requestRaw<{ count: number }>("/consultations/catalog", { method: "PATCH", body: { ids, inCatalog } }),

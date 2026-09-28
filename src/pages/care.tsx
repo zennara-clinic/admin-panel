@@ -10,6 +10,7 @@ import { openHtmlExport, download } from "../lib/http";
 import { AssignPackageModal, PatientPickerModal } from "./reception";
 import { SignInControls } from "./access";
 import { BulkImport } from "../bulkImport";
+import { TREATMENT_CONDITIONS_FALLBACK, TREATMENT_ICON_OPTIONS, TreatmentIcon, hasTreatmentIcon } from "../treatmentIcons";
 import { useApi, useDebounced } from "../lib/useApi";
 import { useQueryNumber, useQueryPage, useQueryString } from "../lib/useListState";
 import { fmtAgo, fmtCompactINR, fmtDate, fmtINR, fmtWhen, imageUrl, initials, isoDay, nameOf } from "../lib/format";
@@ -411,6 +412,11 @@ export function ServiceEditor() {
 
   const types = useApi(() => api.serviceTypes.list(), []);
   const cats = useApi(() => api.categories.list(), []);
+  // Conditions come from the server's menu; an API older than it falls back to the known list.
+  const menu = useApi(() => api.services.taxonomy(), []);
+  const conditionOptions: [string, string][] = menu.data?.conditions?.length
+    ? menu.data.conditions.map((c) => [c.key, c.name])
+    : TREATMENT_CONDITIONS_FALLBACK;
   const q = useApi(
     () => (state.id ? api.services.get(state.id)
       : state.cloneFrom ? api.services.get(state.cloneFrom).then((c) => ({ ...c, _id: undefined, id: undefined, slug: undefined, name: `${c.name} (copy)`, code: null, zenotiServiceId: null, createdAt: undefined } as unknown as Consultation))
@@ -524,6 +530,8 @@ export function ServiceEditor() {
                 <Area label="Short summary — shown on app cards and under the title" value={f.summary ?? ""} onChange={set("summary")} rows={2} />
                 <Area label="About — the detail page copy" value={f.about ?? ""} onChange={set("about")} rows={6} />
               </div>
+              <SecH t="Conditions it helps with" em="the app's “By condition” tab lists it under each one" />
+              <MultiSelect label="Conditions" options={conditionOptions} value={f.conditions ?? []} onChange={(v) => set("conditions")(v)} placeholder="Pick the conditions this treats…" searchPlaceholder="Search conditions…" />
               <SecH t="Visibility & booking" />
               <div className="grid gap-2 md:grid-cols-2">
                 <Switch on={!!f.isActive} onChange={set("isActive")} label="Live in the app" sub="Off hides it from the app and from booking" />
@@ -681,6 +689,8 @@ export function Categories() {
   const [err, setErr] = useState<string | null>(null);
 
   const [nType, setNType] = useState("");
+  /** Icon beside the category on the app's treatment tabs ('' = none). */
+  const [nIcon, setNIcon] = useState("");
 
   // Level 1 — service types, edited inline on this page.
   const [typeOpen, setTypeOpen] = useState(false);
@@ -733,7 +743,7 @@ export function Categories() {
           } catch (e) { toast((e as Error).message); }
         }}>Recount services</Btn>
         {can("categories.manage") && <Btn kind="ghost" onClick={() => { setTypeOpen(true); setTypeEdit(null); setTName(""); setTDesc(""); setTErr(null); }}>+ New type</Btn>}
-        {can("categories.manage") && <Btn onClick={() => { setAddOpen(true); setNName(""); setNDesc(""); setNType(typeNames[0] ?? ""); setErr(null); }}>+ New category</Btn>}
+        {can("categories.manage") && <Btn onClick={() => { setAddOpen(true); setNName(""); setNDesc(""); setNType(typeNames[0] ?? ""); setNIcon(""); setErr(null); }}>+ New category</Btn>}
       </>}>
       <Hint id="categories-live">Categories group services in the app. Deactivating a category hides it from browsing without touching the services inside it.</Hint>
       <StaleBanner error={q.data ? q.error : null} onRetry={q.reload} />
@@ -798,7 +808,7 @@ export function Categories() {
                       </span>
                     )}
                     <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-sage text-[12px] font-bold text-primary">
-                      {initials(c.name)}
+                      {hasTreatmentIcon(c.icon) ? <TreatmentIcon name={c.icon} size={20} /> : initials(c.name)}
                     </span>
                     <div className="min-w-0 flex-1">
                       <b className="text-[13px] font-bold">{c.name}</b>
@@ -819,7 +829,7 @@ export function Categories() {
                     }} />
                     {can("categories.manage") && (
                       <Menu align="right" button={<button className="px-1 text-ink3">⋯</button>} items={[
-                        { label: "Edit", onClick: () => { setEdit(c); setNName(c.name); setNDesc(c.description ?? ""); setNType(c.type ?? ""); setErr(null); } },
+                        { label: "Edit", onClick: () => { setEdit(c); setNName(c.name); setNDesc(c.description ?? ""); setNType(c.type ?? ""); setNIcon(c.icon ?? ""); setErr(null); } },
                         { label: "+ New service here", onClick: () => nav("/service-editor", { state: { blank: true, type: group.type ?? undefined, category: c.name } }) },
                         { label: <span className="text-err">Delete</span>, onClick: () => setDel(c) },
                       ]} />
@@ -841,6 +851,19 @@ export function Categories() {
             ? <Sel label="Type" value={nType || typeNames[0]} onChange={setNType} options={typeNames} />
             : <In label="Type" value={nType} onChange={setNType} hint="No types yet — add one with “+ New type” first" />}
           <Area label="Description (optional)" value={nDesc} onChange={setNDesc} rows={2} />
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[11px] font-bold tracking-[0.02em] text-ink2">Icon — beside the name on the app's treatment tabs</label>
+            <div className="flex flex-wrap gap-1.5">
+              {([["", "None"], ...TREATMENT_ICON_OPTIONS] as [string, string][]).map(([k, label]) => (
+                <button key={k || "none"} type="button" onClick={() => setNIcon(k)} aria-pressed={nIcon === k}
+                  className={`flex items-center gap-1.5 rounded-full border py-1 pl-1.5 pr-2.5 text-[11.5px] font-semibold transition-colors ${
+                    nIcon === k ? "border-primary bg-sage text-primary" : "border-border bg-surface text-ink2 hover:border-gold-dark"}`}>
+                  {k ? <span className="grid h-6 w-6 place-items-center rounded-full bg-sage text-primary"><TreatmentIcon name={k} size={16} /></span> : null}
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
         {err && <Note kind="crit">{err}</Note>}
         <div className="mt-4 flex justify-end gap-2">
@@ -849,11 +872,11 @@ export function Categories() {
             setErr(null);
             try {
               if (edit) {
-                await api.categories.update(edit._id, { name: nName.trim(), description: nDesc.trim(), type: nType || typeNames[0] });
+                await api.categories.update(edit._id, { name: nName.trim(), description: nDesc.trim(), type: nType || typeNames[0], icon: nIcon });
                 audit("CATALOGUE_UPDATED", `Category ${nName.trim()}`, { categoryId: edit._id });
                 toast("Category updated");
               } else {
-                await api.categories.create({ name: nName.trim(), description: nDesc.trim(), type: nType || typeNames[0] });
+                await api.categories.create({ name: nName.trim(), description: nDesc.trim(), type: nType || typeNames[0], icon: nIcon });
                 audit("CATALOGUE_CREATED", `Category ${nName.trim()}`);
                 toast("Category created");
               }
