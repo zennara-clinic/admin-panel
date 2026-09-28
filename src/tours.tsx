@@ -50,9 +50,9 @@ const MODULE_TOURS: Record<string, { key: string; steps: Step[] }> = {
   "/products": {
     key: "m-pharmacy",
     steps: [
-      T("[data-tour=prod-tabs]", "The full catalogue", "The full retail catalogue with codes, formulation and GST. These categories mirror the app exactly."),
+      T("[data-tour=prod-tabs]", "The full catalogue", "The full retail catalogue with codes, formulation and MRP — one price per product, every tax included. These categories mirror the app exactly."),
       T("[data-tour=prod-filters]", "Low stock before ordering day", "Filter to low stock, export the CSV, and that's your purchase list."),
-      T("[data-tour=prod-table]", "Click to edit", "Any row opens on the right — name, price, stock, photo — and saves straight to the catalogue."),
+      T("[data-tour=prod-table]", "Click to edit", "Any row opens on the right — name, MRP, stock, photo — and saves straight to the catalogue."),
     ],
   },
 };

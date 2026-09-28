@@ -173,10 +173,10 @@ function AddLine({ inv, onChanged }: { inv: Invoice; onChanged: (i: Invoice) => 
               if (tab === "product") { const p = r as Product; return (
                 <div key={p._id} className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-2 text-[12.5px]">
                   <span><B>{p.name}</B> {p.isRx ? <Tag kind="warn">Rx</Tag> : null} <span className="text-ink3">{p.code ?? ""}{p.trackStock !== false ? ` · ${p.stock} in stock` : ""}</span></span>
-                  <span className="flex items-center gap-1.5">
-                    <Btn kind="ghost" className="!px-2 !py-1 !text-[11px]" disabled={busy} onClick={() => add({ productId: p._id })}>{fmtINR(p.price)} + GST</Btn>
-                    {Number(p.mrp) > 0 && <Btn kind="ghost" className="!px-2 !py-1 !text-[11px]" disabled={busy} onClick={() => add({ productId: p._id, useMrp: true })}>MRP {fmtINR(p.mrp)}</Btn>}
-                  </span>
+                  {/* The MRP is the whole price; the bill only splits the GST out of it. */}
+                  <Btn kind="ghost" className="!px-2 !py-1 !text-[11px]" disabled={busy} onClick={() => add({ productId: p._id, priceIncludesTax: true })}>
+                    MRP {fmtINR(p.price)} <span className="text-[10.5px] text-ink3">incl. GST {p.gstPercentage ?? 18}%</span>
+                  </Btn>
                 </div>); }
               const s = r as Inventory; return (
                 <button key={s._id} className="flex w-full items-center justify-between gap-2 border-b border-border/60 px-3 py-2 text-left text-[12.5px] hover:bg-ivory" disabled={busy} onClick={() => add({ inventoryId: s._id })}>

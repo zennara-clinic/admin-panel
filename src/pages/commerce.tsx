@@ -66,6 +66,8 @@ export function Products() {
   }), [debounced, kind, centre, scope, fCat, fSub, fVendor, fStatus, fStock, dHsn, shopFilter, fShelf, fConcern]);
   // The shop menu with counts — every shelf and concern, the empty ones included.
   const taxonomy = (q.data as { taxonomy?: ShopTaxonomy } | undefined)?.taxonomy;
+  // The server charges the MRP as it stands (GST information only). An older server still adds GST on top.
+  const mrpInclusive = (q.data as { pricingModel?: string } | undefined)?.pricingModel === "mrp-inclusive";
   const shelves = taxonomy?.collections ?? [];
   const concerns = taxonomy?.concerns ?? [];
   const concernName = useMemo(() => new Map(concerns.map((c) => [c.slug, c.name])), [concerns]);
@@ -133,7 +135,7 @@ export function Products() {
       </>}>
       <Hint id="products-live" steps={[
         "This is the live catalogue the app sells from. Guests find a product three ways: by shelf (Bestsellers, New arrivals, Kids), by category and by concern.",
-        "Click any product to open it on the right: name, price, stock, image and app visibility.",
+        "Click any product to open it on the right: name, MRP, stock, image and app visibility.",
         "Import updates products from a filled sheet and adds new codes; Export downloads the products; Templates gives the blank sheet.",
         "Stock edits here are audited with your name.",
       ]} />
@@ -163,7 +165,7 @@ export function Products() {
         {() => (
           <>
             <div data-tour="prod-tabs" />
-            <Note className="mb-2">The app's catalogue — {buckets?.app ?? rows.length} products. Each product is filed under a category and the concerns it helps with, and can be put on a shelf (Bestsellers, New arrivals, Kids); all three are set on the product's own page or in bulk with <b>Shelves &amp; stock</b>. Stock, prices, HSN, vendor and re-order levels are edited here or re-imported from the App Stock template. Nothing on this page is written to Zenoti.</Note>
+            <Note className="mb-2">The app's catalogue — {buckets?.app ?? rows.length} products. Each product is filed under a category and the concerns it helps with, and can be put on a shelf (Bestsellers, New arrivals, Kids); all three are set on the product's own page or in bulk with <b>Shelves &amp; stock</b>. Stock, MRPs, HSN, vendor and re-order levels are edited here or re-imported from the App Stock template. A product has one price, its MRP, with every tax included — the app shows it and charges it as it is; GST is noted for information only. Nothing on this page is written to Zenoti.</Note>
             <div className="mb-2 flex flex-wrap items-end gap-3">
               <Sel label="Shelf" value={fShelf ? shelfName.get(fShelf) ?? "All products" : "All products"}
                 options={["All products", ...shelves.map((c) => `${c.name} (${c.count})`)]}
@@ -190,7 +192,7 @@ export function Products() {
                 onChange={(v) => setCentre(v === "All centres" ? "" : allBranches.find((b) => b.name === v)?._id ?? "")} />}
               {kind === "consumable" && <Note className="my-0 flex-1">Treatment-room stock. These never appear in the app; the clinic consumes them against a visit and counts them under Stock.</Note>}
               {kind === "rx" && <Note className="my-0 flex-1">Prescription medicines. The app shows them with their description but cannot sell them — the pharmacy dispenses them against a prescription.</Note>}
-              {kind === "unpriced" && <Note className="my-0 flex-1">Mirrored from Zenoti with no price of ours yet. Set a price (or the MRP) before publishing to the app.</Note>}
+              {kind === "unpriced" && <Note className="my-0 flex-1">Mirrored from Zenoti with no price of ours yet. Set its MRP before publishing to the app.</Note>}
             </div>
             <div data-tour="prod-table" />
 
@@ -222,8 +224,8 @@ export function Products() {
             ) : (
               <DataTable
                 cols={scope === "app"
-                  ? ["Product", "Code", "Category / sub", "HSN", "Vendor", "Stock", "Buy / sell", "GST", "Centres", "In app"]
-                  : ["Product", "Code", "Category", "Type", "Price", "MRP", "GST", "Centres", "In app"]}
+                  ? ["Product", "Code", "Category / sub", "HSN", "Vendor", "Stock", "MRP", "GST incl.", "Centres", "In app"]
+                  : ["Product", "Code", "Category", "Type", "MRP", "GST incl.", "Centres", "In app"]}
                 onRow={(i) => setSel(list[i])}
                 rows={list.map((p) => scope === "app" ? [
                   <span key={p._id}><B>{p.name}{p.isPopular ? <Star size={11} className="ml-1 inline fill-current text-gold-dark" /> : null}</B>{p.packName || p.packSize ? <span className="ml-1 text-[10.5px] text-ink3">{[p.packSize, p.packName].filter(Boolean).join(" ")}</span> : null}{(p.shopCollections ?? []).filter((c) => c !== "bestseller").map((c) => <Tag key={c} kind="info">{shelfName.get(c) ?? c}</Tag>)}{p.isRx ? <Tag kind="warn">Rx</Tag> : null}{!p.image ? <span className="ml-1 text-[10px] text-warn">no photo</span> : null}{p.brand && p.brand !== "Zennara" ? <div className="text-[10.5px] font-normal text-ink3">{p.brand}</div> : null}</span>,
@@ -242,8 +244,8 @@ export function Products() {
                     {(p.reorderLevel ?? p.lowStockThreshold) ? <span className="text-[10.5px] text-ink3"> / re-order {p.reorderLevel ?? p.lowStockThreshold}{p.targetLevel ? ` · target ${p.targetLevel}` : ""}</span> : null}
                     {(p.stock ?? 0) <= 0 ? <Tag kind="err">out</Tag> : (p.stock ?? 0) <= (p.reorderLevel ?? p.lowStockThreshold ?? 0) ? <Tag kind="warn">low</Tag> : null}
                   </span>,
-                  <span key={`${p._id}p`} className="tabular-nums">{p.buyingPrice ? <span className="text-ink3">{fmtINR(p.buyingPrice)} / </span> : null}<B>{p.price ? fmtINR(p.price) : "not priced"}</B></span>,
-                  `${p.gstPercentage ?? 0}%`,
+                  <span key={`${p._id}p`} className="tabular-nums"><B>{p.price ? fmtINR(p.price) : "not priced"}</B></span>,
+                  `${p.gstPercentage ?? 18}%`,
                   <CentreChips key={`${p._id}ce`} product={p} clinics={clinics} />,
                   <span key={`${p._id}a`} onClick={(e) => e.stopPropagation()}>
                     <Toggle on={p.isActive} onChange={() => quickToggle(p)} />
@@ -254,8 +256,7 @@ export function Products() {
                   <span key={`${p._id}cat`} className="text-[11.5px]">{p.productCategory ?? "—"}{p.productSubCategory ? <div className="text-[10.5px] text-ink3">{p.productSubCategory}</div> : null}</span>,
                   <span key={`${p._id}t`} className="text-[11.5px]">{p.isRetail === false ? "Consumable" : "Retail"}{p.isRx ? <Tag kind="warn">Rx</Tag> : null}</span>,
                   <span key={`${p._id}p`} className="tabular-nums">{p.price ? fmtINR(p.price) : <span className="text-warn">not priced</span>}</span>,
-                  <span key={`${p._id}m`} className="tabular-nums text-ink3">{p.mrp ? fmtINR(p.mrp) : "—"}</span>,
-                  `${p.gstPercentage ?? 0}%`,
+                  `${p.gstPercentage ?? 18}%`,
                   <span key={`${p._id}ce`} className="text-[11.5px] text-ink3">{(p.centres ?? []).length ? `${(p.centres ?? []).length} centre${(p.centres ?? []).length === 1 ? "" : "s"}` : "—"}</span>,
                   <span key={`${p._id}a`} onClick={(e) => e.stopPropagation()}>
                     <Toggle on={p.isActive} onChange={() => quickToggle(p)} />
@@ -270,7 +271,7 @@ export function Products() {
       <AppStockImportModal open={importOpen} onClose={() => setImportOpen(false)} onDone={() => { setImportOpen(false); q.reload(); stats.reload(); }} />
       <CentreVisibilityModal open={centreBulkOpen} clinics={clinics} products={list} onClose={() => setCentreBulkOpen(false)} onDone={() => { setCentreBulkOpen(false); q.reload(); }} />
       <ShelfBulkModal open={shelfBulkOpen} shelves={shelves} products={list} onClose={() => setShelfBulkOpen(false)} onDone={() => { setShelfBulkOpen(false); q.reload(); stats.reload(); }} />
-      <ProductEditor open={!!sel || addOpen} product={sel} formulations={formulationNames} clinics={clinics} taxonomy={taxonomy}
+      <ProductEditor open={!!sel || addOpen} product={sel} formulations={formulationNames} clinics={clinics} taxonomy={taxonomy} mrpInclusive={mrpInclusive}
         onClose={() => { setSel(null); setAddOpen(false); }}
         onSaved={() => { q.reload(); stats.reload(); setSel(null); setAddOpen(false); }}
         onDelete={(p) => { setSel(null); setDel(p); }} />
@@ -420,8 +421,10 @@ const DEFAULT_OPENING_STOCK = 100;
 const toLines = (v: string) => v.split(/\r?\n/).map((x) => x.replace(/^\s*(?:[-•*]|\d+[.)])\s*/, "").trim()).filter(Boolean);
 const fromLines = (v?: string[] | null) => (v ?? []).join("\n");
 
-function ProductEditor({ open, product, formulations, clinics, taxonomy, onClose, onSaved, onDelete }: {
+function ProductEditor({ open, product, formulations, clinics, taxonomy, mrpInclusive, onClose, onSaved, onDelete }: {
   open: boolean; product: Product | null; formulations: string[]; clinics: Branch[]; taxonomy?: ShopTaxonomy;
+  /** The server charges the MRP as it stands. Until it does, GST is locked: an older server adds it on top. */
+  mrpInclusive: boolean;
   onClose: () => void; onSaved: () => void; onDelete: (p: Product) => void;
 }) {
   const { toast, audit, can } = useStore();
@@ -432,6 +435,8 @@ function ProductEditor({ open, product, formulations, clinics, taxonomy, onClose
   const brands = useApi(() => api.products.list({ catalogue: "app" }).then((r) => [...new Set(((r.data ?? []) as Product[]).map((p) => p.brand || p.OrgName).filter((b): b is string => !!b && b !== "Zennara"))].sort()).catch(() => [] as string[]), [open]);
   const brandNames = brands.data ?? [];
   const [stockReason, setStockReason] = useState("");
+  // GST is typed as text so it can be cleared; blank saves as the default, 18.
+  const [gstText, setGstText] = useState("18");
 
   useEffect(() => {
     if (!open) return;
@@ -439,6 +444,7 @@ function ProductEditor({ open, product, formulations, clinics, taxonomy, onClose
       name: "", description: "", formulation: formulations[0] ?? "", OrgName: brandNames[0] ?? "",
       price: 0, gstPercentage: 18, stock: DEFAULT_OPENING_STOCK, image: "", isActive: true, isPopular: false,
     });
+    setGstText(String(product?.gstPercentage ?? 18));
     setStockReason("");
     setErr(null);
     // The list carries the row without its long-form page; the editor needs all of it.
@@ -504,22 +510,28 @@ function ProductEditor({ open, product, formulations, clinics, taxonomy, onClose
     if (!f.description?.trim()) return setErr("A description is required — the app shows it on the product page");
     if (!f.formulation) return setErr("Pick a formulation");
     if (!f.OrgName?.trim()) return setErr("A brand is required");
-    if (!f.price) return setErr("A price is required");
-    if (Number(f.gstPercentage) < 0 || Number(f.gstPercentage) > 100) return setErr("GST must be between 0 and 100");
+    const mrp = Number(f.price) || 0;
+    if (!(mrp > 0)) return setErr("Enter the MRP — the final price, every tax included");
+    const gst = gstText.trim() === "" ? 18 : Number(gstText);
+    if (!Number.isFinite(gst) || gst < 0 || gst > 100) return setErr("GST must be between 0 and 100");
+    const overMrp = clinics.map((c) => listingFor(c)).find((l) => l.visible && l.price !== null && l.price !== undefined && Number(l.price) > mrp);
+    if (overMrp) return setErr(`The price at ${overMrp.branchName || "a centre"} is above the MRP (${fmtINR(mrp)}). A centre can charge the MRP or less.`);
     if (stockChanged && stockReason.trim().length < 3) return setErr("Say why the stock changed — it goes in the audit log");
 
     setBusy(true);
     try {
-      const { _id, rating, reviews, createdAt, updatedAt, ...rest } = f as Product & { updatedAt?: string };
-      void _id; void rating; void reviews; void createdAt; void updatedAt;
+      const { _id, rating, reviews, createdAt, updatedAt, buyingPrice, ...rest } = f as Product & { updatedAt?: string };
+      void _id; void rating; void reviews; void createdAt; void updatedAt; void buyingPrice;
       const categories = rest.categories?.length ? rest.categories : rest.productCategory ? [rest.productCategory] : [];
       const body: Partial<Product> = {
         ...rest,
         images: [...new Set([...(f.image ? [f.image] : []), ...(f.images ?? [])].filter(Boolean))],
         ...(taxonomy ? { categories, productCategory: rest.productCategory && categories.includes(rest.productCategory) ? rest.productCategory : categories[0] ?? null } : {}),
         ...(taxonomy ? { concerns: rest.concerns ?? [], shopCollections: rest.shopCollections ?? (rest.isPopular ? ["bestseller"] : []) } : {}),
-        price: Number(f.price) || 0,
-        gstPercentage: Number(f.gstPercentage) || 0,
+        // One price: the MRP. `mrp` goes with it so the two can never disagree.
+        price: mrp,
+        mrp,
+        gstPercentage: gst,
         stock: Number(f.stock) || 0,
         // Empty string clears a code; the server turns it into null.
         code: f.code?.trim() ?? "",
@@ -595,15 +607,17 @@ function ProductEditor({ open, product, formulations, clinics, taxonomy, onClose
           <Switch on={!!f.isPopular} onChange={set("isPopular")} gold label="Bestseller" sub="Pins it to the app home rail" />
         </>)}
 
-        <SecH t="Selling" em="· brand, price and stock" />
+        <SecH t="Selling" em="· brand, MRP and stock" />
 
         <In label="Brand" value={f.brand ?? f.OrgName ?? ""} onChange={(v) => setF((s) => ({ ...s, brand: v, OrgName: v || "Zennara" }))} hint={brandNames.length ? `In the catalogue: ${brandNames.slice(0, 6).join(", ")}${brandNames.length > 6 ? "…" : ""}` : "Type the brand as it should appear in the app"} />
         <In label="Formulation" value={f.formulation ?? ""} onChange={set("formulation")} hint={formulations.length ? `In the catalogue: ${formulations.slice(0, 6).join(", ")}${formulations.length > 6 ? "…" : ""}` : "The app groups products by this"} />
         <In label="Product code (optional)" value={f.code ?? ""} onChange={(v) => set("code")(v.toUpperCase())} />
 
         <div className="grid grid-cols-2 gap-3">
-          <In label="Price (₹)" type="number" value={String(f.price ?? 0)} onChange={(v) => set("price")(Number(v) || 0)} />
-          <In label="GST %" type="number" value={String(f.gstPercentage ?? 18)} onChange={(v) => set("gstPercentage")(Number(v) || 0)} />
+          <In label="MRP (₹)" type="number" value={String(f.price ?? 0)} onChange={(v) => set("price")(Number(v) || 0)}
+            hint="Final price, all taxes included. The app shows it and checkout charges it as it is." />
+          <In label="GST % (included)" type="number" value={gstText} onChange={setGstText} placeholder="18" readOnly={!mrpInclusive}
+            hint={mrpInclusive ? "Already inside the MRP. For information only, never added. Blank = 18." : "Locked until the server update is live — the server running now still adds GST on top of the MRP."} />
         </div>
         <Switch on={f.trackStock !== false} onChange={(v) => set("trackStock")(v)} label="Count stock" sub={f.trackStock !== false ? "Sold only while the stock below is above zero" : "No count is kept — the app sells it whatever the figure says"} />
         {f.trackStock !== false && <In label="Stock on hand" type="number" value={String(f.stock ?? 0)} onChange={(v) => set("stock")(Number(v) || 0)}
@@ -621,11 +635,9 @@ function ProductEditor({ open, product, formulations, clinics, taxonomy, onClose
           <In label="Target level" type="number" value={String(f.targetLevel ?? "")} onChange={(v) => set("targetLevel")(v === "" ? null : Number(v))} hint="What to top up to" />
           <In label="Pack name" value={f.packName ?? ""} onChange={set("packName")} placeholder="btl, tube, box" />
           <In label="Pack size" value={f.packSize ?? ""} onChange={set("packSize")} placeholder="1, 30 ml, 100 g" />
-          <In label="Buying price (₹)" type="number" value={String(f.buyingPrice ?? "")} onChange={(v) => set("buyingPrice")(v === "" ? null : Number(v))} />
-          <In label="MRP (₹)" type="number" value={String(f.mrp ?? "")} onChange={(v) => set("mrp")(v === "" ? null : Number(v))} hint="Printed price, from Zenoti" />
           <Sel label="Batch tracking" value={f.batchTracking ?? "Non Batchable"} onChange={(v) => set("batchTracking")(v as Product["batchTracking"])} options={["Non Batchable", "Batchable"]} />
           <Sel label="Consumption order" value={f.consumptionOrder ?? "FIFO"} onChange={(v) => set("consumptionOrder")(v as Product["consumptionOrder"])} options={["FIFO", "ByExpiry"]} />
-          <Sel label="Price status" value={f.templateStatus ?? "—"} onChange={(v) => set("templateStatus")(v === "—" ? null : v)} options={["—", "VPA confirmed", "estimated", "needs price"]} />
+          <Sel label="MRP status" value={f.templateStatus ?? "—"} onChange={(v) => set("templateStatus")(v === "—" ? null : v)} options={["—", "VPA confirmed", "estimated", "needs price"]} />
           <Sel label="Prescription (Rx)" value={f.isRx === true ? "Yes — clinic only" : f.isRx === false ? "No — sell directly" : "Undecided"} onChange={(v) => set("isRx")(v.startsWith("Yes") ? true : v.startsWith("No") ? false : null)} options={["No — sell directly", "Yes — clinic only", "Undecided"]} />
         </div>
         <SecH t="Centres" em="· where it is on sale, and at what price" />
@@ -639,7 +651,7 @@ function ProductEditor({ open, product, formulations, clinics, taxonomy, onClose
                   <div className="mt-2 grid grid-cols-2 items-end gap-3">
                     <In label={`Price at ${c.name} (₹)`} type="number" value={l.price === null || l.price === undefined ? "" : String(l.price)}
                       onChange={(v) => setListing(c, { price: v === "" ? null : Number(v) })}
-                      placeholder={`base ${fmtINR(Number(f.price) || 0)}`} hint={l.price === null || l.price === undefined ? "Blank = the base price above" : `Base price is ${fmtINR(Number(f.price) || 0)}`} />
+                      placeholder={`MRP ${fmtINR(Number(f.price) || 0)}`} hint={l.price === null || l.price === undefined ? "Blank = the MRP. Only a lower price can be set here." : `MRP is ${fmtINR(Number(f.price) || 0)}. A centre can charge the MRP or less.`} />
                     <Switch on={l.pickup} onChange={(v) => setListing(c, { pickup: v })} label="Store pickup here" sub={l.pickup ? "Guests can collect it at this centre" : "Delivery only from this centre"} />
                   </div>
                 )}
@@ -1051,10 +1063,10 @@ export function Orders() {
 <table><tr><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Rate</th><th style="text-align:right">Amount</th></tr>${lines}
 <tr class="tot"><td colspan="3" style="text-align:right">Subtotal</td><td style="text-align:right">${fmtINR(pr.subtotal)}</td></tr>
 ${pr.discount ? `<tr><td colspan="3" style="text-align:right">Discount${o.coupon?.code ? ` (${o.coupon.code})` : ""}</td><td style="text-align:right">−${fmtINR(pr.discount)}</td></tr>` : ""}
-<tr><td colspan="3" style="text-align:right">GST</td><td style="text-align:right">${fmtINR(pr.gst)}</td></tr>
+${pr.gst ? `<tr><td colspan="3" style="text-align:right">GST</td><td style="text-align:right">${fmtINR(pr.gst)}</td></tr>` : ""}
 ${pr.deliveryFee ? `<tr><td colspan="3" style="text-align:right">Delivery</td><td style="text-align:right">${fmtINR(pr.deliveryFee)}</td></tr>` : isPickup(o) ? `<tr><td colspan="3" style="text-align:right">Store pickup</td><td style="text-align:right">no delivery fee</td></tr>` : ""}
 <tr class="tot"><td colspan="3" style="text-align:right"><b>Total</b></td><td style="text-align:right"><b>${fmtINR(pr.total)}</b></td></tr></table>
-<hr><p class="muted">Tax invoice. GST is charged per item at the rate on the product record.</p></body></html>`;
+<hr><p class="muted">${pr.gst ? "Tax invoice. GST was charged per item at the rate on the product record." : "Prices are MRPs, inclusive of all taxes."}</p></body></html>`;
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([html], { type: "text/html" }));
     a.download = `invoice-${o.orderNumber}.html`; a.click();

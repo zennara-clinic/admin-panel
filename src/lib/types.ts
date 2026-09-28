@@ -847,8 +847,11 @@ export type Product = {
   formulation: string;
   OrgName: string;
   code?: string;
+  /** The MRP — the one price a product has: final, every tax included. The app shows it and checkout charges it; nothing is added on top. */
   price: number;
+  /** The GST rate the MRP already includes. Information only — never added to the price. 18 unless set. */
   gstPercentage: number;
+  /** Always equal to `price` (the server keeps the two together). Read `price`. */
   mrp?: number | null;
   hsn?: string | null;
   isRx?: boolean | null;
@@ -882,12 +885,14 @@ export type Product = {
   reorderLevel?: number | null;
   targetLevel?: number | null;
   packName?: string | null;
+  /** Retired 2026-09-28 — a product carries its MRP only. Never shown, never sent. */
   buyingPrice?: number | null;
   vendorName?: string | null;
+  /** How sure the MRP is: "VPA confirmed" | "estimated" | "needs price". */
   templateStatus?: string | null;
   stockSource?: string | null;
   stockUpdatedAt?: string | null;
-  priceSource?: "zenoti-mrp" | "panel" | null;
+  priceSource?: "zenoti-mrp" | "panel" | "template" | null;
   image?: string;
   stock: number;
   rating?: number;
