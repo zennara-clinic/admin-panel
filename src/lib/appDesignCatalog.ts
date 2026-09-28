@@ -259,6 +259,8 @@ export const COPY_GROUPS: CopyGroup[] = [
     { key: "treatments.card.cta", label: "card \u2014 cta", default: "Book Consultation" },
     { key: "treatments.tab.byTreatment", label: "tab \u2014 by treatments", default: "By treatments" },
     { key: "treatments.tab.byCondition", label: "tab \u2014 by condition", default: "By condition" },
+    { key: "treatments.all", label: "category row \u2014 all", default: "All" },
+    { key: "treatments.all.title", label: "all \u2014 heading", default: "All treatments" },
   ]},
   { title: "Treatment detail", entries: [
     { key: "treatment.section.about", label: "section \u2014 about", default: "About this treatment" },
